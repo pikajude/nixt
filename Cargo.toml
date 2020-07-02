@@ -1,0 +1,20 @@
+[package]
+name = "rnix"
+version = "0.1.0"
+authors = ["Jude Taylor <me@jude.xyz>"]
+edition = "2018"
+
+[dependencies]
+syntax = { path = "syntax" }
+tokio = { version = "0.2.21", features = ["fs", "macros"] }
+codespan = "0.9.5"
+generational-arena = "0.2.8"
+anyhow = "1.0.31"
+thiserror = "1.0.20"
+codespan-reporting = "0.9.5"
+
+[dev-dependencies]
+termcolor = "1.1.0"
+
+[workspace]
+members = ["syntax"]
