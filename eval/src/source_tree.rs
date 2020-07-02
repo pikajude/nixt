@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
+use arena::Arena;
 use codespan::Files;
 use codespan_reporting::files::Files as RFiles;
-use generational_arena::Arena;
 use std::{
   collections::HashMap,
   ffi::OsString,
   ops::Range,
   path::{Path, PathBuf},
 };
-use syntax::expr::{Expr, ExprRef};
+use syntax::expr::{Expr, ExprId, ExprRef};
 use tokio::fs;
 
 #[derive(Default)]
@@ -49,6 +49,10 @@ impl Source {
       &mut self.allocator,
       self.files.source(file_id),
     )?)
+  }
+
+  pub fn expr(&self, e: ExprId) -> &Expr {
+    &self.allocator[e]
   }
 }
 

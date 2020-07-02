@@ -1,5 +1,5 @@
+use arena::Arena;
 use codespan::FileId;
-use generational_arena::Arena;
 
 pub mod expr;
 pub mod lexer;

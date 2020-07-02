@@ -1,5 +1,5 @@
 use crate::span::Spanned;
-use generational_arena::Index;
+use arena::Id;
 use string_cache::DefaultAtom;
 
 pub mod symbol;
@@ -9,7 +9,7 @@ pub type Ident = DefaultAtom;
 /// This addresses an `Expr` in the allocation table. Span information is kept
 /// alongside the id for convenience.
 pub type ExprRef = Spanned<ExprId>;
-pub type ExprId = Index;
+pub type ExprId = Id<Expr>;
 
 #[derive(Debug, Clone)]
 pub enum Expr {

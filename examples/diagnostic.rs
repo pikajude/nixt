@@ -1,19 +1,13 @@
-use codespan_reporting::term::{emit, Config};
-use rnix::{source_tree::Source, syntax::ParseError};
-use termcolor::{ColorChoice, StandardStream};
+use rnix::eval::Eval;
 
 #[tokio::main]
 async fn main() {
-  let mut tree = Source::new();
+  let mut eval = Eval::new();
 
-  let parse = tree
-    .load_file(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/error.nix"))
+  let thunk_id = eval
+    .load(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/simple.nix"))
     .await
-    .unwrap_err();
+    .unwrap();
 
-  let mut stderr = StandardStream::stderr(ColorChoice::Auto);
-
-  if let Some(p) = parse.downcast_ref::<ParseError>() {
-    emit(&mut stderr, &Config::default(), &tree, &p.diagnose()).unwrap();
-  }
+  assert!(eval.force(thunk_id).is_ok());
 }

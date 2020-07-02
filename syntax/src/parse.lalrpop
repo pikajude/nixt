@@ -1,7 +1,7 @@
 use crate::expr::*;
 use crate::lexer::{LexError, Token};
 use crate::span::{FileSpan, Spanned};
-use generational_arena::Arena;
+use arena::Arena;
 use codespan::{ByteOffset, FileId};
 
 grammar<'input>(
