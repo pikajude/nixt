@@ -1,7 +1,7 @@
 use codespan::{FileId, Span};
 use codespan_reporting::diagnostic::Label;
 use derive_more::{Deref, DerefMut, Display};
-use std::borrow::ToOwned;
+use std::{borrow::ToOwned, ops::Deref};
 
 #[derive(Debug, Clone, Copy, Display, Deref, DerefMut)]
 #[display(fmt = "{}", node)]
@@ -53,6 +53,15 @@ impl<T> Spanned<T> {
 
   pub fn label_secondary(&self, m: impl Into<String>) -> Label<FileId> {
     Label::secondary(self.span.file_id, self.span.span).with_message(m)
+  }
+}
+
+impl<T: Deref> Spanned<T> {
+  pub fn as_deref(&self) -> Spanned<&T::Target> {
+    Spanned {
+      span: self.span,
+      node: self.node.deref(),
+    }
   }
 }
 

@@ -15,3 +15,4 @@ members = ["arena", "eval", "syntax"]
 tokio = { version = "0.2.21", features = ["macros"] }
 codespan-reporting = "0.9.5"
 termcolor = "1.1.0"
+anyhow = "1.0.31"

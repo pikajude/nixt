@@ -19,7 +19,7 @@ checksum = "85bb70cc08ec97ca5450e6eba421deeea5f172c0fc61f78b5357b2a8e8be195f"
 name = "arena"
 version = "0.1.0"
 dependencies = [
- "generational-arena",
+ "id-arena",
 ]
 
 [[package]]
@@ -172,6 +172,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cons-list"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b24ca70d1fffa18ed122ad697996482ccf7e8c4b9c6223ed70f024960a2dd172"
+
+[[package]]
 name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -260,6 +266,8 @@ dependencies = [
  "arena",
  "codespan",
  "codespan-reporting",
+ "cons-list",
+ "derive_more",
  "futures",
  "generational-arena",
  "syntax",
@@ -424,6 +432,12 @@ checksum = "b9586eedd4ce6b3c498bc3b4dd92fc9f11166aa908a914071953768066c67909"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "id-arena"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
 
 [[package]]
 name = "indexmap"
@@ -656,6 +670,7 @@ checksum = "26412eb97c6b088a6997e05f69403a802a92d520de2f8e63c2b65f9e0f47c4e8"
 name = "rnix"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "codespan-reporting",
  "eval",
  "syntax",

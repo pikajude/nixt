@@ -1,13 +1,19 @@
 use rnix::eval::Eval;
 
-#[tokio::main]
-async fn main() {
+fn main() -> anyhow::Result<()> {
   let mut eval = Eval::new();
 
-  let thunk_id = eval
-    .load(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/simple.nix"))
-    .await
-    .unwrap();
+  let thunk = eval.load_inline(
+    "({ x }: x) 3"
+    // r#"derivation {
+    //   name = "test-derivation";
+    // }"#,
+  )?;
 
-  assert!(eval.force(thunk_id).is_ok());
+  match eval.forced(thunk) {
+    Ok(v) => eprintln!("{:?}", v),
+    Err(e) => eval.bail(e),
+  }
+
+  Ok(())
 }

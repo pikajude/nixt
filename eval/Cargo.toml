@@ -10,6 +10,7 @@ edition = "2018"
 syntax = { path = "../syntax" }
 arena = { path = "../arena" }
 
+cons-list = "0.0.3"
 tokio = { version = "0.2.21", features = ["fs", "macros"] }
 codespan = "0.9.5"
 generational-arena = "0.2.8"
@@ -17,3 +18,4 @@ anyhow = "1.0.31"
 thiserror = "1.0.20"
 codespan-reporting = "0.9.5"
 futures = "0.3.5"
+derive_more = "0.99.9"
