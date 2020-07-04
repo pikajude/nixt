@@ -12,8 +12,15 @@ pub enum ErrorKind {
   NotCallable(Typename),
   #[error("this function cannot be auto-called")]
   Autocall,
+  #[error("this value is {actual}, but {expected} was expected")]
+  TypeMismatch {
+    expected: Typename,
+    actual: Typename,
+  },
   #[error("not yet implemented: {0}")]
   Unimplemented(String),
+  #[error("infinite recursion")]
+  Loop,
   #[error(transparent)]
   Custom(#[from] anyhow::Error),
 }
@@ -47,6 +54,10 @@ where
 #[macro_export]
 macro_rules! todo {
   ($($t:tt)+) => {
-    return Err(ErrorKind::Unimplemented(format!($($t)+)).into());
+    return Err($crate::error::ErrorKind::Unimplemented(format!("{}, {}:{}:{}", format!($($t)+), file!(), line!(), column!())).into());
+  };
+
+  () => {
+    todo!("")
   }
 }

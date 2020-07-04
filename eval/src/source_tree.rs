@@ -14,7 +14,7 @@ use tokio::fs;
 #[derive(Default)]
 pub struct Source {
   allocator: Arena<Expr>,
-  files: Files<String>,
+  pub files: Files<String>,
   path_cache: HashMap<PathBuf, ExprRef>,
 }
 
