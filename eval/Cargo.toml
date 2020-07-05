@@ -9,8 +9,7 @@ edition = "2018"
 [dependencies]
 syntax = { path = "../syntax" }
 arena = { path = "../arena" }
-
-cons-list = "0.0.3"
+cons-list = { path = "../cons-list" }
 tokio = { version = "0.2.21", features = ["fs", "macros"] }
 codespan = "0.9.5"
 generational-arena = "0.2.8"
@@ -20,3 +19,5 @@ codespan-reporting = "0.9.5"
 futures = "0.3.5"
 derive_more = "0.99.9"
 log = "0.4.8"
+async-recursion = "0.3.1"
+static_assertions = "1.1.0"

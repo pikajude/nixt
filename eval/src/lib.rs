@@ -7,6 +7,7 @@ pub mod source_tree;
 pub mod value;
 
 use arena::Arena;
+use async_recursion::async_recursion;
 use codespan_reporting::{
   diagnostic::{Diagnostic, Label, LabelStyle},
   term::{
@@ -18,28 +19,35 @@ use error::{Error, ErrorKind};
 use expr::*;
 use scope::{Context, Scope, StaticScope};
 use source_tree::Source;
-use std::{collections::HashMap, path::Path};
+use std::{
+  borrow::Cow,
+  collections::HashMap,
+  path::Path,
+  sync::atomic::{AtomicUsize, Ordering},
+  thread,
+};
 use syntax::{
   expr::{self, Expr, ExprRef},
   span::{FileSpan, Spanned},
 };
-use value::{Typename, Value, ValueRef};
+use value::{Primop, Typename, Value, ValueRef};
 
 pub type Result<T> = anyhow::Result<T, error::Error>;
 
 pub struct Eval {
   allocator: Arena<Spanned<Value>>,
   source: Source,
-  frame_context: Context,
   inherent_scope: ValueRef,
-  inline_counter: usize,
+  inline_counter: AtomicUsize,
   stderr: StandardStream,
 }
 
+static_assertions::assert_impl_all!(Eval: Send);
+
 macro_rules! mk_cast {
   ($f:ident, $output:ty, $expected:ident, $($p:pat => $v:expr),+) => {
-    fn $f(&mut self, v: ValueRef) -> Result<Spanned<$output>> {
-      let Spanned { span, node } = self.forced(v)?;
+    async fn $f(&self, v: ValueRef) -> Result<Spanned<$output>> {
+      let Spanned { span, node } = self.forced(v).await?;
       Ok(Spanned::new(
         span,
         match node {
@@ -62,29 +70,33 @@ macro_rules! mk_cast {
 impl Eval {
   mk_cast!(force_attrs, &StaticScope, Attrset, Value::Attrset(v) => v);
 
-  mk_cast!(force_path_like, &Path, Unknown, Value::String { s, .. } => Path::new(s));
+  mk_cast!(force_list, &[ValueRef], List, Value::List(l) => l);
+
+  mk_cast!(force_str, &str, String, Value::String { s, .. } => s);
+
+  mk_cast!(force_path_like, &Path, Path, Value::String { s, .. } => Path::new(s), Value::Path(p) => Path::new(p));
 
   pub fn new() -> Result<Self> {
+    let source = Source::new();
+    let builtins_id = source
+      .files
+      .lock()
+      .unwrap()
+      .add("builtins.nix", "<...>".into());
+    let builtins_span = FileSpan::new(0u32, 0u32, builtins_id);
     let mut this = Self {
       allocator: Arena::new(),
-      source: Source::new(),
-      frame_context: Context::new(),
-      inline_counter: 0,
+      source,
+      inline_counter: AtomicUsize::new(0),
       stderr: StandardStream::stderr(ColorChoice::Auto),
       inherent_scope: unsafe { std::mem::zeroed() }, // never read
     };
-    let builtins_id = this.source.files.add("builtins.nix", "<...>".into());
-    let builtins_span = FileSpan::new(0u32, 0u32, builtins_id);
     let id = builtins::load_inherent_scope(&mut this, builtins_span)?;
     this.inherent_scope = id;
     Ok(this)
   }
 
-  pub fn source(&self) -> &Source {
-    &self.source
-  }
-
-  pub async fn load<P: AsRef<Path>>(&mut self, file: P) -> Result<ValueRef> {
+  pub async fn load<P: AsRef<Path>>(&self, file: P) -> Result<ValueRef> {
     let ref0 = self.source.load_file(file).await?;
     Ok(self.allocator.insert(Spanned::new(
       ref0.span,
@@ -95,9 +107,11 @@ impl Eval {
     )))
   }
 
-  pub fn load_inline<S: AsRef<str>>(&mut self, code: S) -> Result<ValueRef> {
-    let fakename = format!("<inline-{}>", self.inline_counter);
-    self.inline_counter += 1;
+  pub async fn load_inline<S: AsRef<str>>(&self, code: S) -> Result<ValueRef> {
+    let fakename = format!(
+      "<inline-{}>",
+      self.inline_counter.fetch_add(1, Ordering::Acquire)
+    );
     let ref0 = self.source.load_inline(fakename, code.as_ref())?;
     Ok(self.allocator.insert(Spanned::new(
       ref0.span,
@@ -108,49 +122,69 @@ impl Eval {
     )))
   }
 
-  fn thunk_here(&self, t: ExprRef) -> ValueRef {
+  fn thunk(&self, t: ExprRef, context: &Context) -> ValueRef {
     self.allocator.insert(Spanned::new(
       t.span,
       Value::Thunk {
         id: t.node,
-        context: self.frame_context.clone(),
+        context: context.clone(),
       },
     ))
   }
 
-  pub fn force(&mut self, id: ValueRef) -> Result<()> {
+  pub async fn force(&self, mut id: ValueRef) -> Result<()> {
     loop {
-      let span = self.allocator[id].span;
-      if let Value::Blackhole = self.allocator[id].node {
-        return Err(Error::from(ErrorKind::Loop));
-      } else if let Value::Pointer(p) = self.allocator[id].node {
-        break self.force(p);
-      } else if let Value::App { lhs, rhs } = self.allocator[id].node {
-        *self.allocator[id] = Value::Blackhole;
-        *self.allocator[id] = self
-          .call_function(lhs, rhs)
-          .map_err(|e| e.add_frame(span))?;
-      } else if let Some((context, expr_id)) = self.allocator[id].node.take_thunk() {
-        let value = self.with_context(context, |e| e.step(expr_id, span))?;
-        *self.allocator[id] = value;
-      } else {
-        break Ok(());
+      let span = self.allocator.fetch(id, |x| x.span);
+      let known_value = self.allocator.swap_deref(id, Value::blackhole());
+
+      match known_value {
+        Value::Blackhole(id) => {
+          if id == thread::current().id() {
+            return Err(ErrorKind::Loop.into());
+          } else {
+            break Ok(());
+          }
+        }
+        Value::Pointer(p) => {
+          self.allocator.swap_deref(id, known_value);
+          id = p;
+        }
+        Value::App { lhs, rhs } => {
+          let fn_result = self
+            .call_function(lhs, rhs)
+            .await
+            .map_err(|e| e.add_frame(span))?;
+          self.allocator.swap_deref(id, fn_result);
+        }
+        Value::Thunk {
+          context,
+          id: expr_id,
+        } => {
+          let new_value = self.step(expr_id, span, &context).await?;
+          self.allocator.swap_deref(id, new_value);
+        }
+        _ => {
+          self.allocator.swap_deref(id, known_value);
+          break Ok(());
+        }
       }
     }
   }
 
-  fn step(&mut self, id: ExprId, at: FileSpan) -> Result<Value> {
-    self._do_step(id, at).map_err(|e| e.add_frame(at))
+  async fn step(&self, id: ExprId, at: FileSpan, context: &Context) -> Result<Value> {
+    self
+      ._do_step(id, at, context)
+      .await
+      .map_err(|e| e.add_frame(at))
   }
 
-  fn _do_step(&mut self, id: ExprId, span: FileSpan) -> Result<Value> {
+  async fn _do_step(&self, id: ExprId, span: FileSpan, context: &Context) -> Result<Value> {
     match *self.source.expr(id) {
       Expr::Pos => {}
       Expr::Int(i) => return Ok(Value::Int(i)),
       Expr::Float(f) => return Ok(Value::Float(f)),
       Expr::Var(ref ident) => {
-        let ident = ident.clone();
-        return self.lookup_var(ident);
+        return self.lookup_var(ident, context).await;
       }
       Expr::Str(_) => {}
       Expr::IndStr(_) => {}
@@ -161,16 +195,19 @@ impl Eval {
           let strlit = self.allocator.insert(Spanned::new(
             span,
             Value::String {
-              s: path.into(),
+              s: path[1..path.len() - 1].to_string(),
               context: Default::default(),
             },
           ));
           let nixpath = self
-            .force_attrs(self.inherent_scope)?
-            .get(&Ident::from("nixPath"))
+            .force_attrs(self.inherent_scope)
+            .await?
+            .get(&Ident::from("__nixPath"))
             .copied()
             .ok_or_else(|| ErrorKind::Unimplemented("attribute nixPath does not exist".into()))?;
-          return Ok(Value::Path(builtins::find_file(self, nixpath, strlit)?));
+          return Ok(Value::Path(
+            builtins::find_file(self, nixpath, strlit).await?,
+          ));
         }
       },
       Expr::Uri(_) => {}
@@ -178,7 +215,7 @@ impl Eval {
         return Ok(Value::Lambda {
           arg: l.argument.clone(),
           body: l.body,
-          captures: self.frame_context.clone(),
+          captures: context.clone(),
         })
       }
       Expr::Assert(_) => {}
@@ -191,31 +228,35 @@ impl Eval {
       Expr::Member(_) => {}
       Expr::Apply(expr::Apply { lhs, rhs }) => {
         return Ok(Value::App {
-          lhs: self.thunk_here(lhs),
-          rhs: self.thunk_here(rhs),
+          lhs: self.thunk(lhs, context),
+          rhs: self.thunk(rhs, context),
         })
       }
       Expr::Select(_) => {}
       Expr::AttrSet(AttrSet { rec, ref attrs, .. }) => {
-        let new_attrset = self.allocator.insert(Spanned::new(span, Value::Blackhole));
-        let attrs = attrs.clone();
-        self.build_attrs(rec.is_some(), attrs, new_attrset)?;
+        let new_attrset = self
+          .allocator
+          .insert(Spanned::new(span, Value::blackhole()));
+        self
+          .build_attrs(rec.is_some(), attrs.as_slice(), new_attrset, context)
+          .await?;
         return Ok(Value::Pointer(new_attrset));
       }
     }
 
-    todo!("{:?}", self.source().expr(id))
+    todo!("{:?}", self.source.expr(id))
   }
 
-  pub fn forced(&mut self, id: ValueRef) -> Result<Spanned<&Value>> {
-    self.force(id)?;
+  #[async_recursion]
+  pub async fn forced(&self, id: ValueRef) -> Result<Spanned<&Value>> {
+    self.force(id).await?;
 
     self.assume_init(id)
   }
 
   fn assume_init(&self, mut id: ValueRef) -> Result<Spanned<&Value>> {
     loop {
-      let val = &self.allocator[id];
+      let val = unsafe { self.allocator.index(id) };
       match val.node {
         Value::Thunk { .. } | Value::Blackhole { .. } | Value::App { .. } => {
           panic!("force() completed, but the value is not resolved")
@@ -228,39 +269,28 @@ impl Eval {
     }
   }
 
-  fn with_context<T, F: FnOnce(&mut Self) -> T>(&mut self, ctx: Context, f: F) -> T {
-    let old_ctx = std::mem::replace(&mut self.frame_context, ctx);
-    let result = f(self);
-    self.frame_context = old_ctx;
-    result
-  }
-
-  fn with_more_context<T, F: FnOnce(&mut Self) -> T>(&mut self, s: Scope, f: F) -> T {
-    self.with_context(self.frame_context.append(s), f)
-  }
-
-  fn call_function(&mut self, lhs: ValueRef, rhs: ValueRef) -> Result<Value> {
-    match self.forced(lhs)?.node {
+  async fn call_function(&self, lhs: ValueRef, rhs: ValueRef) -> Result<Value> {
+    match self.forced(lhs).await?.node {
       Value::Lambda {
         arg,
         body,
         captures,
-      } => {
-        let arg = arg.clone();
-        let lam_caps = captures.clone();
-        let body = *body;
-        self.with_context(lam_caps, |e| e.call_lambda(arg, body, Some(rhs)))
-      }
-      Value::Primop(p) => Ok(p.clone().call(self, rhs)?),
+      } => self.call_lambda(arg, *body, Some(rhs), captures).await,
+      Value::Primop(p) => match p {
+        Primop::Static { op, .. } => Ok(op(self, rhs).await?),
+        Primop::Async { op, .. } => Ok(op(self, rhs).await?),
+      },
       v => Err(Error::from(ErrorKind::NotCallable(v.typename()))),
     }
   }
 
-  fn call_lambda(
-    &mut self,
-    arg: Spanned<LambdaArg>,
+  #[async_recursion]
+  async fn call_lambda(
+    &self,
+    arg: &Spanned<LambdaArg>,
     body: ExprRef,
     rhs: Option<ValueRef>,
+    context: &Context,
   ) -> Result<Value> {
     let mut lambda_body_scope = HashMap::new();
 
@@ -272,7 +302,7 @@ impl Eval {
       LambdaArg::Formals(ref formals) => {
         let fn_arg_thunk = match rhs {
           Some(id) => {
-            self.force(id)?;
+            self.force(id).await?;
             id
           }
           None => self
@@ -283,13 +313,13 @@ impl Eval {
           Value::Attrset(h) => h,
           v => return Err(v.expected(Typename::Attrset)),
         };
-        let fn_scope_id = self.allocator.insert(arg.replace(Value::Blackhole));
+        let fn_scope_id = self.allocator.insert(arg.replace(Value::blackhole()));
 
         for lambda_arg in &formals.args {
-          let name = lambda_arg.arg_name.clone();
+          let name = &lambda_arg.arg_name;
           match fn_arg_value.get(&name) {
             Some(id) => {
-              lambda_body_scope.insert(name.node, *id);
+              lambda_body_scope.insert(name.node.clone(), *id);
             }
             None => {
               if let Some(FormalDef { default, .. }) = lambda_arg.fallback {
@@ -297,10 +327,10 @@ impl Eval {
                   default.span,
                   Value::Thunk {
                     id: default.node,
-                    context: self.frame_context.append(Scope::Dynamic(fn_scope_id)),
+                    context: context.append(Scope::Dynamic(fn_scope_id)),
                   },
                 ));
-                lambda_body_scope.insert(name.node, default_arg);
+                lambda_body_scope.insert(name.node.clone(), default_arg);
               } else if rhs.is_some() {
                 todo!("Argument {} is missing", name.node);
               } else {
@@ -314,114 +344,117 @@ impl Eval {
           lambda_body_scope.insert((**name).clone(), fn_arg_thunk);
         }
 
-        *self.allocator[fn_scope_id] = Value::Attrset(lambda_body_scope);
+        self
+          .allocator
+          .swap(fn_scope_id, arg.replace(Value::Attrset(lambda_body_scope)));
         Scope::Dynamic(fn_scope_id)
       }
     };
 
-    self.with_more_context(added_context, |eval| eval.step(*body, body.span))
+    self
+      .step(*body, body.span, &context.append(added_context))
+      .await
   }
 
-  fn lookup_var(&mut self, id: Ident) -> Result<Value> {
-    for s in self
-      .frame_context
-      .clone()
+  async fn lookup_var(&self, id: &Ident, context: &Context) -> Result<Value> {
+    for s in context
       .iter()
       .chain(Some(Scope::Dynamic(self.inherent_scope)).iter())
     {
       let this_frame = match s {
         Scope::Static(static0) => static0,
-        Scope::Dynamic(id) => self.force_attrs(*id)?.node,
+        Scope::Dynamic(id) => self.force_attrs(*id).await?.node,
       };
-      if let Some(v) = this_frame.get(&id) {
+      if let Some(v) = this_frame.get(id) {
         return Ok(Value::Pointer(*v));
       }
     }
     Err(ErrorKind::UnboundVar(id.to_string()).into())
   }
 
-  fn build_attrs(
-    &mut self,
+  async fn build_attrs(
+    &self,
     recursive: bool,
-    bindings: Vec<Spanned<Binding>>,
+    bindings: &[Spanned<Binding>],
     destination: ValueRef,
+    context: &Context,
   ) -> Result<()> {
     let mut s = StaticScope::with_capacity(bindings.len());
-    let original_scope = self.frame_context.clone();
-    let recursive_scope = if recursive {
-      self.frame_context.append(Scope::Dynamic(destination))
-    } else {
-      original_scope.clone()
-    };
+    let new_scope = context.append(Scope::Dynamic(destination));
+    let recursive_scope = if recursive { &new_scope } else { context };
 
     for b in bindings {
-      match b.node {
-        Binding::Plain { path, rhs, .. } => self.with_context(recursive_scope.clone(), |e| {
-          e.push_binding(&mut s, &path.0[..], rhs)
-        })?,
-        Binding::Inherit { from, attrs, .. } => self.push_inherit(&mut s, from, attrs)?,
+      match &b.node {
+        Binding::Plain { path, rhs, .. } => {
+          self
+            .push_binding(&mut s, &path.0[..], *rhs, &recursive_scope)
+            .await?
+        }
+        Binding::Inherit { from, attrs, .. } => self.push_inherit(&mut s, from.as_ref(), attrs)?,
       }
     }
 
-    *self.allocator[destination] = Value::Attrset(s);
-
-    self.frame_context = original_scope;
+    self.allocator.swap_deref(destination, Value::Attrset(s));
 
     Ok(())
   }
 
-  fn push_binding(
-    &mut self,
+  #[async_recursion]
+  async fn push_binding(
+    &self,
     scope: &mut StaticScope,
     names: &[Spanned<AttrName>],
     rhs: ExprRef,
+    context: &Context,
   ) -> Result<()> {
     let (key1, keyrest) = names.split_first().unwrap();
     let span = key1.span;
-    let key1 = self.attrname(&*key1)?;
+    let key1 = self.attrname(&*key1, context)?;
     let child_item = if keyrest.is_empty() {
-      self.thunk_here(rhs)
+      self.thunk(rhs, context)
     } else {
       let mut next_scope = match scope.get(&key1) {
-        Some(i) => todo!("self.force_attrs(*i)?.node.clone()"),
+        Some(i) => self.force_attrs(*i).await?.node.clone(),
         None => HashMap::new(),
       };
-      self.push_binding(&mut next_scope, keyrest, rhs)?;
+      self
+        .push_binding(&mut next_scope, keyrest, rhs, context)
+        .await?;
       self
         .allocator
         .insert(Spanned::new(span, Value::Attrset(next_scope)))
     };
-    scope.insert(key1, child_item);
+    scope.insert(key1.into_owned(), child_item);
     Ok(())
   }
 
   fn push_inherit(
-    &mut self,
+    &self,
     scope: &mut StaticScope,
-    from: Option<InheritFrom>,
-    attrs: AttrList,
+    from: Option<&InheritFrom>,
+    attrs: &AttrList,
   ) -> Result<()> {
     todo!()
   }
 
-  fn attrname(&mut self, a: &AttrName) -> Result<Ident> {
+  fn attrname<'attr>(&self, a: &'attr AttrName, context: &Context) -> Result<Cow<'attr, Ident>> {
     match a {
-      AttrName::Plain(p) => Ok(p.clone()),
+      AttrName::Plain(p) => Ok(Cow::Borrowed(p)),
       AttrName::Str { body, .. } => {
         let mut buf = String::new();
         for item in body {
           match item {
             StrPart::Plain(s) => buf.push_str(s),
             StrPart::Quote { quote, .. } => {
-              let t = self.thunk_here(*quote);
+              let t = self.thunk(*quote, context);
               todo!()
             }
           }
         }
-        Ok(buf.into())
+        Ok(Cow::Owned(buf.into()))
       }
       AttrName::Dynamic { quote, .. } => {
-        let value = self.thunk_here(*quote);
+        let value = self.thunk(*quote, context);
         todo!()
       }
     }
@@ -461,7 +494,7 @@ impl Eval {
         display_style: DisplayStyle::Rich,
         ..Default::default()
       },
-      self.source(),
+      &self.source,
       &diag,
     )
     .unwrap();

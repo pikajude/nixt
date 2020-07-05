@@ -10,7 +10,7 @@ pub use parse::{ExprParser, ParseError};
 
 pub fn parse<'input>(
   file_id: FileId,
-  arena: &mut Arena<expr::Expr>,
+  arena: &Arena<expr::Expr>,
   input: &'input str,
 ) -> Result<expr::ExprRef, parse::ParseError> {
   let ast = parse::ExprParser::new().parse(arena, file_id, lexer::Lexer::new(input));

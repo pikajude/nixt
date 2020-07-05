@@ -5,11 +5,13 @@ use crate::{
 };
 use arena::Id;
 use expr::{ExprId, ExprRef};
+use futures::future::BoxFuture;
 use std::{
   collections::HashSet,
   fmt::{self, Debug},
   path::PathBuf,
   sync::Arc,
+  thread::{self, ThreadId},
 };
 use syntax::{expr, span::Spanned};
 
@@ -25,6 +27,7 @@ pub enum Value {
     context: HashSet<String>,
   },
   Path(PathBuf),
+  List(Vec<ValueRef>),
   Lambda {
     arg: Spanned<expr::LambdaArg>,
     body: ExprRef,
@@ -41,8 +44,10 @@ pub enum Value {
     context: Context,
   },
   Pointer(ValueId),
-  Blackhole,
+  Blackhole(ThreadId),
 }
+
+static_assertions::assert_impl_all!(Value: Send);
 
 impl Value {
   pub fn is_real(&self) -> bool {
@@ -61,16 +66,8 @@ impl Value {
     }
   }
 
-  pub fn take_thunk(&mut self) -> Option<(Context, ExprId)> {
-    if let Self::Thunk { .. } = self {
-      if let Self::Thunk { context, id } = std::mem::replace(self, Self::Blackhole) {
-        Some((context, id))
-      } else {
-        unreachable!()
-      }
-    } else {
-      None
-    }
+  pub fn blackhole() -> Self {
+    Self::Blackhole(thread::current().id())
   }
 
   pub fn typename(&self) -> Typename {
@@ -79,6 +76,8 @@ impl Value {
       Self::Float { .. } => Typename::Float,
       Self::Attrset { .. } => Typename::Attrset,
       Self::Primop(p) => Typename::Primop(p.name()),
+      Self::String { .. } => Typename::String,
+      Self::Path { .. } => Typename::Path,
       x => unimplemented!("{:?}", x),
     }
   }
@@ -102,31 +101,32 @@ pub enum Typename {
   Attrset,
   #[display(fmt = "the primop {:?}", _0)]
   Primop(&'static str),
-  #[display(fmt = "an unknown value")]
-  Unknown,
+  #[display(fmt = "a list")]
+  List,
+  #[display(fmt = "a string")]
+  String,
+  #[display(fmt = "a path")]
+  Path,
+  /* #[display(fmt = "an unknown value")]
+   * Unknown, */
 }
 
-macro_rules! primop_types {
-  ($($t:tt)+) => {
-    type DynOp = Box<dyn Fn $($t)+>;
-    type StaticOp = fn $($t)+;
-  }
-}
+type StaticOp = for<'a> fn(&'a Eval, ValueRef) -> BoxFuture<'a, Result<Value>>;
 
-primop_types! {
-  (&mut Eval, ValueRef) -> Result<Value>
-}
+type AsyncOp =
+  Arc<Box<dyn for<'a> Fn(&'a Eval, ValueRef) -> BoxFuture<'a, Result<Value>> + Send + Sync>>;
 
-#[derive(Clone)]
 pub enum Primop {
-  Dynamic { name: &'static str, op: Arc<DynOp> },
+  Async { name: &'static str, op: AsyncOp },
   Static { name: &'static str, op: StaticOp },
 }
+
+static_assertions::assert_impl_all!(Primop: Send);
 
 impl Primop {
   pub fn name(&self) -> &'static str {
     match self {
-      Self::Dynamic { name, .. } | Self::Static { name, .. } => name,
+      Self::Static { name, .. } | Self::Async { name, .. } => name,
     }
   }
 
@@ -134,34 +134,21 @@ impl Primop {
     Self::Static { name, op }
   }
 
-  pub fn dynamic<F: Fn(&mut Eval, ValueRef) -> Result<Value> + 'static>(
-    name: &'static str,
-    cb: F,
-  ) -> Self {
-    Self::Dynamic {
-      name,
-      op: Arc::new(Box::new(cb)),
-    }
-  }
-
-  pub fn call(&self, e: &mut Eval, id: ValueRef) -> Result<Value> {
-    match self {
-      Self::Dynamic { op, .. } => op(e, id),
-      Self::Static { op, .. } => op(e, id),
-    }
-  }
-
   pub fn primop2(
     name: &'static str,
-    op: fn(&mut Eval, ValueRef, ValueRef) -> Result<Value>,
+    op: for<'a> fn(&'a Eval, ValueRef, ValueRef) -> BoxFuture<'a, Result<Value>>,
   ) -> Self {
-    Self::Dynamic {
+    Self::Async {
       name,
       op: Arc::new(Box::new(move |_, node1| {
-        Ok(Value::Primop(Self::dynamic(
-          "primop-app",
-          move |eval, node2| op(eval, node1, node2),
-        )))
+        Box::pin(async move {
+          Ok(Value::Primop(Self::Async {
+            name: "primop-app",
+            op: Arc::new(Box::new(move |eval, node2| {
+              Box::pin(op(eval, node1, node2))
+            })),
+          }))
+        })
       })),
     }
   }

@@ -1,13 +1,14 @@
 use rnix::eval::Eval;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
   pretty_env_logger::init();
 
-  let mut eval = Eval::new()?;
+  let eval = Eval::new()?;
 
-  let thunk = eval.load_inline("import <nixpkgs> {}")?;
+  let thunk = eval.load_inline("import <nixpkgs/lib>").await?;
 
-  match eval.forced(thunk) {
+  match eval.forced(thunk).await {
     Ok(v) => eprintln!("{:?}", v),
     Err(e) => eval.bail(e),
   }

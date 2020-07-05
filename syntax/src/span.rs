@@ -1,4 +1,4 @@
-use codespan::{FileId, Span};
+use codespan::{ByteIndex, FileId, Span};
 use codespan_reporting::diagnostic::Label;
 use derive_more::{Deref, DerefMut, Display};
 use std::{borrow::ToOwned, ops::Deref};
@@ -83,18 +83,14 @@ impl<T: Clone> Spanned<&'_ T> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FileSpan {
-  pub span: codespan::Span,
-  pub file_id: codespan::FileId,
+  pub span: Span,
+  pub file_id: FileId,
 }
 
 impl FileSpan {
-  pub fn new(
-    a: impl Into<codespan::ByteIndex>,
-    b: impl Into<codespan::ByteIndex>,
-    file_id: codespan::FileId,
-  ) -> Self {
+  pub fn new(a: impl Into<ByteIndex>, b: impl Into<ByteIndex>, file_id: FileId) -> Self {
     Self {
-      span: codespan::Span::new(a, b),
+      span: Span::new(a, b),
       file_id,
     }
   }

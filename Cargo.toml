@@ -7,9 +7,10 @@ edition = "2018"
 [dependencies]
 eval = { path = "eval" }
 syntax = { path = "syntax" }
+crossbeam = "0.7.3"
 
 [workspace]
-members = ["arena", "eval", "syntax"]
+members = ["arena", "cons-list", "eval", "syntax"]
 
 [dev-dependencies]
 tokio = { version = "0.2.21", features = ["macros"] }

@@ -1,5 +1,5 @@
 use crate::value::Typename;
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::PoisonError};
 use syntax::span::FileSpan;
 
 #[derive(thiserror::Error, Debug)]
@@ -21,8 +21,20 @@ pub enum ErrorKind {
   Unimplemented(String),
   #[error("infinite recursion")]
   Loop,
+  #[error("deadlock in interpreter")]
+  Deadlock,
+  #[error("{0}")]
+  Io(#[from] std::io::Error),
   #[error(transparent)]
   Custom(#[from] anyhow::Error),
+  #[error("{0}")]
+  User(String),
+}
+
+impl<T> From<PoisonError<T>> for ErrorKind {
+  fn from(_: PoisonError<T>) -> Self {
+    Self::Deadlock
+  }
 }
 
 #[derive(thiserror::Error, Debug)]

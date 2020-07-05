@@ -5,7 +5,7 @@ use arena::Arena;
 use codespan::{ByteOffset, FileId};
 
 grammar<'input>(
-  arena: &mut Arena<Expr>,
+  arena: &Arena<Expr>,
   file_id: FileId,
 );
 
