@@ -936,6 +936,7 @@ dependencies = [
  "pretty_env_logger",
  "syntax",
  "termcolor",
+ "thiserror",
  "tokio",
  "typed-arena",
 ]

@@ -1,11 +1,12 @@
 #![feature(untagged_unions)]
 
-#[macro_use] extern crate anyhow;
+#[macro_use] extern crate async_recursion;
 
-use anyhow::Result;
 use arena::Arena;
-use async_recursion::async_recursion;
-use async_std::{path::Path, sync::Mutex};
+use async_std::{
+  path::{Path, PathBuf},
+  sync::Mutex,
+};
 use codespan::Files;
 use std::{
   borrow::Cow,
@@ -17,13 +18,23 @@ use syntax::{
 };
 
 mod builtins;
+mod config;
+mod error;
 mod ext;
+mod operators;
 mod primop;
 mod thunk;
 mod value;
 
+use codespan_reporting::{
+  diagnostic::{Diagnostic, Label, LabelStyle},
+  term::emit,
+};
+use config::Config;
+use error::*;
 use ext::*;
 use primop::Primop;
+use termcolor::{ColorChoice, StandardStream};
 use thunk::*;
 use value::{PathSet, Value};
 
@@ -33,6 +44,8 @@ pub struct Eval {
   toplevel: StaticScope,
   inline_counter: AtomicU16,
   files: Mutex<Files<String>>,
+  writer: StandardStream,
+  config: Config,
 }
 
 impl Default for Eval {
@@ -43,27 +56,102 @@ impl Default for Eval {
 
 impl Eval {
   pub fn new() -> Self {
+    Self::with_config(Default::default())
+  }
+
+  pub fn with_config(config: Config) -> Self {
     let mut this = Self {
       items: Default::default(),
       expr: Default::default(),
       toplevel: Default::default(),
       inline_counter: Default::default(),
       files: Default::default(),
+      writer: StandardStream::stderr(ColorChoice::Auto),
+      config,
     };
     this.toplevel.insert(
       "import".into(),
       this.items.alloc(Thunk::complete(Value::Primop(Primop {
-        name: Some("import".into()),
+        name: "import".into(),
         op: Box::new(move |e, i| Box::pin(builtins::import(e, i))),
       }))),
     );
+    this.toplevel.insert(
+      "abort".into(),
+      this.items.alloc(Thunk::complete(Value::Primop(Primop {
+        name: "abort".into(),
+        op: Box::new(move |e, i| Box::pin(builtins::nix_abort(e, i))),
+      }))),
+    );
+    this.toplevel.insert(
+      "toString".into(),
+      this.items.alloc(Thunk::complete(Value::Primop(Primop {
+        name: "toString".into(),
+        op: Box::new(move |e, i| Box::pin(builtins::coerce_to_string(e, i))),
+      }))),
+    );
+    let nixver = this
+      .items
+      .alloc(Thunk::complete(Value::string_bare("2.3.7")));
     this.toplevel.insert(
       "__nixPath".into(),
       this
         .items
         .alloc(Thunk::complete(builtins::mk_nix_path(&this))),
     );
+    this.toplevel.insert(
+      "builtins".into(),
+      this.items.alloc(Thunk::complete(Value::AttrSet({
+        let mut builtins = StaticScope::new();
+        builtins.insert("nixVersion".into(), nixver);
+        builtins.insert(
+          "compareVersions".into(),
+          this.items.alloc(Thunk::complete(Value::Primop(Primop {
+            name: "compareVersions".into(),
+            op: Box::new(move |e, i| Box::pin(builtins::compare_primop(e, i))),
+          }))),
+        );
+        builtins.insert(
+          "removeAttrs".into(),
+          this.items.alloc(Thunk::complete(Value::Primop(Primop {
+            name: "removeAttrs".into(),
+            op: Box::new(move |e, i| Box::pin(builtins::remove_attrs_primop(e, i))),
+          }))),
+        );
+        builtins
+      }))),
+    );
     this
+  }
+
+  pub async fn print_error(&self, e: Error) -> Result<()> {
+    let files = self.files.lock().await;
+    let diagnostic = Diagnostic::error()
+      .with_message(e.err.to_string())
+      .with_labels(
+        e.trace
+          .into_iter()
+          .enumerate()
+          .map(|(i, span)| {
+            Label::new(
+              if i == 0 {
+                LabelStyle::Primary
+              } else {
+                LabelStyle::Secondary
+              },
+              span.file_id,
+              span.span,
+            )
+          })
+          .collect(),
+      );
+    emit(
+      &mut self.writer.lock(),
+      &Default::default(),
+      &*files,
+      &diagnostic,
+    )?;
+    Ok(())
   }
 
   pub async fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
@@ -148,12 +236,19 @@ impl Eval {
     match thunk {
       ThunkCell::Expr(e, c) => self.step_eval(e, c).await,
       ThunkCell::Apply(lhs, rhs) => self.step_fn(lhs, rhs).await,
-      ThunkCell::Blackhole => panic!("invariant violation: tried to force a blackhole"),
+      ThunkCell::Blackhole => bail!("internal evaluator error"),
     }
   }
 
-  #[async_recursion]
   async fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
+    self
+      .step_eval_impl(e, context)
+      .await
+      .with_frame(e.span, self.config.trace)
+  }
+
+  #[async_recursion]
+  async fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
     match &self.expr[e.node] {
       Expr::Int(n) => Ok(Value::Int(*n)),
       Expr::Str(Str { body, .. }) | Expr::IndStr(IndStr { body, .. }) => {
@@ -178,7 +273,19 @@ impl Eval {
         })
       }
       Expr::Path(p) => match p {
-        expr::Path::Plain(_) => todo!(),
+        expr::Path::Plain(p) => {
+          let pb = Path::new(p);
+          if pb.is_absolute() {
+            Ok(Value::Path(pb.into()))
+          } else {
+            let pb = pb.strip_prefix(Path::new("./")).unwrap_or(pb);
+            let files = self.files.lock().await;
+            let filename = files.name(e.span.file_id);
+            Ok(Value::Path(
+              PathBuf::from(filename).parent().unwrap().join(pb),
+            ))
+          }
+        }
         expr::Path::Home(_) => todo!(),
         expr::Path::NixPath { path, .. } => {
           let nixpath = self.synthetic_variable(e.span, Ident::from("__nixPath"), &context);
@@ -218,6 +325,15 @@ impl Eval {
           .build_attrs(rec.is_some(), attrs, new_attrs, &context)
           .await?;
         Ok(Value::Ref(new_attrs))
+      }
+      Expr::List(List { elems, .. }) => {
+        let ids = self.items.alloc_extend(
+          elems
+            .iter()
+            .copied()
+            .map(|elm| Thunk::thunk(elm, context.clone())),
+        );
+        Ok(Value::List(ids))
       }
       Expr::Select(Select { lhs, path, or, .. }) => {
         let mut lhs = self.items.alloc(Thunk::thunk(*lhs, context.clone()));
@@ -261,11 +377,24 @@ impl Eval {
           self.step_eval(*rhs2, context).await
         }
       }
-      Expr::Binary(b) => self.step_binary_op(b, context).await,
-      Expr::Unary(u) => self.step_unary_op(u, context).await,
+      Expr::With(With { env, expr, .. }) => {
+        let with_scope = self.items.alloc(Thunk::thunk(*env, context.clone()));
+        self
+          .step_eval(*expr, context.prepend(Scope::Dynamic(with_scope)))
+          .await
+      }
+      Expr::Assert(Assert { cond, expr, .. }) => {
+        let cond = self.items.alloc(Thunk::thunk(*cond, context.clone()));
+        if self.value_bool_of(cond).await? {
+          self.step_eval(*expr, context).await
+        } else {
+          bail!("assertion failed")
+        }
+      }
+      Expr::Binary(b) => operators::eval_binary(self, b, context).await,
+      Expr::Unary(u) => operators::eval_unary(self, u, context).await,
       Expr::Member(Member { lhs, path, .. }) => {
         let mut lhs = self.items.alloc(Thunk::thunk(*lhs, context.clone()));
-        let mut success = true;
 
         for path_item in &path.0 {
           let attr = self.attrname(path_item, &context).await?;
@@ -273,16 +402,13 @@ impl Eval {
             Some(item) => {
               lhs = item;
             }
-            None => {
-              success = false;
-              break;
-            }
+            None => return Ok(Value::Bool(false)),
           }
         }
 
-        Ok(Value::Bool(success))
+        Ok(Value::Bool(true))
       }
-      e => panic!("{:?}", e),
+      e => bail!("unhandled expression {:?}", e),
     }
   }
 
@@ -487,42 +613,22 @@ impl Eval {
       context.clone(),
     ))
   }
-
-  async fn step_binary_op(&self, bin: &Binary, context: Context) -> Result<Value> {
-    match *bin.op {
-      BinaryOp::Or => {
-        if self
-          .value_bool_of(self.items.alloc(Thunk::thunk(bin.lhs, context.clone())))
-          .await?
-        {
-          Ok(Value::Bool(true))
-        } else {
-          self.step_eval(bin.rhs, context).await
-        }
-      }
-      _ => panic!("unknown"),
-    }
-  }
-
-  async fn step_unary_op(&self, un: &Unary, context: Context) -> Result<Value> {
-    match *un.op {
-      UnaryOp::Not => Ok(Value::Bool(
-        self
-          .value_bool_of(self.items.alloc(Thunk::thunk(un.operand, context.clone())))
-          .await?,
-      )),
-      _ => panic!("unknown"),
-    }
-  }
 }
 
 #[cfg(test)]
-#[tokio::test]
-async fn test_foo() {
-  let eval = Eval::new();
-  let expr = eval
-    .load_inline(r#"(import <nixpkgs> {}).hello"#)
-    .await
-    .expect("no parse");
-  eprintln!("{:?}", eval.value_of(expr).await);
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn test_foo() {
+    let eval = Eval::new();
+    let expr = eval
+      .load_inline(r#"(import <nixpkgs> {}).hello"#)
+      .await
+      .expect("no parse");
+    match eval.value_of(expr).await {
+      Ok(x) => eprintln!("{:?}", x),
+      Err(e) => eval.print_error(e).await.unwrap(),
+    }
+  }
 }

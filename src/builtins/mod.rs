@@ -1,12 +1,19 @@
 use crate::{
+  bail,
+  error::Result,
   thunk::{StaticScope, Thunk, ThunkId},
   value::Value,
   Eval,
 };
-use anyhow::Result;
 use async_std::path::{Path, PathBuf};
 use futures::TryStreamExt;
 use syntax::expr::Ident;
+
+mod attrs;
+mod versions;
+
+pub use attrs::*;
+pub use versions::*;
 
 pub async fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
   let (path, _) = eval.value_str_of(path).await?;
@@ -62,6 +69,22 @@ pub async fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<Pat
     "Entry `{}' was not found in the Nix search path",
     target.display()
   )
+}
+
+pub async fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
+  let (msg, _) = eval.value_str_of(msg).await?;
+  bail!("evaluation aborted with the message: {}", msg)
+}
+
+pub async fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
+  let v = eval.value_of(obj).await?;
+  Ok(match v {
+    Value::Path(p) => Value::String {
+      string: p.display().to_string(),
+      context: Default::default(),
+    },
+    _ => bail!("not handled, coercing to string: {}", v.typename()),
+  })
 }
 
 pub fn mk_nix_path(eval: &Eval) -> Value {

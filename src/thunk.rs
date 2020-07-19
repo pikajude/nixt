@@ -76,10 +76,10 @@ impl Thunk {
 
   pub fn get_thunk(&self) -> ThunkCell {
     use std::ops::Deref;
-    let _guard = self.mutex.lock();
-    assert!(!self.is_value(), "cell loaded");
     // if another thread replaces this value, the reference we return could become
     // invalid, so we have to "atomically" clone it.
+    let _guard = self.mutex.lock();
+    assert!(!self.is_value(), "cell loaded");
     unsafe { (*self.value.get()).left.deref().clone() }
   }
 
@@ -88,8 +88,8 @@ impl Thunk {
   }
 
   pub fn update(&self, t: ThunkCell) {
-    assert!(!self.is_value(), "must not be a value here");
     let _guard = self.mutex.lock();
+    assert!(!self.is_value(), "must not be a value here");
     unsafe {
       let r = &mut *self.value.get();
       ManuallyDrop::drop(&mut r.left);
@@ -98,9 +98,9 @@ impl Thunk {
   }
 
   pub fn put_value(&self, v: Value) -> &Value {
-    assert!(!self.is_value(), "double initialization");
     {
       let _guard = self.mutex.lock();
+      assert!(!self.is_value(), "double initialization");
       unsafe {
         let r = &mut *self.value.get();
         ManuallyDrop::drop(&mut r.left);

@@ -45,4 +45,11 @@ impl Value {
       Value::Ref(_) => panic!(),
     }
   }
+
+  pub fn string_bare<S: Into<String>>(str: S) -> Self {
+    Value::String {
+      string: str.into(),
+      context: Default::default(),
+    }
+  }
 }
