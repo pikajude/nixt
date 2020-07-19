@@ -263,6 +263,25 @@ impl Eval {
       }
       Expr::Binary(b) => self.step_binary_op(b, context).await,
       Expr::Unary(u) => self.step_unary_op(u, context).await,
+      Expr::Member(Member { lhs, path, .. }) => {
+        let mut lhs = self.items.alloc(Thunk::thunk(*lhs, context.clone()));
+        let mut success = true;
+
+        for path_item in &path.0 {
+          let attr = self.attrname(path_item, &context).await?;
+          match self.sel(lhs, &attr).await? {
+            Some(item) => {
+              lhs = item;
+            }
+            None => {
+              success = false;
+              break;
+            }
+          }
+        }
+
+        Ok(Value::Bool(success))
+      }
       e => panic!("{:?}", e),
     }
   }
