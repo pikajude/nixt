@@ -6,8 +6,6 @@ pub mod lexer;
 pub mod parse;
 pub mod span;
 
-pub use parse::{ExprParser, ParseError};
-
 pub fn parse<'input>(
   file_id: FileId,
   arena: &Arena<expr::Expr>,

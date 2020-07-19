@@ -75,14 +75,14 @@ pub Expr = expr;
 expr = expr_function;
 
 expr_function: ExprRef = {
-  S<(S<ID> S<":"> expr_function)> => <>.map(|(arg,colon,e)| arena.insert(
+  S<(S<ID> S<":"> expr_function)> => <>.map(|(arg,colon,e)| arena.alloc(
     Expr::Lambda(Lambda {
       argument: arg.map(|x|LambdaArg::Plain(x.into())),
       colon: colon.def(),
       body: e
     })
   )),
-  S<(formals_at S<":"> expr_function)> => <>.map(|(arg,colon,e)| arena.insert(
+  S<(formals_at S<":"> expr_function)> => <>.map(|(arg,colon,e)| arena.alloc(
     Expr::Lambda(Lambda {
       argument: arg.map(LambdaArg::Formals),
       colon: colon.def(),
@@ -90,7 +90,7 @@ expr_function: ExprRef = {
     })
   )),
   S<(S<"assert"> expr S<";"> expr_function)> => <>.map(|(ass,cond,semi,child)|
-    arena.insert(
+    arena.alloc(
       Expr::Assert(Assert {
         assert: ass.def(),
         cond,
@@ -99,7 +99,7 @@ expr_function: ExprRef = {
       })
     )),
   S<(S<"with"> expr S<";"> expr_function)> => <>.map(|(with,parent,semi,child)|
-    arena.insert(
+    arena.alloc(
       Expr::With(With {
         with: with.def(),
         env: parent,
@@ -109,7 +109,7 @@ expr_function: ExprRef = {
     )),
   // let in <expr> is valid syntax
   S<(S<"let"> S<binding*> S<"in"> expr_function)>
-    => <>.map(|(let_,binds,in_,rhs)| arena.insert(Expr::Let(Let {
+    => <>.map(|(let_,binds,in_,rhs)| arena.alloc(Expr::Let(Let {
       let_: let_.def(),
       binds,
       in_: in_.def(),
@@ -222,7 +222,7 @@ attr_single: Spanned<AttrName> = {
 
 expr_if: ExprRef = {
   S<(S<"if"> expr S<"then"> expr S<"else"> expr)> => <>.map(|(i,i1,t,t1,e,e1)|
-    arena.insert(
+    arena.alloc(
       Expr::If(If {
         if_: i.def(),
         cond: i1,
@@ -240,7 +240,7 @@ expr_if: ExprRef = {
 expr_op = expr_op_14;
 
 expr_op_14: ExprRef = {
-  S<(expr_op_14 S<"->"> expr_op_13)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_14 S<"->"> expr_op_13)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Impl),
@@ -250,7 +250,7 @@ expr_op_14: ExprRef = {
 }
 
 expr_op_13: ExprRef = {
-  S<(expr_op_13 S<"||"> expr_op_12)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_13 S<"||"> expr_op_12)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Or),
@@ -260,7 +260,7 @@ expr_op_13: ExprRef = {
 }
 
 expr_op_12: ExprRef = {
-  S<(expr_op_12 S<"&&"> expr_op_11)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_12 S<"&&"> expr_op_11)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::And),
@@ -270,13 +270,13 @@ expr_op_12: ExprRef = {
 }
 
 expr_op_11: ExprRef = {
-  S<(expr_op_11 S<"=="> expr_op_10)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_11 S<"=="> expr_op_10)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Eq),
     })
   )),
-  S<(expr_op_11 S<"!="> expr_op_10)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_11 S<"!="> expr_op_10)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Neq),
@@ -286,25 +286,25 @@ expr_op_11: ExprRef = {
 }
 
 expr_op_10: ExprRef = {
-  S<(expr_op_10 S<"<"> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_10 S<"<"> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Le),
     })
   )),
-  S<(expr_op_10 S<"<="> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_10 S<"<="> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Leq),
     })
   )),
-  S<(expr_op_10 S<">"> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_10 S<">"> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Ge),
     })
   )),
-  S<(expr_op_10 S<">="> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_10 S<">="> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Geq),
@@ -314,7 +314,7 @@ expr_op_10: ExprRef = {
 }
 
 expr_op_9: ExprRef = {
-  S<(expr_op_8 S<"//"> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_8 S<"//"> expr_op_9)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Update),
@@ -324,7 +324,7 @@ expr_op_9: ExprRef = {
 }
 
 expr_op_8: ExprRef = {
-  S<(S<"!"> expr_op_8)> => <>.map(|(op,expr)| arena.insert(
+  S<(S<"!"> expr_op_8)> => <>.map(|(op,expr)| arena.alloc(
     Expr::unary(
       op.replace(UnaryOp::Not),
       expr,
@@ -334,13 +334,13 @@ expr_op_8: ExprRef = {
 }
 
 expr_op_7: ExprRef = {
-  S<(expr_op_7 S<"+"> expr_op_6)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_7 S<"+"> expr_op_6)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Add),
     })
   )),
-  S<(expr_op_7 S<"-"> expr_op_6)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_7 S<"-"> expr_op_6)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Sub),
@@ -350,13 +350,13 @@ expr_op_7: ExprRef = {
 }
 
 expr_op_6: ExprRef = {
-  S<(expr_op_6 S<"*"> expr_op_5)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_6 S<"*"> expr_op_5)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Mul),
     })
   )),
-  S<(expr_op_6 S<"/"> expr_op_5)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_6 S<"/"> expr_op_5)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Div),
@@ -366,7 +366,7 @@ expr_op_6: ExprRef = {
 }
 
 expr_op_5: ExprRef = {
-  S<(expr_op_4 S<"++"> expr_op_5)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_4 S<"++"> expr_op_5)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Binary(Binary {
       lhs, rhs,
       op: op.replace(BinaryOp::Concat),
@@ -376,7 +376,7 @@ expr_op_5: ExprRef = {
 }
 
 expr_op_4: ExprRef = {
-  S<(expr_op_4 S<"?"> attrpath)> => <>.map(|(lhs,op,rhs)| arena.insert(
+  S<(expr_op_4 S<"?"> attrpath)> => <>.map(|(lhs,op,rhs)| arena.alloc(
     Expr::Member(Member {
       lhs,
       question: op.def(),
@@ -387,7 +387,7 @@ expr_op_4: ExprRef = {
 }
 
 expr_op_3: ExprRef = {
-  S<(S<"-"> expr_op_3)> => <>.map(|(op,expr)| arena.insert(
+  S<(S<"-"> expr_op_3)> => <>.map(|(op,expr)| arena.alloc(
     Expr::unary(
       op.replace(UnaryOp::Negate),
       expr,
@@ -398,14 +398,14 @@ expr_op_3: ExprRef = {
 // ===================== END eldritch abomination =============================
 
 expr_app: ExprRef = {
-  S<(expr_app expr_select)> => <>.map(|(x,y)| arena.insert(
+  S<(expr_app expr_select)> => <>.map(|(x,y)| arena.alloc(
     Expr::Apply(Apply { lhs: x, rhs: y })
   )),
   expr_select
 }
 
 expr_select: ExprRef = {
-  S<(expr_simple S<"."> attrpath)> => <>.map(|(lhs,dot,path)| arena.insert(
+  S<(expr_simple S<"."> attrpath)> => <>.map(|(lhs,dot,path)| arena.alloc(
     Expr::Select(Select {
       lhs,
       dot: dot.def(),
@@ -415,7 +415,7 @@ expr_select: ExprRef = {
   )),
 
   S<(expr_simple S<"."> attrpath S<"or"> expr_select)>
-    => <>.map(|(lhs,dot,path,or,o)| arena.insert(
+    => <>.map(|(lhs,dot,path,or,o)| arena.alloc(
       Expr::Select(Select {
         lhs,
         dot: dot.def(),
@@ -428,14 +428,14 @@ expr_select: ExprRef = {
     )),
 
   <start:@L> <lhs:expr_simple> <rhs:S<"or">> <end:@R> => {
-    let rhs = rhs.replace(arena.insert(Expr::Var("or".into())));
+    let rhs = rhs.replace(arena.alloc(Expr::Var("or".into())));
     Spanned::new(
       FileSpan::new(
         start as u32,
         end as u32,
         file_id,
       ),
-      arena.insert(Expr::Apply(Apply {
+      arena.alloc(Expr::Apply(Apply {
         lhs,
         rhs,
       })),
@@ -445,16 +445,16 @@ expr_select: ExprRef = {
 }
 
 expr_simple: ExprRef = {
-  S<ID> => { <>.map(|x| arena.insert(if x == "__curPos" {
+  S<ID> => { <>.map(|x| arena.alloc(if x == "__curPos" {
     Expr::Pos
   } else {
     Expr::Var(x.into())
   })) },
-  S<Int> => <>.map(|x| arena.insert(Expr::Int(x))),
-  S<Float> => <>.map(|x| arena.insert(Expr::Float(x))),
+  S<Int> => <>.map(|x| arena.alloc(Expr::Int(x))),
+  S<Float> => <>.map(|x| arena.alloc(Expr::Float(x))),
 
   // regular string
-  S<(S<quote> str_part* S<quote>)> => <>.map(|(open,body,close)| arena.insert(
+  S<(S<quote> str_part* S<quote>)> => <>.map(|(open,body,close)| arena.alloc(
     Expr::Str(Str {
       open: open.def(),
       body,
@@ -463,7 +463,7 @@ expr_simple: ExprRef = {
   )),
   // indented string
   S<(S<ind_open> ind_str_part* S<ind_close>)>
-    => <>.map(|(open,body,close)| arena.insert(
+    => <>.map(|(open,body,close)| arena.alloc(
       Expr::IndStr(IndStr {
         open: open.def(),
         body,
@@ -471,9 +471,9 @@ expr_simple: ExprRef = {
       })
     )),
 
-  S<Path>  => <>.map(|x| arena.insert(Expr::Path(Path::Plain(x.into())))),
-  S<HPath> => <>.map(|x| arena.insert(Expr::Path(Path::Home(x.into())))),
-  S<NPath> => <>.map(|x| arena.insert(Expr::Path(Path::NixPath {
+  S<Path>  => <>.map(|x| arena.alloc(Expr::Path(Path::Plain(x.into())))),
+  S<HPath> => <>.map(|x| arena.alloc(Expr::Path(Path::Home(x.into())))),
+  S<NPath> => <>.map(|x| arena.alloc(Expr::Path(Path::NixPath {
     open: Spanned::new(
       FileSpan::new(
         <>.span.span.start(),
@@ -492,12 +492,12 @@ expr_simple: ExprRef = {
       Default::default(),
     )
   }))),
-  S<Uri> => <>.map(|x| arena.insert(Expr::Uri(x.into()))),
+  S<Uri> => <>.map(|x| arena.alloc(Expr::Uri(x.into()))),
   "(" <expr> ")",
 
   // recursive attrset
   S<(S<"rec"> S<"{"> binding* S<"}">)> => <>.map(|(rec,open,binds,close)|
-    arena.insert(
+    arena.alloc(
       Expr::AttrSet(AttrSet {
         rec: Some(rec.def()),
         open: open.def(),
@@ -506,7 +506,7 @@ expr_simple: ExprRef = {
       })
     )),
   // flat attrset
-  S<(S<"{"> binding* S<"}">)> => <>.map(|(open,binds,close)| arena.insert(
+  S<(S<"{"> binding* S<"}">)> => <>.map(|(open,binds,close)| arena.alloc(
      Expr::AttrSet(AttrSet {
       rec: None,
       open: open.def(),
@@ -515,7 +515,7 @@ expr_simple: ExprRef = {
     })
   )),
   // list literal
-  S<(S<"["> expr_select* S<"]">)> => <>.map(|(open,items,close)| arena.insert(
+  S<(S<"["> expr_select* S<"]">)> => <>.map(|(open,items,close)| arena.alloc(
     Expr::List(List {
       open: open.def(),
       elems: items,

@@ -1,4 +1,5 @@
 use derive_more::Display;
+use lazy_static::lazy_static;
 use regex::Regex;
 use std::num::{ParseFloatError, ParseIntError};
 
@@ -43,25 +44,25 @@ pub enum Token<'a> {
   Any(char),
 }
 
-lazy_static::lazy_static! {
+lazy_static! {
   pub static ref ID: Regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_'-]*").unwrap();
   static ref INT: Regex = Regex::new(r"^[0-9]+").unwrap();
-  static ref FLOAT: Regex = Regex::new(r"^(([1-9][0-9]*\.[0-9]*)|(0?\.[0-9]+))([Ee][+-]?[0-9]+)?").unwrap();
+  static ref FLOAT: Regex =
+    Regex::new(r"^(([1-9][0-9]*\.[0-9]*)|(0?\.[0-9]+))([Ee][+-]?[0-9]+)?").unwrap();
   static ref PATH: Regex = Regex::new(r"^[a-zA-Z0-9\._\-\+]*(/[a-zA-Z0-9\._\-\+]+)+/?").unwrap();
   static ref HPATH: Regex = Regex::new(r"^\~(/[a-zA-Z0-9\._\-\+]+)+/?").unwrap();
   static ref SPATH: Regex = Regex::new(r"^<[a-zA-Z0-9\._\-\+]+(/[a-zA-Z0-9\._\-\+]+)*>").unwrap();
-  static ref URI: Regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9\+\-\.]*:[a-zA-Z0-9%/\?:@\&=\+\$,\-_\.!\~\*']+").unwrap();
-
+  static ref URI: Regex =
+    Regex::new(r"^[a-zA-Z][a-zA-Z0-9\+\-\.]*:[a-zA-Z0-9%/\?:@\&=\+\$,\-_\.!\~\*']+").unwrap();
   static ref OPER: Regex = Regex::new(r"^(\.\.\.|==|!=|<=|>=|&&|\|\||->|//|\+\+)").unwrap();
-
-  static ref STRING_INNER_0: Regex = Regex::new(r#"^([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)*\$/""#).unwrap();
-  static ref STRING_INNER_1: Regex = Regex::new(r#"^([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)+"#).unwrap();
+  static ref STRING_INNER_0: Regex =
+    Regex::new(r#"^([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)*\$/""#).unwrap();
+  static ref STRING_INNER_1: Regex =
+    Regex::new(r#"^([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)+"#).unwrap();
   static ref STRING_END_INVALID: Regex = Regex::new(r"^(\$|\\|\$\\)").unwrap();
-
   static ref IND_STRING_START: Regex = Regex::new(r"^''( *\n)?").unwrap();
   static ref IND_STRING_INNER: Regex = Regex::new(r"^([^\$']|\$[^\{']|'[^'\$])+").unwrap();
   static ref IND_STRING_ANY: Regex = Regex::new(r"^''\\(?s).").unwrap();
-
   static ref WHITESPACE: Regex = Regex::new(r"^[ \t\r\n]+").unwrap();
   static ref COMMENT_SINGLE: Regex = Regex::new(r"^#[^\r\n]*").unwrap();
   static ref COMMENT_MULTI: Regex = Regex::new(r"^/\*([^*]|\*+[^*/])*\*+/").unwrap();

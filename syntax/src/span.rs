@@ -1,15 +1,41 @@
-use codespan::{ByteIndex, FileId, Span};
-use codespan_reporting::diagnostic::Label;
-use derive_more::{Deref, DerefMut, Display};
-use std::{borrow::ToOwned, ops::Deref};
+use derive_more::Display;
+use std::borrow::ToOwned;
 
-#[derive(Debug, Clone, Copy, Display, Deref, DerefMut)]
+#[derive(Debug, Clone, Copy, Display)]
 #[display(fmt = "{}", node)]
 pub struct Spanned<T> {
-  #[deref]
-  #[deref_mut]
   pub node: T,
   pub span: FileSpan,
+}
+
+pub fn spanned<T>(span: FileSpan, node: T) -> Spanned<T> {
+  Spanned::new(span, node)
+}
+
+impl<T: ToOwned> Spanned<T> {
+  pub fn owned(&self) -> Spanned<T::Owned> {
+    Spanned::new(self.span, self.node.to_owned())
+  }
+}
+
+impl<T: Clone> Spanned<&'_ T> {
+  pub fn cloned(self) -> Spanned<T> {
+    Spanned::new(self.span, self.node.clone())
+  }
+}
+
+impl<T> std::ops::Deref for Spanned<T> {
+  type Target = T;
+
+  fn deref(&self) -> &Self::Target {
+    &self.node
+  }
+}
+
+impl<T> std::ops::DerefMut for Spanned<T> {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.node
+  }
 }
 
 impl<T> Spanned<T> {
@@ -47,66 +73,37 @@ impl<T> Spanned<T> {
     self.replace(Default::default())
   }
 
-  pub fn label(&self, m: impl Into<String>) -> Label<FileId> {
-    Label::primary(self.span.file_id, self.span.span).with_message(m)
-  }
-
-  pub fn label_secondary(&self, m: impl Into<String>) -> Label<FileId> {
-    Label::secondary(self.span.file_id, self.span.span).with_message(m)
-  }
-}
-
-impl<T: Deref> Spanned<T> {
-  pub fn as_deref(&self) -> Spanned<&T::Target> {
-    Spanned {
-      span: self.span,
-      node: self.node.deref(),
-    }
-  }
-}
-
-pub fn spanned<T>(span: FileSpan, node: T) -> Spanned<T> {
-  Spanned::new(span, node)
-}
-
-impl<T: ToOwned> Spanned<T> {
-  pub fn owned(&self) -> Spanned<T::Owned> {
-    Spanned::new(self.span, self.node.to_owned())
-  }
-}
-
-impl<T: Clone> Spanned<&'_ T> {
-  pub fn cloned(self) -> Spanned<T> {
-    Spanned::new(self.span, self.node.clone())
-  }
+  // pub fn label(&self, m: impl Into<String>) -> Label {
+  //   Label::new(self.span.file_id, self.span.span, m)
+  // }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct FileSpan {
-  pub span: Span,
-  pub file_id: FileId,
+  pub span: codespan::Span,
+  pub file_id: codespan::FileId,
 }
 
 impl FileSpan {
-  pub fn new(a: impl Into<ByteIndex>, b: impl Into<ByteIndex>, file_id: FileId) -> Self {
+  pub fn new(
+    a: impl Into<codespan::ByteIndex>,
+    b: impl Into<codespan::ByteIndex>,
+    file_id: codespan::FileId,
+  ) -> Self {
     Self {
-      span: Span::new(a, b),
+      span: codespan::Span::new(a, b),
       file_id,
     }
   }
 
   pub fn merge(&self, other: &Self) -> Self {
-    assert!(self.file_id == other.file_id, "file IDs must match");
+    if self.file_id != other.file_id {
+      panic!("file id mismatch")
+    }
 
     FileSpan {
       file_id: self.file_id,
       span: self.span.merge(other.span),
     }
-  }
-}
-
-impl From<FileSpan> for Span {
-  fn from(s: FileSpan) -> Self {
-    s.span
   }
 }
