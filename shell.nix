@@ -2,5 +2,5 @@ with import <nixpkgs> {};
 
 stdenv.mkDerivation {
   name = "rust-debug";
-  buildInputs = [ lldb ];
+  buildInputs = [ lldb openssl pkg-config ];
 }

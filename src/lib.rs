@@ -151,6 +151,7 @@ impl Eval {
       };
       match v {
         Value::Ref(r) => {
+          info!("{:?}", r);
           thunk_id = *r;
         }
         _ => break Ok(v),
@@ -600,10 +601,45 @@ impl Eval {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::ffi::OsString;
+
+  async fn yoink_nixpkgs(into: &std::path::Path) -> Result<()> {
+    eprintln!(
+      "You don't have a <nixpkgs> available, so I will download the latest unstable channel."
+    );
+    let latest = std::io::Cursor::new(
+      reqwest::Client::new()
+        .get("https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz")
+        .send()
+        .await?
+        .bytes()
+        .await?,
+    );
+    let mut decoder = tar::Archive::new(xz2::read::XzDecoder::new(latest));
+    for entry in decoder.entries()? {
+      let mut entry = entry?;
+      let dest: std::path::PathBuf = entry.path()?.components().skip(1).collect();
+      entry.unpack(into.join(dest))?;
+    }
+    Ok(())
+  }
 
   #[tokio::test]
   async fn test_foo() {
     pretty_env_logger::init();
+
+    if std::env::var("NIX_PATH").unwrap_or_default().is_empty() {
+      let destdir = tempfile::tempdir().expect("tempdir").into_path();
+      yoink_nixpkgs(&destdir).await.expect("no good");
+      let mut nix_path = OsString::from("nixpkgs=");
+      nix_path.push(&destdir);
+      eprintln!(
+        "unpacked nixpkgs-unstable into {}",
+        nix_path.to_string_lossy()
+      );
+      std::env::set_var("NIX_PATH", nix_path);
+    }
+
     let eval = Eval::with_config(Config { trace: false });
     let expr = eval
       .load_inline(r#"(import <nixpkgs> {}).hello"#)
