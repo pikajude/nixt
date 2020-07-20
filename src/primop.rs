@@ -1,5 +1,5 @@
 use crate::{error::Result, thunk::ThunkId, value::Value, Eval};
-use futures::{future::BoxFuture, Future};
+use futures::future::BoxFuture;
 use std::fmt::{self, Debug};
 
 pub enum Op {
@@ -47,6 +47,30 @@ macro_rules! primop2 {
         Ok($crate::value::Value::Primop($crate::primop::Primop {
           name: concat!($name, "-app"),
           op: $crate::primop::Op::Async(Box::new(move |eval, t2| Box::pin($op(eval, t1, t2)))),
+        }))
+      }),
+    }))
+  };
+}
+
+#[macro_export]
+macro_rules! primop3 {
+  ($name:literal, $op:expr) => {
+    $crate::thunk::Thunk::complete($crate::value::Value::Primop($crate::primop::Primop {
+      name: $name,
+      op: $crate::primop::Op::Sync(move |_, t1| {
+        Ok($crate::value::Value::Primop($crate::primop::Primop {
+          name: concat!($name, "-app"),
+          op: $crate::primop::Op::Async(Box::new(move |_, t2| {
+            Box::pin(async move {
+              Ok($crate::value::Value::Primop($crate::primop::Primop {
+                name: concat!($name, "-app"),
+                op: $crate::primop::Op::Async(Box::new(move |eval, t3| {
+                  Box::pin($op(eval, t1, t2, t3))
+                })),
+              }))
+            })
+          })),
         }))
       }),
     }))

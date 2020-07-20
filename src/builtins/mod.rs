@@ -1,20 +1,18 @@
 use crate::{
   bail,
   error::Result,
-  primop,
-  primop::Primop,
-  primop2, primop_inline,
+  primop, primop2, primop3, primop_inline,
   thunk::{StaticScope, Thunk, ThunkId},
   value::Value,
   Eval,
 };
 use async_std::path::{Path, PathBuf};
 use futures::TryStreamExt;
-use primop::Op;
 use syntax::expr::Ident;
 
 mod attrs;
 mod lists;
+mod strings;
 mod sys;
 mod versions;
 
@@ -75,6 +73,16 @@ pub fn init_primops(eval: &mut Eval) {
           .alloc(primop2!("compareVersions", versions::compare_versions)),
       );
       builtins.insert(
+        "currentSystem".into(),
+        eval
+          .items
+          .alloc(Thunk::complete(Value::string_bare("x86_64-linux"))),
+      );
+      builtins.insert(
+        "elem".into(),
+        eval.items.alloc(primop2!("elem", lists::elem)),
+      );
+      builtins.insert(
         "elemAt".into(),
         eval.items.alloc(primop2!("elemAt", lists::elem_at)),
       );
@@ -85,6 +93,14 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "genList".into(),
         eval.items.alloc(primop2!("genList", lists::gen_list)),
+      );
+      builtins.insert(
+        "head".into(),
+        eval.items.alloc(primop!("head", lists::head)),
+      );
+      builtins.insert(
+        "tail".into(),
+        eval.items.alloc(primop!("tail", lists::tail)),
       );
       builtins.insert(
         "isString".into(),
@@ -116,17 +132,12 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "isList".into(),
-        eval.items.alloc(Thunk::complete(Value::Primop(Primop {
-          name: "isList",
-          op: Op::Async(Box::new(move |e, i| {
-            Box::pin(async move {
-              Ok(Value::Bool(match e.value_of(i).await? {
-                Value::List { .. } => true,
-                _ => false,
-              }))
-            })
-          })),
-        }))),
+        eval.items.alloc(primop_inline!("isList", |e, i| {
+          Ok(Value::Bool(match e.value_of(i).await? {
+            Value::List(_) => true,
+            _ => false,
+          }))
+        })),
       );
       builtins.insert(
         "intersectAttrs".into(),
@@ -161,6 +172,10 @@ pub fn init_primops(eval: &mut Eval) {
         eval.items.alloc(primop_inline!("stringLength", |e, i| {
           Ok(Value::Int(e.value_str_of(i).await?.0.len() as _))
         })),
+      );
+      builtins.insert(
+        "substring".into(),
+        eval.items.alloc(primop3!("substring", strings::substring)),
       );
       builtins
     }))),
@@ -230,10 +245,8 @@ pub async fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
 pub async fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
   let v = eval.value_of(obj).await?;
   Ok(match v {
-    Value::Path(p) => Value::String {
-      string: p.display().to_string(),
-      context: Default::default(),
-    },
+    Value::Path(p) => Value::string_bare(p.display().to_string()),
+    Value::Int(i) => Value::string_bare(i.to_string()),
     _ => bail!("not handled, coercing to string: {}", v.typename()),
   })
 }
@@ -316,18 +329,6 @@ fn get_nix_path() -> Vec<String> {
   } else {
     vec![]
   }
-}
-
-#[macro_export]
-macro_rules! primop3 {
-  ($x:ident, $s:literal, $f:ident) => {
-    pub async fn $x(_: &Eval, arg: ThunkId) -> Result<Value> {
-      Ok(Value::Primop(Primop {
-        name: concat!($s, "-app").into(),
-        op: Box::new(move |eval, arg2| Box::pin($f(eval, arg, arg2))),
-      }))
-    }
-  };
 }
 
 #[test]

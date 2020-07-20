@@ -1,8 +1,6 @@
 use crate::{
   bail,
   error::Result,
-  primop::Primop,
-  primop3,
   thunk::{Thunk, ThunkCell, ThunkId},
   value::Value,
   Eval,
@@ -41,6 +39,36 @@ pub async fn elem_at(eval: &Eval, list: ThunkId, index: ThunkId) -> Result<Value
     bail!("list index {} is out of bounds", ix);
   }
   Ok(Value::Ref(list[ix as usize]))
+}
+
+pub async fn elem(eval: &Eval, thing: ThunkId, list: ThunkId) -> Result<Value> {
+  let thing = eval.value_of(thing).await?;
+  for item in eval.value_list_of(list).await? {
+    if crate::operators::eval_eq(eval, thing, eval.value_of(*item).await?).await? {
+      return Ok(Value::Bool(true));
+    }
+  }
+  Ok(Value::Bool(false))
+}
+
+pub async fn head(eval: &Eval, list: ThunkId) -> Result<Value> {
+  Ok(Value::Ref(
+    eval
+      .value_list_of(list)
+      .await?
+      .first()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("builtins.head: empty list"))?,
+  ))
+}
+
+pub async fn tail(eval: &Eval, list: ThunkId) -> Result<Value> {
+  let ls = eval.value_list_of(list).await?;
+  if ls.is_empty() {
+    bail!("builtins.tail: empty list")
+  } else {
+    Ok(Value::List(ls[1..].to_vec()))
+  }
 }
 
 pub async fn concat_lists(eval: &Eval, list: ThunkId) -> Result<Value> {

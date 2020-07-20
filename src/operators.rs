@@ -2,10 +2,10 @@ use crate::{
   bail,
   error::Result,
   thunk::{Context, Thunk, ThunkId},
-  value::{PathSet, Value},
+  value::Value,
   Eval,
 };
-use async_std::path::Path;
+
 use syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 
 pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {
@@ -35,13 +35,7 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
       let lhs = eval.value_of(t!(bin.lhs)).await?;
       let rhs = eval.value_of(t!(bin.rhs)).await?;
 
-      match (lhs, rhs) {
-        (Value::Float(f1), Value::Float(f2)) => Ok(Value::Float(f1 - f2)),
-        (Value::Float(f1), Value::Int(f2)) => Ok(Value::Float(*f1 - *f2 as f64)),
-        (Value::Int(f1), Value::Float(f2)) => Ok(Value::Float(*f1 as f64 - *f2)),
-        (Value::Int(f1), Value::Int(f2)) => Ok(Value::Int(f1 - f2)),
-        (v, _) => bail!("expected an integer, got {}", v.typename()),
-      }
+      do_sub(lhs, rhs)
     }
     BinaryOp::Eq => {
       let lhs = eval.value_of(t!(bin.lhs)).await?;
@@ -61,6 +55,12 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
 
       Ok(Value::Bool(!less_than(rhs, lhs)?))
     }
+    BinaryOp::Le => {
+      let lhs = eval.value_of(t!(bin.lhs)).await?;
+      let rhs = eval.value_of(t!(bin.rhs)).await?;
+
+      Ok(Value::Bool(less_than(lhs, rhs)?))
+    }
     BinaryOp::Impl => {
       let lhs = eval.value_bool_of(t!(bin.lhs)).await?;
       let rhs = eval.value_bool_of(t!(bin.rhs)).await?;
@@ -73,12 +73,30 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
       }
       Ok(Value::AttrSet(lhs))
     }
+    BinaryOp::Concat => {
+      let mut lhs = eval.value_list_of(t!(bin.lhs)).await?.to_vec();
+      let rhs = eval.value_list_of(t!(bin.rhs)).await?;
+      lhs.extend(rhs);
+      Ok(Value::List(lhs))
+    }
     x => bail!("unimplemented: {:?}", x),
   }
 }
 
+fn do_sub(lhs: &Value, rhs: &Value) -> Result<Value> {
+  match (lhs, rhs) {
+    (Value::Float(f1), Value::Float(f2)) => Ok(Value::Float(f1 - f2)),
+    (Value::Float(f1), Value::Int(f2)) => Ok(Value::Float(*f1 - *f2 as f64)),
+    (Value::Int(f1), Value::Float(f2)) => Ok(Value::Float(*f1 as f64 - *f2)),
+    (Value::Int(f1), Value::Int(f2)) => Ok(Value::Int(f1 - f2)),
+    (Value::Float(_), v) => bail!("expected a float, got {}", v.typename()),
+    (Value::Int(_), v) => bail!("expected an integer, got {}", v.typename()),
+    (v, _) => bail!("expected an integer, got {}", v.typename()),
+  }
+}
+
 #[async_recursion]
-async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
+pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
   if lhs as *const _ == rhs as *const _ {
     return Ok(true);
   }
@@ -119,6 +137,23 @@ async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
       true
     }
     (Value::Lambda { .. }, Value::Primop(_)) => false,
+    (Value::AttrSet(a1), Value::AttrSet(a2)) => {
+      if a1.len() != a2.len() {
+        return Ok(false);
+      }
+      for (k, v) in a1.iter() {
+        if let Some(v2) = a2.get(k) {
+          let v1_value = eval.value_of(*v).await?;
+          let v2_value = eval.value_of(*v2).await?;
+          if !eval_eq(eval, v1_value, v2_value).await? {
+            return Ok(false);
+          }
+        } else {
+          return Ok(false);
+        }
+      }
+      true
+    }
     (x, y) => bail!("cannot compare {} with {}", x.typename(), y.typename()),
   })
 }
@@ -130,7 +165,12 @@ pub async fn eval_unary(eval: &Eval, un: &Unary, context: Context) -> Result<Val
         .value_bool_of(eval.items.alloc(Thunk::thunk(un.operand, context.clone())))
         .await?,
     )),
-    x => bail!("unimplemented: {:?}", x),
+    UnaryOp::Negate => do_sub(
+      &Value::Int(0),
+      eval
+        .value_of(eval.items.alloc(Thunk::thunk(un.operand, context.clone())))
+        .await?,
+    ),
   }
 }
 

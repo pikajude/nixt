@@ -1,7 +1,5 @@
 use crate::{
   error::Result,
-  primop::Primop,
-  primop3,
   thunk::{StaticScope, Thunk, ThunkId},
   value::Value,
   Eval,

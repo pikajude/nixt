@@ -1,13 +1,4 @@
-use crate::{
-  bail,
-  error::Result,
-  primop::Primop,
-  primop3,
-  thunk::{Thunk, ThunkCell, ThunkId},
-  value::Value,
-  Eval,
-};
-use std::ffi::OsStr;
+use crate::{error::Result, thunk::ThunkId, value::Value, Eval};
 
 pub async fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
   let (varname, _) = eval.value_str_of(varname).await?;

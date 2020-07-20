@@ -1,6 +1,7 @@
 #![feature(untagged_unions)]
 
 #[macro_use] extern crate async_recursion;
+#[macro_use] extern crate log;
 
 use arena::Arena;
 use async_std::{
@@ -8,10 +9,7 @@ use async_std::{
   sync::Mutex,
 };
 use codespan::Files;
-use std::{
-  borrow::Cow,
-  sync::atomic::{AtomicU16, Ordering},
-};
+use std::sync::atomic::{AtomicU16, Ordering};
 use syntax::{
   expr::{self, *},
   span::{spanned, FileSpan, Spanned},
@@ -135,18 +133,22 @@ impl Eval {
   }
 
   #[async_recursion]
-  pub async fn value_of(&self, t: ThunkId) -> Result<&Value> {
-    let v = match self.items[t].value_ref() {
-      Some(x) => x,
-      None => {
-        let thunk = self.items[t].get_thunk();
-        let val = self.step_thunk(thunk).await?;
-        self.items[t].put_value(val)
+  pub async fn value_of(&self, mut thunk_id: ThunkId) -> Result<&Value> {
+    loop {
+      let v = match self.items[thunk_id].value_ref() {
+        Some(x) => x,
+        None => {
+          let thunk = self.items[thunk_id].get_thunk();
+          let val = self.step_thunk(thunk).await?;
+          self.items[thunk_id].put_value(val)
+        }
+      };
+      match v {
+        Value::Ref(r) => {
+          thunk_id = *r;
+        }
+        _ => break Ok(v),
       }
-    };
-    match v {
-      Value::Ref(r) => self.value_of(*r).await,
-      _ => Ok(v),
     }
   }
 
@@ -210,6 +212,7 @@ impl Eval {
   }
 
   async fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
+    trace!("{:?}", e.span);
     self
       .step_eval_impl(e, context)
       .await
@@ -594,10 +597,8 @@ mod tests {
 
   #[tokio::test]
   async fn test_foo() {
-    let eval = Eval::with_config(Config {
-      trace: false,
-      ..Default::default()
-    });
+    pretty_env_logger::init();
+    let eval = Eval::with_config(Config { trace: false });
     let expr = eval
       .load_inline(r#"(import <nixpkgs> {}).hello"#)
       .await
