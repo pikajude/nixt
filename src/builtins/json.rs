@@ -22,7 +22,7 @@ pub async fn to_json_primop(eval: &Eval, obj: ThunkId) -> Result<Value> {
 }
 
 async fn to_json_impl(eval: &Eval, obj: ThunkId, paths: &mut PathSet) -> Result<JSON> {
-  Ok(match eval.value_of(obj).await? {
+  Ok(match eval.value_of(obj)? {
     Value::Null => JSON::Null,
     Value::Int(i) => JSON::Number(Number::from(*i)),
     Value::Float(f) => JSON::Number(Number::from_f64(*f).unwrap()),

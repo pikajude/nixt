@@ -7,13 +7,13 @@ pub async fn substring(
   len: ThunkId,
   string: ThunkId,
 ) -> Result<Value> {
-  let (s, ctx) = eval.value_str_of(string).await?;
-  let start = eval.value_int_of(start).await?;
+  let (s, ctx) = eval.value_str_of(string)?;
+  let start = eval.value_int_of(start)?;
   if start < 0 {
     bail!("first argument to `substring' must be >= 0");
   }
   let start = start as usize;
-  let len = eval.value_int_of(len).await?;
+  let len = eval.value_int_of(len)?;
   let actual_end = std::cmp::min(start + (std::cmp::max(0, len) as usize), s.len());
   Ok(Value::String {
     string: s[start..actual_end].to_string(),
@@ -22,7 +22,7 @@ pub async fn substring(
 }
 
 pub async fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
-  let v = eval.value_of(obj).await?;
+  let v = eval.value_of(obj)?;
   Ok(match v {
     Value::Path(p) => Value::string_bare(p.display().to_string()),
     Value::String { string, context } => Value::String {
@@ -35,20 +35,20 @@ pub async fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
 }
 
 pub async fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result<Value> {
-  let strings = eval.value_list_of(strings).await?;
+  let strings = eval.value_list_of(strings)?;
   if strings.is_empty() {
     return Ok(Value::string_bare(""));
   }
   let mut all_ctx = BTreeSet::new();
   let mut output = String::new();
-  let (sep, c) = eval.value_str_of(sep).await?;
+  let (sep, c) = eval.value_str_of(sep)?;
   all_ctx.extend(c.iter().cloned());
 
   for (ix, s) in strings.iter().enumerate() {
     if ix > 0 {
       output.push_str(sep);
     }
-    let (s1, ctx) = eval.value_str_of(*s).await?;
+    let (s1, ctx) = eval.value_str_of(*s)?;
     output.push_str(s1);
     all_ctx.extend(ctx.iter().cloned());
   }

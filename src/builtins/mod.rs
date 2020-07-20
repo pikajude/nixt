@@ -142,7 +142,7 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "isString".into(),
         eval.items.alloc(primop_inline!("isString", |e, i| {
-          Ok(Value::Bool(match e.value_of(i).await? {
+          Ok(Value::Bool(match e.value_of(i)? {
             Value::String { .. } => true,
             _ => false,
           }))
@@ -151,7 +151,7 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "isAttrs".into(),
         eval.items.alloc(primop_inline!("isAttrs", |e, i| {
-          Ok(Value::Bool(match e.value_of(i).await? {
+          Ok(Value::Bool(match e.value_of(i)? {
             Value::AttrSet { .. } => true,
             _ => false,
           }))
@@ -160,7 +160,7 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "isBool".into(),
         eval.items.alloc(primop_inline!("isBool", |e, i| {
-          Ok(Value::Bool(match e.value_of(i).await? {
+          Ok(Value::Bool(match e.value_of(i)? {
             Value::Bool { .. } => true,
             _ => false,
           }))
@@ -169,7 +169,7 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "isFunction".into(),
         eval.items.alloc(primop_inline!("isFunction", |e, i| {
-          Ok(Value::Bool(match e.value_of(i).await? {
+          Ok(Value::Bool(match e.value_of(i)? {
             Value::Primop { .. } => true,
             Value::Lambda { .. } => true,
             _ => false,
@@ -179,7 +179,7 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "isList".into(),
         eval.items.alloc(primop_inline!("isList", |e, i| {
-          Ok(Value::Bool(match e.value_of(i).await? {
+          Ok(Value::Bool(match e.value_of(i)? {
             Value::List(_) => true,
             _ => false,
           }))
@@ -210,13 +210,13 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "length".into(),
         eval.items.alloc(primop_inline!("length", |e, i| {
-          Ok(Value::Int(e.value_list_of(i).await?.len() as _))
+          Ok(Value::Int(e.value_list_of(i)?.len() as _))
         })),
       );
       builtins.insert(
         "stringLength".into(),
         eval.items.alloc(primop_inline!("stringLength", |e, i| {
-          Ok(Value::Int(e.value_str_of(i).await?.0.len() as _))
+          Ok(Value::Int(e.value_str_of(i)?.0.len() as _))
         })),
       );
       builtins.insert(
@@ -237,13 +237,13 @@ pub fn init_primops(eval: &mut Eval) {
 }
 
 async fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
-  let (msg, _) = eval.value_str_of(msg).await?;
+  let (msg, _) = eval.value_str_of(msg)?;
   bail!("evaluation aborted with the message: {}", msg)
 }
 
 async fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value> {
-  if let Err(mut e) = eval.value_of(value).await {
-    let (ctx, _) = eval.value_str_of(ctx).await?;
+  if let Err(mut e) = eval.value_of(value) {
+    let (ctx, _) = eval.value_str_of(ctx)?;
     e.err = e.err.context(ctx.to_string());
     Err(e)
   } else {
@@ -253,7 +253,7 @@ async fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<
 
 async fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
   let mut attrs = StaticScope::new();
-  if let Err(_) = eval.value_of(thing).await {
+  if let Err(_) = eval.value_of(thing) {
     warn!("tryEval is currently wrong");
     attrs.insert(
       Ident::from("success"),
