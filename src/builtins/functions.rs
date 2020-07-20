@@ -1,10 +1,4 @@
-use crate::{
-  bail,
-  error::Result,
-  thunk::{Thunk, ThunkId},
-  value::Value,
-  Eval,
-};
+use crate::{bail, error::Result, thunk::ThunkId, value::Value, Eval};
 use syntax::expr::LambdaArg;
 
 pub fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
@@ -27,7 +21,7 @@ pub fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
   Ok(Value::AttrSet(
     fn_args
       .into_iter()
-      .map(|(arg, req)| (arg, eval.items.alloc(Thunk::complete(Value::Bool(req)))))
+      .map(|(arg, req)| (arg, eval.new_value(Value::Bool(req))))
       .collect(),
   ))
 }

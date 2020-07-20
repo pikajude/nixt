@@ -100,3 +100,9 @@ pub fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
 
   Ok(Value::List(res))
 }
+
+pub fn has_attr(eval: &Eval, attrname: ThunkId, attrs: ThunkId) -> Result<Value> {
+  let attrs = eval.value_attrs_of(attrs)?;
+  let (aname, _) = eval.value_str_of(attrname)?;
+  Ok(Value::Bool(attrs.contains_key(&Ident::from(aname))))
+}

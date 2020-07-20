@@ -194,7 +194,10 @@ impl Eval {
     match self.value_of(ix)? {
       Value::Path(p) => Ok(p),
       Value::String { string, .. } => Ok(Path::new(string)),
-      v => bail!("wrong type: expected path, got {:?}", v),
+      Value::AttrSet(a) if a.contains_key(&Ident::from("outPath")) => {
+        self.value_path_of(a[&Ident::from("outPath")])
+      }
+      v => bail!("wrong type: expected path, got {}", v.typename()),
     }
   }
 
@@ -217,6 +220,10 @@ impl Eval {
       Value::Int(i) => Ok(*i),
       v => bail!("Wrong type: expected list, got {}", v.typename()),
     }
+  }
+
+  pub fn new_value(&self, v: Value) -> ThunkId {
+    self.items.alloc(Thunk::complete(v))
   }
 
   // async fn value_float_cast(&self, ix: ThunkId) -> Result<f64> {
@@ -438,9 +445,7 @@ impl Eval {
       LambdaArg::Formals(fs) => {
         let fn_arg_thunk = match rhs {
           Some(id) => id,
-          None => self
-            .items
-            .alloc(Thunk::complete(Value::AttrSet(StaticScope::new()))),
+          None => self.new_value(Value::AttrSet(StaticScope::new())),
         };
         let fn_argument = self.value_attrs_of(fn_arg_thunk)?;
         let fn_scope_id = self.items.alloc(Thunk::new(ThunkCell::Blackhole));
@@ -557,9 +562,7 @@ impl Eval {
         None => StaticScope::new(),
       };
       self.push_binding(&mut next_scope, keyrest, rhs, context)?;
-      self
-        .items
-        .alloc(Thunk::complete(Value::AttrSet(next_scope)))
+      self.new_value(Value::AttrSet(next_scope))
     };
     scope.insert(key1, child_item);
     Ok(())
@@ -638,13 +641,16 @@ mod tests {
       std::env::set_var("NIX_PATH", nix_path);
     }
 
-    let eval = Eval::with_config(Config { trace: true });
+    let eval = Eval::with_config(Config { trace: false });
     let expr = eval
       .load_inline(r#"(import <nixpkgs> {}).hello"#)
       .expect("no parse");
     match eval.value_of(expr) {
       Ok(x) => eprintln!("{:?}", x),
-      Err(e) => eval.print_error(e).unwrap(),
+      Err(e) => {
+        eval.print_error(e).unwrap();
+        panic!("eval failed")
+      }
     }
   }
 }

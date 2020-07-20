@@ -15,7 +15,7 @@ pub fn gen_list(eval: &Eval, generator: ThunkId, len: ThunkId) -> Result<Value> 
   };
   let mut out_list = vec![];
   for val in 0..target_len {
-    let fn_arg = eval.items.alloc(Thunk::complete(Value::Int(val as _)));
+    let fn_arg = eval.new_value(Value::Int(val as _));
     out_list.push(
       eval
         .items

@@ -1,7 +1,7 @@
 use crate::{
   bail,
   error::Result,
-  thunk::{StaticScope, Thunk, ThunkId},
+  thunk::{StaticScope, ThunkId},
   value::Value,
   Eval,
 };
@@ -33,6 +33,11 @@ pub fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
     eval.load_file(path)?
   };
   Ok(Value::Ref(r))
+}
+
+pub fn read_file(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path)?;
+  Ok(Value::string_bare(std::fs::read_to_string(path)?))
 }
 
 pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> {
@@ -90,23 +95,19 @@ pub fn mk_nix_path(eval: &Eval) -> Value {
     let mut entry_attr = StaticScope::new();
     entry_attr.insert(
       "path".into(),
-      eval.items.alloc(Thunk::complete(Value::String {
+      eval.new_value(Value::String {
         string: path.into(),
         context: Default::default(),
-      })),
+      }),
     );
     entry_attr.insert(
       "prefix".into(),
-      eval.items.alloc(Thunk::complete(Value::String {
+      eval.new_value(Value::String {
         string: prefix.into(),
         context: Default::default(),
-      })),
+      }),
     );
-    entries.push(
-      eval
-        .items
-        .alloc(Thunk::complete(Value::AttrSet(entry_attr))),
-    );
+    entries.push(eval.new_value(Value::AttrSet(entry_attr)));
   }
   Value::List(entries)
 }

@@ -1,9 +1,4 @@
-use crate::{
-  error::Result,
-  thunk::{Thunk, ThunkId},
-  value::Value,
-  Eval,
-};
+use crate::{error::Result, thunk::ThunkId, value::Value, Eval};
 use std::fmt::{self, Debug};
 
 pub enum Op {
@@ -23,11 +18,11 @@ impl Debug for Primop {
 }
 
 impl Primop {
-  pub fn single(name: &'static str, f: fn(&Eval, ThunkId) -> Result<Value>) -> Thunk {
-    Thunk::complete(Value::Primop(Self {
+  pub fn single(name: &'static str, f: fn(&Eval, ThunkId) -> Result<Value>) -> Value {
+    Value::Primop(Self {
       name,
       op: Op::Static(f),
-    }))
+    })
   }
 }
 

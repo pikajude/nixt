@@ -1,27 +1,28 @@
 use crate::{
   bail,
   error::Result,
-  thunk::ThunkId,
+  thunk::{StaticScope, ThunkId},
   value::{PathSet, Value},
   Eval,
 };
-use serde_json::{Number, Value as JSON};
+use serde_json::{Map, Number, Value as JSON};
+use syntax::expr::Ident;
 
-pub async fn to_json(eval: &Eval, obj: ThunkId) -> Result<(JSON, PathSet)> {
+pub fn to_json(eval: &Eval, obj: ThunkId) -> Result<(JSON, PathSet)> {
   let mut paths = PathSet::new();
-  let json = to_json_impl(eval, obj, &mut paths).await?;
+  let json = to_json_impl(eval, obj, &mut paths)?;
   Ok((json, paths))
 }
 
 pub fn to_json_primop(eval: &Eval, obj: ThunkId) -> Result<Value> {
-  let (j, p) = async_std::task::block_on(to_json(eval, obj))?;
+  let (j, p) = to_json(eval, obj)?;
   Ok(Value::String {
     string: serde_json::to_string(&j).unwrap(),
     context: p,
   })
 }
 
-async fn to_json_impl(eval: &Eval, obj: ThunkId, paths: &mut PathSet) -> Result<JSON> {
+fn to_json_impl(eval: &Eval, obj: ThunkId, paths: &mut PathSet) -> Result<JSON> {
   Ok(match eval.value_of(obj)? {
     Value::Null => JSON::Null,
     Value::Int(i) => JSON::Number(Number::from(*i)),
@@ -32,4 +33,27 @@ async fn to_json_impl(eval: &Eval, obj: ThunkId, paths: &mut PathSet) -> Result<
     }
     v => bail!("don't know how to convert {} to JSON", v.typename()),
   })
+}
+
+pub fn from_json(eval: &Eval, string: ThunkId) -> Result<Value> {
+  let (json_string, _) = eval.value_str_of(string)?;
+  json_to_value(eval, serde_json::from_str(json_string)?)
+}
+
+fn json_to_value(eval: &Eval, obj: JSON) -> Result<Value> {
+  match obj {
+    JSON::Object(m) => obj_to_value(eval, m),
+    JSON::String(s) => Ok(Value::string_bare(s)),
+    JSON::Null => Ok(Value::Null),
+    x => todo!("{:?}", x),
+  }
+}
+
+fn obj_to_value(eval: &Eval, obj: Map<String, JSON>) -> Result<Value> {
+  Ok(Value::AttrSet(
+    obj
+      .into_iter()
+      .map(|(k, v)| Ok((Ident::from(k), eval.new_value(json_to_value(eval, v)?))))
+      .collect::<Result<StaticScope>>()?,
+  ))
 }

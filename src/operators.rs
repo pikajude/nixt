@@ -211,7 +211,7 @@ fn cat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   }
 }
 
-fn less_than(lhs: &Value, rhs: &Value) -> Result<bool> {
+pub fn less_than(lhs: &Value, rhs: &Value) -> Result<bool> {
   Ok(match (lhs, rhs) {
     (Value::Float(f1), Value::Int(i1)) => *f1 < (*i1 as f64),
     (Value::Int(i1), Value::Float(f1)) => (*i1 as f64) < *f1,
