@@ -1,7 +1,7 @@
-use crate::{bail, error::Result, primop::Primop, thunk::ThunkId, value::Value, Eval};
+use crate::{error::Result, primop::Primop, primop3, thunk::ThunkId, value::Value, Eval};
 use std::cmp::Ordering;
 
-async fn compare_versions(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+pub async fn compare_versions(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   let cmp = do_compare(
     &eval.value_str_of(lhs).await?.0,
     &eval.value_str_of(rhs).await?.0,
@@ -10,13 +10,6 @@ async fn compare_versions(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Val
     Ordering::Less => -1,
     Ordering::Greater => 1,
     Ordering::Equal => 0,
-  }))
-}
-
-pub async fn compare_primop(_: &Eval, lhs: ThunkId) -> Result<Value> {
-  Ok(Value::Primop(Primop {
-    name: "compareVersions-app".into(),
-    op: Box::new(move |eval, rhs| Box::pin(compare_versions(eval, lhs, rhs))),
   }))
 }
 

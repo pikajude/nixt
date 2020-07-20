@@ -1,10 +1,11 @@
 use crate::{
   bail,
   error::Result,
-  thunk::{Context, Thunk},
-  value::Value,
+  thunk::{Context, Thunk, ThunkId},
+  value::{PathSet, Value},
   Eval,
 };
+use async_std::path::Path;
 use syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 
 pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {
@@ -22,11 +23,43 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
         eval.step_eval(bin.rhs, context).await
       }
     }
+    BinaryOp::And => {
+      if eval.value_bool_of(t!(bin.lhs)).await? {
+        eval.step_eval(bin.rhs, context).await
+      } else {
+        Ok(Value::Bool(false))
+      }
+    }
+    BinaryOp::Add => cat_strings(eval, t!(bin.lhs), t!(bin.rhs)).await,
+    BinaryOp::Sub => {
+      let lhs = eval.value_of(t!(bin.lhs)).await?;
+      let rhs = eval.value_of(t!(bin.rhs)).await?;
+
+      match (lhs, rhs) {
+        (Value::Float(f1), Value::Float(f2)) => Ok(Value::Float(f1 - f2)),
+        (Value::Float(f1), Value::Int(f2)) => Ok(Value::Float(*f1 - *f2 as f64)),
+        (Value::Int(f1), Value::Float(f2)) => Ok(Value::Float(*f1 as f64 - *f2)),
+        (Value::Int(f1), Value::Int(f2)) => Ok(Value::Int(f1 - f2)),
+        (v, _) => bail!("expected an integer, got {}", v.typename()),
+      }
+    }
     BinaryOp::Eq => {
       let lhs = eval.value_of(t!(bin.lhs)).await?;
       let rhs = eval.value_of(t!(bin.rhs)).await?;
 
       Ok(Value::Bool(eval_eq(eval, lhs, rhs).await?))
+    }
+    BinaryOp::Neq => {
+      let lhs = eval.value_of(t!(bin.lhs)).await?;
+      let rhs = eval.value_of(t!(bin.rhs)).await?;
+
+      Ok(Value::Bool(!eval_eq(eval, lhs, rhs).await?))
+    }
+    BinaryOp::Leq => {
+      let lhs = eval.value_of(t!(bin.lhs)).await?;
+      let rhs = eval.value_of(t!(bin.rhs)).await?;
+
+      Ok(Value::Bool(!less_than(rhs, lhs)?))
     }
     BinaryOp::Impl => {
       let lhs = eval.value_bool_of(t!(bin.lhs)).await?;
@@ -99,4 +132,49 @@ pub async fn eval_unary(eval: &Eval, un: &Unary, context: Context) -> Result<Val
     )),
     x => bail!("unimplemented: {:?}", x),
   }
+}
+
+async fn cat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  match eval.value_of(lhs).await? {
+    Value::Path(p) => {
+      let (pathstr, ctx) = eval.value_str_of(rhs).await?;
+      if !ctx.is_empty() {
+        bail!("cannot add a store path to a path");
+      }
+      Ok(Value::Path(p.join(pathstr)))
+    }
+    Value::Int(i) => match eval.value_of(rhs).await? {
+      Value::Int(i2) => Ok(Value::Int(i + i2)),
+      Value::Float(f) => Ok(Value::Float(*i as f64 + f)),
+      v => bail!("cannot add value {} to an integer", v.typename()),
+    },
+    Value::Float(f) => match eval.value_of(rhs).await? {
+      Value::Int(i2) => Ok(Value::Float(f + (*i2 as f64))),
+      Value::Float(f2) => Ok(Value::Float(f + f2)),
+      v => bail!("cannot add value {} to a float", v.typename()),
+    },
+    Value::String { string, context } => {
+      let mut buf = String::new();
+      let (morestr, ctx) = eval.value_str_of(rhs).await?;
+      buf.push_str(string);
+      buf.push_str(&morestr);
+      Ok(Value::String {
+        string: buf,
+        context: context.union(ctx).cloned().collect(),
+      })
+    }
+    v => bail!("cannot coerce {} to a string", v.typename()),
+  }
+}
+
+fn less_than(lhs: &Value, rhs: &Value) -> Result<bool> {
+  Ok(match (lhs, rhs) {
+    (Value::Float(f1), Value::Int(i1)) => *f1 < (*i1 as f64),
+    (Value::Int(i1), Value::Float(f1)) => (*i1 as f64) < *f1,
+    (Value::Int(i1), Value::Int(i2)) => i1 < i2,
+    (Value::Float(f1), Value::Float(f2)) => f1 < f2,
+    (Value::String { string: s1, .. }, Value::String { string: s2, .. }) => s1 < s2,
+    (Value::Path(p1), Value::Path(p2)) => p1 < p2,
+    (v1, v2) => bail!("cannot compare {} with {}", v1.typename(), v2.typename()),
+  })
 }

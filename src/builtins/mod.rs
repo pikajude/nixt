@@ -1,23 +1,174 @@
 use crate::{
   bail,
   error::Result,
+  primop,
+  primop::Primop,
+  primop2, primop_inline,
   thunk::{StaticScope, Thunk, ThunkId},
   value::Value,
   Eval,
 };
 use async_std::path::{Path, PathBuf};
 use futures::TryStreamExt;
+use primop::Op;
 use syntax::expr::Ident;
 
 mod attrs;
+mod lists;
+mod sys;
 mod versions;
 
-pub use attrs::*;
-pub use versions::*;
+pub fn init_primops(eval: &mut Eval) {
+  eval
+    .toplevel
+    .insert("import".into(), eval.items.alloc(primop!("import", import)));
+  eval.toplevel.insert(
+    "abort".into(),
+    eval.items.alloc(primop!("abort", nix_abort)),
+  );
+  eval.toplevel.insert(
+    "toString".into(),
+    eval.items.alloc(primop!("toString", coerce_to_string)),
+  );
+  let nixver = eval
+    .items
+    .alloc(Thunk::complete(Value::string_bare("2.3.7")));
+  eval.toplevel.insert(
+    "__nixPath".into(),
+    eval.items.alloc(Thunk::complete(mk_nix_path(&eval))),
+  );
+  eval.toplevel.insert(
+    "map".into(),
+    eval.items.alloc(primop2!("map", lists::map_list)),
+  );
+  eval.toplevel.insert(
+    "null".into(),
+    eval.items.alloc(Thunk::complete(Value::Null)),
+  );
+  eval.toplevel.insert(
+    "true".into(),
+    eval.items.alloc(Thunk::complete(Value::Bool(true))),
+  );
+  eval.toplevel.insert(
+    "false".into(),
+    eval.items.alloc(Thunk::complete(Value::Bool(false))),
+  );
+  eval.toplevel.insert(
+    "builtins".into(),
+    eval.items.alloc(Thunk::complete(Value::AttrSet({
+      let mut builtins = StaticScope::new();
+      builtins.insert("nixVersion".into(), nixver);
+      builtins.insert(
+        "attrNames".into(),
+        eval.items.alloc(primop!("attrNames", attrs::attr_names)),
+      );
+      builtins.insert(
+        "concatLists".into(),
+        eval
+          .items
+          .alloc(primop!("concatLists", lists::concat_lists)),
+      );
+      builtins.insert(
+        "compareVersions".into(),
+        eval
+          .items
+          .alloc(primop2!("compareVersions", versions::compare_versions)),
+      );
+      builtins.insert(
+        "elemAt".into(),
+        eval.items.alloc(primop2!("elemAt", lists::elem_at)),
+      );
+      builtins.insert(
+        "getEnv".into(),
+        eval.items.alloc(primop!("getEnv", sys::get_env)),
+      );
+      builtins.insert(
+        "genList".into(),
+        eval.items.alloc(primop2!("genList", lists::gen_list)),
+      );
+      builtins.insert(
+        "isString".into(),
+        eval.items.alloc(primop_inline!("isString", |e, i| {
+          Ok(Value::Bool(match e.value_of(i).await? {
+            Value::String { .. } => true,
+            _ => false,
+          }))
+        })),
+      );
+      builtins.insert(
+        "isAttrs".into(),
+        eval.items.alloc(primop_inline!("isAttrs", |e, i| {
+          Ok(Value::Bool(match e.value_of(i).await? {
+            Value::AttrSet { .. } => true,
+            _ => false,
+          }))
+        })),
+      );
+      builtins.insert(
+        "isFunction".into(),
+        eval.items.alloc(primop_inline!("isFunction", |e, i| {
+          Ok(Value::Bool(match e.value_of(i).await? {
+            Value::Primop { .. } => true,
+            Value::Lambda { .. } => true,
+            _ => false,
+          }))
+        })),
+      );
+      builtins.insert(
+        "isList".into(),
+        eval.items.alloc(Thunk::complete(Value::Primop(Primop {
+          name: "isList",
+          op: Op::Async(Box::new(move |e, i| {
+            Box::pin(async move {
+              Ok(Value::Bool(match e.value_of(i).await? {
+                Value::List { .. } => true,
+                _ => false,
+              }))
+            })
+          })),
+        }))),
+      );
+      builtins.insert(
+        "intersectAttrs".into(),
+        eval
+          .items
+          .alloc(primop2!("intersectAttrs", attrs::intersect_attrs)),
+      );
+      builtins.insert(
+        "listToAttrs".into(),
+        eval
+          .items
+          .alloc(primop!("listToAttrs", attrs::list_to_attrs)),
+      );
+      builtins.insert(
+        "pathExists".into(),
+        eval.items.alloc(primop!("pathExists", sys::path_exists)),
+      );
+      builtins.insert(
+        "removeAttrs".into(),
+        eval
+          .items
+          .alloc(primop2!("removeAttrs", attrs::remove_attrs)),
+      );
+      builtins.insert(
+        "length".into(),
+        eval.items.alloc(primop_inline!("length", |e, i| {
+          Ok(Value::Int(e.value_list_of(i).await?.len() as _))
+        })),
+      );
+      builtins.insert(
+        "stringLength".into(),
+        eval.items.alloc(primop_inline!("stringLength", |e, i| {
+          Ok(Value::Int(e.value_str_of(i).await?.0.len() as _))
+        })),
+      );
+      builtins
+    }))),
+  );
+}
 
 pub async fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
-  let (path, _) = eval.value_str_of(path).await?;
-  let path = Path::new(&*path);
+  let path = eval.value_path_of(path).await?;
   let meta = path.metadata().await?;
   let r = if meta.is_dir() {
     eval.load_file(path.join("default.nix")).await?
@@ -165,6 +316,18 @@ fn get_nix_path() -> Vec<String> {
   } else {
     vec![]
   }
+}
+
+#[macro_export]
+macro_rules! primop3 {
+  ($x:ident, $s:literal, $f:ident) => {
+    pub async fn $x(_: &Eval, arg: ThunkId) -> Result<Value> {
+      Ok(Value::Primop(Primop {
+        name: concat!($s, "-app").into(),
+        op: Box::new(move |eval, arg2| Box::pin($f(eval, arg, arg2))),
+      }))
+    }
+  };
 }
 
 #[test]

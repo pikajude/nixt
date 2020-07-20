@@ -33,7 +33,7 @@ use codespan_reporting::{
 use config::Config;
 use error::*;
 use ext::*;
-use primop::Primop;
+use primop::{Op, Primop};
 use termcolor::{ColorChoice, StandardStream};
 use thunk::*;
 use value::{PathSet, Value};
@@ -69,58 +69,7 @@ impl Eval {
       writer: StandardStream::stderr(ColorChoice::Auto),
       config,
     };
-    this.toplevel.insert(
-      "import".into(),
-      this.items.alloc(Thunk::complete(Value::Primop(Primop {
-        name: "import".into(),
-        op: Box::new(move |e, i| Box::pin(builtins::import(e, i))),
-      }))),
-    );
-    this.toplevel.insert(
-      "abort".into(),
-      this.items.alloc(Thunk::complete(Value::Primop(Primop {
-        name: "abort".into(),
-        op: Box::new(move |e, i| Box::pin(builtins::nix_abort(e, i))),
-      }))),
-    );
-    this.toplevel.insert(
-      "toString".into(),
-      this.items.alloc(Thunk::complete(Value::Primop(Primop {
-        name: "toString".into(),
-        op: Box::new(move |e, i| Box::pin(builtins::coerce_to_string(e, i))),
-      }))),
-    );
-    let nixver = this
-      .items
-      .alloc(Thunk::complete(Value::string_bare("2.3.7")));
-    this.toplevel.insert(
-      "__nixPath".into(),
-      this
-        .items
-        .alloc(Thunk::complete(builtins::mk_nix_path(&this))),
-    );
-    this.toplevel.insert(
-      "builtins".into(),
-      this.items.alloc(Thunk::complete(Value::AttrSet({
-        let mut builtins = StaticScope::new();
-        builtins.insert("nixVersion".into(), nixver);
-        builtins.insert(
-          "compareVersions".into(),
-          this.items.alloc(Thunk::complete(Value::Primop(Primop {
-            name: "compareVersions".into(),
-            op: Box::new(move |e, i| Box::pin(builtins::compare_primop(e, i))),
-          }))),
-        );
-        builtins.insert(
-          "removeAttrs".into(),
-          this.items.alloc(Thunk::complete(Value::Primop(Primop {
-            name: "removeAttrs".into(),
-            op: Box::new(move |e, i| Box::pin(builtins::remove_attrs_primop(e, i))),
-          }))),
-        );
-        builtins
-      }))),
-    );
+    builtins::init_primops(&mut this);
     this
   }
 
@@ -142,6 +91,7 @@ impl Eval {
               span.file_id,
               span.span,
             )
+            .with_message("while evaluating this expression")
           })
           .collect(),
       );
@@ -207,14 +157,18 @@ impl Eval {
     }
   }
 
-  async fn value_str_of(&self, ix: ThunkId) -> Result<(Cow<'_, str>, Option<&PathSet>)> {
+  async fn value_str_of(&self, ix: ThunkId) -> Result<(&str, &PathSet)> {
     match self.value_of(ix).await? {
-      Value::String {
-        ref string,
-        ref context,
-      } => Ok((Cow::Borrowed(string), Some(context))),
-      Value::Path(p) => Ok((Cow::Owned(p.display().to_string()), None)),
+      Value::String { string, context } => Ok((string, context)),
       v => bail!("Wrong type: expected string, got {}", v.typename()),
+    }
+  }
+
+  async fn value_path_of(&self, ix: ThunkId) -> Result<&Path> {
+    match self.value_of(ix).await? {
+      Value::Path(p) => Ok(p),
+      Value::String { string, .. } => Ok(Path::new(string)),
+      v => bail!("wrong type: expected path, got {:?}", v),
     }
   }
 
@@ -229,6 +183,21 @@ impl Eval {
     match self.value_of(ix).await? {
       Value::List(ref v) => Ok(v),
       v => bail!("Wrong type: expected list, got {}", v.typename()),
+    }
+  }
+
+  async fn value_int_of(&self, ix: ThunkId) -> Result<i64> {
+    match self.value_of(ix).await? {
+      Value::Int(i) => Ok(*i),
+      v => bail!("Wrong type: expected list, got {}", v.typename()),
+    }
+  }
+
+  async fn value_float_cast(&self, ix: ThunkId) -> Result<f64> {
+    match self.value_of(ix).await? {
+      Value::Float(f1) => Ok(*f1),
+      Value::Int(i1) => Ok(*i1 as f64),
+      v => bail!("expected float, got {}", v.typename()),
     }
   }
 
@@ -260,9 +229,7 @@ impl Eval {
             StrPart::Quote { quote, .. } => {
               let t = self.items.alloc(Thunk::thunk(*quote, context.clone()));
               let (contents, paths) = self.value_str_of(t).await?;
-              if let Some(p) = paths {
-                str_context.extend(p.iter().cloned());
-              }
+              str_context.extend(paths.iter().cloned());
               final_buf.push_str(&contents);
             }
           }
@@ -278,12 +245,13 @@ impl Eval {
           if pb.is_absolute() {
             Ok(Value::Path(pb.into()))
           } else {
-            let pb = pb.strip_prefix(Path::new("./")).unwrap_or(pb);
             let files = self.files.lock().await;
             let filename = files.name(e.span.file_id);
-            Ok(Value::Path(
-              PathBuf::from(filename).parent().unwrap().join(pb),
-            ))
+            let dest = PathBuf::from(filename).parent().unwrap().join(pb);
+            let thing = path_abs::PathAbs::new(dest)?;
+            Ok(Value::Path(PathBuf::from(
+              thing.as_ref() as &std::path::Path
+            )))
           }
         }
         expr::Path::Home(_) => todo!(),
@@ -419,7 +387,12 @@ impl Eval {
           .call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
           .await
       }
-      Value::Primop(Primop { op, .. }) => op(self, rhs).await,
+      Value::Primop(Primop {
+        op: Op::Async(op), ..
+      }) => op(self, rhs).await,
+      Value::Primop(Primop {
+        op: Op::Sync(f), ..
+      }) => f(self, rhs),
       _ => todo!("not a lambda"),
     }
   }
@@ -621,7 +594,10 @@ mod tests {
 
   #[tokio::test]
   async fn test_foo() {
-    let eval = Eval::new();
+    let eval = Eval::with_config(Config {
+      trace: false,
+      ..Default::default()
+    });
     let expr = eval
       .load_inline(r#"(import <nixpkgs> {}).hello"#)
       .await
