@@ -61,10 +61,15 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
 
       Ok(Value::Bool(less_than(lhs, rhs)?))
     }
+    BinaryOp::Ge => {
+      let lhs = eval.value_of(t!(bin.lhs)).await?;
+      let rhs = eval.value_of(t!(bin.rhs)).await?;
+
+      Ok(Value::Bool(less_than(rhs, lhs)?))
+    }
     BinaryOp::Impl => {
       let lhs = eval.value_bool_of(t!(bin.lhs)).await?;
-      let rhs = eval.value_bool_of(t!(bin.rhs)).await?;
-      Ok(Value::Bool(!lhs || rhs))
+      Ok(Value::Bool(!lhs || eval.value_bool_of(t!(bin.rhs)).await?))
     }
     BinaryOp::Update => {
       let mut lhs = eval.value_attrs_of(t!(bin.lhs)).await?.clone();
@@ -136,7 +141,6 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
       }
       true
     }
-    (Value::Lambda { .. }, Value::Primop(_)) => false,
     (Value::AttrSet(a1), Value::AttrSet(a2)) => {
       if a1.len() != a2.len() {
         return Ok(false);
@@ -154,6 +158,10 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
       }
       true
     }
+    (Value::Lambda { .. }, _)
+    | (Value::Primop(_), _)
+    | (_, Value::Lambda { .. })
+    | (_, Value::Primop(_)) => false,
     (x, y) => bail!("cannot compare {} with {}", x.typename(), y.typename()),
   })
 }

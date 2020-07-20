@@ -9,7 +9,10 @@ use async_std::{
   sync::Mutex,
 };
 use codespan::Files;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{
+  atomic::{AtomicU16, Ordering},
+  Arc,
+};
 use syntax::{
   expr::{self, *},
   span::{spanned, FileSpan, Spanned},
@@ -31,6 +34,7 @@ use codespan_reporting::{
 use config::Config;
 use error::*;
 use ext::*;
+use log::Level;
 use primop::{Op, Primop};
 use termcolor::{ColorChoice, StandardStream};
 use thunk::*;
@@ -74,7 +78,7 @@ impl Eval {
   pub async fn print_error(&self, e: Error) -> Result<()> {
     let files = self.files.lock().await;
     let diagnostic = Diagnostic::error()
-      .with_message(e.err.to_string())
+      .with_message(format!("{:?}", e.err))
       .with_labels(
         e.trace
           .into_iter()
@@ -132,15 +136,17 @@ impl Eval {
     Ok(self.items.alloc(Thunk::thunk(eid, Context::new())))
   }
 
-  #[async_recursion]
   pub async fn value_of(&self, mut thunk_id: ThunkId) -> Result<&Value> {
+    if log_enabled!(Level::Trace) {
+      println!("{:?}", backtrace::Backtrace::new());
+    }
     loop {
       let v = match self.items[thunk_id].value_ref() {
         Some(x) => x,
         None => {
-          let thunk = self.items[thunk_id].get_thunk();
-          let val = self.step_thunk(thunk).await?;
-          self.items[thunk_id].put_value(val)
+          let thunk = &self.items[thunk_id];
+          let val = self.step_thunk(thunk.get_thunk()).await?;
+          thunk.put_value(val)
         }
       };
       match v {
@@ -195,13 +201,13 @@ impl Eval {
     }
   }
 
-  async fn value_float_cast(&self, ix: ThunkId) -> Result<f64> {
-    match self.value_of(ix).await? {
-      Value::Float(f1) => Ok(*f1),
-      Value::Int(i1) => Ok(*i1 as f64),
-      v => bail!("expected float, got {}", v.typename()),
-    }
-  }
+  // async fn value_float_cast(&self, ix: ThunkId) -> Result<f64> {
+  //   match self.value_of(ix).await? {
+  //     Value::Float(f1) => Ok(*f1),
+  //     Value::Int(i1) => Ok(*i1 as f64),
+  //     v => bail!("expected float, got {}", v.typename()),
+  //   }
+  // }
 
   async fn step_thunk(&self, thunk: ThunkCell) -> Result<Value> {
     match thunk {
@@ -211,15 +217,14 @@ impl Eval {
     }
   }
 
+  #[async_recursion]
   async fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
-    trace!("{:?}", e.span);
     self
       .step_eval_impl(e, context)
       .await
       .with_frame(e.span, self.config.trace)
   }
 
-  #[async_recursion]
   async fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
     match &self.expr[e.node] {
       Expr::Int(n) => Ok(Value::Int(*n)),
@@ -261,7 +266,7 @@ impl Eval {
         expr::Path::NixPath { path, .. } => {
           let nixpath = self.synthetic_variable(e.span, Ident::from("__nixPath"), &context);
           Ok(Value::Path(
-            builtins::find_file(self, nixpath, &path[1..path.len() - 1]).await?,
+            builtins::sys::find_file(self, nixpath, &path[1..path.len() - 1]).await?,
           ))
         }
       },
@@ -277,7 +282,7 @@ impl Eval {
       }),
       Expr::Var(ident) => {
         for item in &context {
-          let scope = match item {
+          let scope = match item.as_ref() {
             Scope::Static(s1) => s1,
             Scope::Dynamic(s) => self.value_attrs_of(*s).await?,
           };
@@ -383,6 +388,7 @@ impl Eval {
     }
   }
 
+  #[async_recursion]
   async fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
     match self.value_of(lhs).await? {
       Value::Lambda { lambda, captures } => {
@@ -568,9 +574,9 @@ impl Eval {
     context: &Context,
   ) -> Result<()> {
     let binding_scope = match from {
-      Some(ih) => Context::from(vec![Scope::Dynamic(
+      Some(ih) => Context::from(vec![Arc::new(Scope::Dynamic(
         self.items.alloc(Thunk::thunk(ih.from, context.clone())),
-      )]),
+      ))]),
       None => context.clone(),
     };
     for attr in &attrs.0 {

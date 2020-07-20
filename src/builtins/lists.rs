@@ -71,6 +71,22 @@ pub async fn tail(eval: &Eval, list: ThunkId) -> Result<Value> {
   }
 }
 
+pub async fn filter(eval: &Eval, filter: ThunkId, list: ThunkId) -> Result<Value> {
+  let items = eval.value_list_of(list).await?;
+  let mut out = vec![];
+  for item in items {
+    match eval.step_fn(filter, *item).await? {
+      Value::Bool(b) => {
+        if b {
+          out.push(*item);
+        }
+      }
+      v => bail!("unexpected type: expected bool, got {}", v.typename()),
+    }
+  }
+  Ok(Value::List(out))
+}
+
 pub async fn concat_lists(eval: &Eval, list: ThunkId) -> Result<Value> {
   let mut all = vec![];
   for list in eval.value_list_of(list).await? {

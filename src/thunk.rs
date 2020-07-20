@@ -6,7 +6,10 @@ use std::{
   cell::UnsafeCell,
   collections::HashMap,
   mem::ManuallyDrop,
-  sync::atomic::{AtomicBool, Ordering},
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+  },
 };
 use syntax::expr::{ExprRef, Ident};
 
@@ -17,7 +20,7 @@ pub enum Scope {
 }
 
 pub type StaticScope = HashMap<Ident, ThunkId>;
-pub type Context = Vector<Scope>;
+pub type Context = Vector<Arc<Scope>>;
 
 pub type ThunkId = Id<Thunk>;
 
@@ -75,12 +78,11 @@ impl Thunk {
   }
 
   pub fn get_thunk(&self) -> ThunkCell {
-    use std::ops::Deref;
     // if another thread replaces this value, the reference we return could become
     // invalid, so we have to "atomically" clone it.
     let _guard = self.mutex.lock();
     assert!(!self.is_value(), "cell loaded");
-    unsafe { (*self.value.get()).left.deref().clone() }
+    unsafe { std::mem::replace(&mut (*self.value.get()).left, ThunkCell::Blackhole) }
   }
 
   pub fn is_value(&self) -> bool {
