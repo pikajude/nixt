@@ -1,7 +1,7 @@
 use crate::{
   bail,
   error::Result,
-  thunk::{Thunk, ThunkCell, ThunkId},
+  thunk::ThunkId,
   value::{PathSet, Value},
   Eval,
 };
@@ -13,8 +13,8 @@ pub async fn to_json(eval: &Eval, obj: ThunkId) -> Result<(JSON, PathSet)> {
   Ok((json, paths))
 }
 
-pub async fn to_json_primop(eval: &Eval, obj: ThunkId) -> Result<Value> {
-  let (j, p) = to_json(eval, obj).await?;
+pub fn to_json_primop(eval: &Eval, obj: ThunkId) -> Result<Value> {
+  let (j, p) = async_std::task::block_on(to_json(eval, obj))?;
   Ok(Value::String {
     string: serde_json::to_string(&j).unwrap(),
     context: p,

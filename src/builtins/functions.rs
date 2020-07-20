@@ -7,7 +7,7 @@ use crate::{
 };
 use syntax::expr::LambdaArg;
 
-pub async fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
+pub fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
   let l = match eval.value_of(fun)? {
     Value::Lambda { lambda, .. } => lambda,
     v => bail!("cannot call functionArgs on {}", v.typename()),

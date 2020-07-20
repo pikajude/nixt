@@ -1,11 +1,12 @@
 use crate::{
   bail,
   error::Result,
-  primop, primop2, primop3, primop_inline,
+  primop, primop2, primop3,
   thunk::{StaticScope, Thunk, ThunkId},
   value::Value,
   Eval,
 };
+use primop::Primop;
 use syntax::expr::Ident;
 
 pub mod attrs;
@@ -19,17 +20,17 @@ pub mod versions;
 pub fn init_primops(eval: &mut Eval) {
   eval.toplevel.insert(
     "import".into(),
-    eval.items.alloc(primop!("import", sys::import)),
+    eval.items.alloc(Primop::single("import", sys::import)),
   );
   eval.toplevel.insert(
     "abort".into(),
-    eval.items.alloc(primop!("abort", nix_abort)),
+    eval.items.alloc(Primop::single("abort", nix_abort)),
   );
   eval.toplevel.insert(
     "toString".into(),
     eval
       .items
-      .alloc(primop!("toString", strings::coerce_to_string)),
+      .alloc(Primop::single("toString", strings::coerce_to_string)),
   );
   let nixver = eval
     .items
@@ -73,13 +74,15 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "attrNames".into(),
-        eval.items.alloc(primop!("attrNames", attrs::attr_names)),
+        eval
+          .items
+          .alloc(Primop::single("attrNames", attrs::attr_names)),
       );
       builtins.insert(
         "concatLists".into(),
         eval
           .items
-          .alloc(primop!("concatLists", lists::concat_lists)),
+          .alloc(Primop::single("concatLists", lists::concat_lists)),
       );
       builtins.insert(
         "compareVersions".into(),
@@ -111,17 +114,17 @@ pub fn init_primops(eval: &mut Eval) {
         "functionArgs".into(),
         eval
           .items
-          .alloc(primop!("functionArgs", functions::function_args)),
+          .alloc(Primop::single("functionArgs", functions::function_args)),
       );
       builtins.insert(
         "genericClosure".into(),
         eval
           .items
-          .alloc(primop!("genericClosure", attrs::generic_closure)),
+          .alloc(Primop::single("genericClosure", attrs::generic_closure)),
       );
       builtins.insert(
         "getEnv".into(),
-        eval.items.alloc(primop!("getEnv", sys::get_env)),
+        eval.items.alloc(Primop::single("getEnv", sys::get_env)),
       );
       builtins.insert(
         "genList".into(),
@@ -129,7 +132,7 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "head".into(),
-        eval.items.alloc(primop!("head", lists::head)),
+        eval.items.alloc(Primop::single("head", lists::head)),
       );
       builtins.insert(
         "filter".into(),
@@ -137,11 +140,11 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "tail".into(),
-        eval.items.alloc(primop!("tail", lists::tail)),
+        eval.items.alloc(Primop::single("tail", lists::tail)),
       );
       builtins.insert(
         "isString".into(),
-        eval.items.alloc(primop_inline!("isString", |e, i| {
+        eval.items.alloc(Primop::single("isString", |e, i| {
           Ok(Value::Bool(match e.value_of(i)? {
             Value::String { .. } => true,
             _ => false,
@@ -150,7 +153,7 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "isAttrs".into(),
-        eval.items.alloc(primop_inline!("isAttrs", |e, i| {
+        eval.items.alloc(Primop::single("isAttrs", |e, i| {
           Ok(Value::Bool(match e.value_of(i)? {
             Value::AttrSet { .. } => true,
             _ => false,
@@ -159,7 +162,7 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "isBool".into(),
-        eval.items.alloc(primop_inline!("isBool", |e, i| {
+        eval.items.alloc(Primop::single("isBool", |e, i| {
           Ok(Value::Bool(match e.value_of(i)? {
             Value::Bool { .. } => true,
             _ => false,
@@ -168,7 +171,7 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "isFunction".into(),
-        eval.items.alloc(primop_inline!("isFunction", |e, i| {
+        eval.items.alloc(Primop::single("isFunction", |e, i| {
           Ok(Value::Bool(match e.value_of(i)? {
             Value::Primop { .. } => true,
             Value::Lambda { .. } => true,
@@ -178,7 +181,7 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "isList".into(),
-        eval.items.alloc(primop_inline!("isList", |e, i| {
+        eval.items.alloc(Primop::single("isList", |e, i| {
           Ok(Value::Bool(match e.value_of(i)? {
             Value::List(_) => true,
             _ => false,
@@ -195,11 +198,13 @@ pub fn init_primops(eval: &mut Eval) {
         "listToAttrs".into(),
         eval
           .items
-          .alloc(primop!("listToAttrs", attrs::list_to_attrs)),
+          .alloc(Primop::single("listToAttrs", attrs::list_to_attrs)),
       );
       builtins.insert(
         "pathExists".into(),
-        eval.items.alloc(primop!("pathExists", sys::path_exists)),
+        eval
+          .items
+          .alloc(Primop::single("pathExists", sys::path_exists)),
       );
       builtins.insert(
         "removeAttrs".into(),
@@ -209,13 +214,13 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "length".into(),
-        eval.items.alloc(primop_inline!("length", |e, i| {
+        eval.items.alloc(Primop::single("length", |e, i| {
           Ok(Value::Int(e.value_list_of(i)?.len() as _))
         })),
       );
       builtins.insert(
         "stringLength".into(),
-        eval.items.alloc(primop_inline!("stringLength", |e, i| {
+        eval.items.alloc(Primop::single("stringLength", |e, i| {
           Ok(Value::Int(e.value_str_of(i)?.0.len() as _))
         })),
       );
@@ -225,23 +230,25 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "toJSON".into(),
-        eval.items.alloc(primop!("toJSON", json::to_json_primop)),
+        eval
+          .items
+          .alloc(Primop::single("toJSON", json::to_json_primop)),
       );
       builtins.insert(
         "tryEval".into(),
-        eval.items.alloc(primop!("tryEval", try_eval)),
+        eval.items.alloc(Primop::single("tryEval", try_eval)),
       );
       builtins
     }))),
   );
 }
 
-async fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
+fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
   let (msg, _) = eval.value_str_of(msg)?;
   bail!("evaluation aborted with the message: {}", msg)
 }
 
-async fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value> {
+fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value> {
   if let Err(mut e) = eval.value_of(value) {
     let (ctx, _) = eval.value_str_of(ctx)?;
     e.err = e.err.context(ctx.to_string());
@@ -251,10 +258,11 @@ async fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<
   }
 }
 
-async fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
+fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
   let mut attrs = StaticScope::new();
-  if let Err(_) = eval.value_of(thing) {
+  if let Err(e) = eval.value_of(thing) {
     warn!("tryEval is currently wrong");
+    warn!("we are eating: {:?}", e);
     attrs.insert(
       Ident::from("success"),
       eval.items.alloc(Thunk::complete(Value::Bool(false))),

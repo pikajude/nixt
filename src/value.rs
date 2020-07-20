@@ -2,8 +2,7 @@ use crate::{
   primop::Primop,
   thunk::{Context, StaticScope, ThunkId},
 };
-use async_std::path::PathBuf;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::PathBuf};
 use syntax::expr;
 
 pub type PathSet = BTreeSet<PathBuf>;
@@ -46,9 +45,9 @@ impl Value {
     }
   }
 
-  pub fn string_bare<S: Into<String>>(str: S) -> Self {
+  pub fn string_bare<S: Into<String>>(string: S) -> Self {
     Value::String {
-      string: str.into(),
+      string: string.into(),
       context: Default::default(),
     }
   }

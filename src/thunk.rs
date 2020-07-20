@@ -82,7 +82,14 @@ impl Thunk {
     // invalid, so we have to "atomically" clone it.
     let _guard = self.mutex.lock();
     assert!(!self.is_value(), "cell loaded");
-    unsafe { std::mem::replace(&mut (*self.value.get()).left, ThunkCell::Blackhole) }
+    #[cfg(feature = "blackhole")]
+    unsafe {
+      std::mem::replace(&mut (*self.value.get()).left, ThunkCell::Blackhole)
+    }
+    #[cfg(not(feature = "blackhole"))]
+    unsafe {
+      ManuallyDrop::into_inner((*self.value.get()).left.clone())
+    }
   }
 
   pub fn is_value(&self) -> bool {

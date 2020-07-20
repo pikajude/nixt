@@ -8,7 +8,7 @@ use crate::{
 
 use syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 
-pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {
+pub fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {
   macro_rules! t {
     ($x:expr) => {
       eval.items.alloc(Thunk::thunk($x, context.clone()))
@@ -20,17 +20,17 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
       if eval.value_bool_of(t!(bin.lhs))? {
         Ok(Value::Bool(true))
       } else {
-        eval.step_eval(bin.rhs, context).await
+        eval.step_eval(bin.rhs, context)
       }
     }
     BinaryOp::And => {
       if eval.value_bool_of(t!(bin.lhs))? {
-        eval.step_eval(bin.rhs, context).await
+        eval.step_eval(bin.rhs, context)
       } else {
         Ok(Value::Bool(false))
       }
     }
-    BinaryOp::Add => cat_strings(eval, t!(bin.lhs), t!(bin.rhs)).await,
+    BinaryOp::Add => cat_strings(eval, t!(bin.lhs), t!(bin.rhs)),
     BinaryOp::Sub => {
       let lhs = eval.value_of(t!(bin.lhs))?;
       let rhs = eval.value_of(t!(bin.rhs))?;
@@ -41,13 +41,13 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
       let lhs = eval.value_of(t!(bin.lhs))?;
       let rhs = eval.value_of(t!(bin.rhs))?;
 
-      Ok(Value::Bool(eval_eq(eval, lhs, rhs).await?))
+      Ok(Value::Bool(eval_eq(eval, lhs, rhs)?))
     }
     BinaryOp::Neq => {
       let lhs = eval.value_of(t!(bin.lhs))?;
       let rhs = eval.value_of(t!(bin.rhs))?;
 
-      Ok(Value::Bool(!eval_eq(eval, lhs, rhs).await?))
+      Ok(Value::Bool(!eval_eq(eval, lhs, rhs)?))
     }
     BinaryOp::Leq => {
       let lhs = eval.value_of(t!(bin.lhs))?;
@@ -73,6 +73,7 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
     }
     BinaryOp::Update => {
       let mut lhs = eval.value_attrs_of(t!(bin.lhs))?.clone();
+      // trace!("{:?}", lhs.keys().collect::<Vec<_>>());
       for (k, v) in eval.value_attrs_of(t!(bin.rhs))? {
         lhs.insert(k.clone(), *v);
       }
@@ -100,8 +101,7 @@ fn do_sub(lhs: &Value, rhs: &Value) -> Result<Value> {
   }
 }
 
-#[async_recursion]
-pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
+pub fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
   if lhs as *const _ == rhs as *const _ {
     return Ok(true);
   }
@@ -135,7 +135,7 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
       for (item1, item2) in l1.iter().zip(l2) {
         let i1 = eval.value_of(*item1)?;
         let i2 = eval.value_of(*item2)?;
-        if !eval_eq(eval, i1, i2).await? {
+        if !eval_eq(eval, i1, i2)? {
           return Ok(false);
         }
       }
@@ -149,7 +149,7 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
         if let Some(v2) = a2.get(k) {
           let v1_value = eval.value_of(*v)?;
           let v2_value = eval.value_of(*v2)?;
-          if !eval_eq(eval, v1_value, v2_value).await? {
+          if !eval_eq(eval, v1_value, v2_value)? {
             return Ok(false);
           }
         } else {
@@ -166,19 +166,19 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
   })
 }
 
-pub async fn eval_unary(eval: &Eval, un: &Unary, context: Context) -> Result<Value> {
+pub fn eval_unary(eval: &Eval, un: &Unary, context: Context) -> Result<Value> {
   match *un.op {
-    UnaryOp::Not => Ok(Value::Bool(!eval.value_bool_of(
-      eval.items.alloc(Thunk::thunk(un.operand, context.clone())),
-    )?)),
+    UnaryOp::Not => Ok(Value::Bool(
+      !eval.value_bool_of(eval.items.alloc(Thunk::thunk(un.operand, context)))?,
+    )),
     UnaryOp::Negate => do_sub(
       &Value::Int(0),
-      eval.value_of(eval.items.alloc(Thunk::thunk(un.operand, context.clone())))?,
+      eval.value_of(eval.items.alloc(Thunk::thunk(un.operand, context)))?,
     ),
   }
 }
 
-async fn cat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+fn cat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   match eval.value_of(lhs)? {
     Value::Path(p) => {
       let (pathstr, ctx) = eval.value_str_of(rhs)?;

@@ -1,12 +1,7 @@
 use crate::{bail, error::Result, thunk::ThunkId, value::Value, Eval};
 use std::collections::BTreeSet;
 
-pub async fn substring(
-  eval: &Eval,
-  start: ThunkId,
-  len: ThunkId,
-  string: ThunkId,
-) -> Result<Value> {
+pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> Result<Value> {
   let (s, ctx) = eval.value_str_of(string)?;
   let start = eval.value_int_of(start)?;
   if start < 0 {
@@ -21,7 +16,7 @@ pub async fn substring(
   })
 }
 
-pub async fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
+pub fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
   let v = eval.value_of(obj)?;
   Ok(match v {
     Value::Path(p) => Value::string_bare(p.display().to_string()),
@@ -34,7 +29,7 @@ pub async fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
   })
 }
 
-pub async fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result<Value> {
+pub fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result<Value> {
   let strings = eval.value_list_of(strings)?;
   if strings.is_empty() {
     return Ok(Value::string_bare(""));

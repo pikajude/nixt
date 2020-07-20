@@ -1,7 +1,7 @@
 use crate::{error::Result, thunk::ThunkId, value::Value, Eval};
 use std::cmp::Ordering;
 
-pub async fn compare_versions(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+pub fn compare_versions(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   let cmp = do_compare(&eval.value_str_of(lhs)?.0, &eval.value_str_of(rhs)?.0);
   Ok(Value::Int(match cmp {
     Ordering::Less => -1,

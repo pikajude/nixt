@@ -5,11 +5,10 @@ use crate::{
   value::Value,
   Eval,
 };
-use async_std::path::{Path, PathBuf};
-use futures::TryStreamExt;
+use std::path::{Path, PathBuf};
 use syntax::expr::Ident;
 
-pub async fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
+pub fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
   let (varname, _) = eval.value_str_of(varname)?;
   match std::env::var(String::from(varname)) {
     Ok(s) => Ok(Value::string_bare(s)),
@@ -17,26 +16,26 @@ pub async fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
   }
 }
 
-pub async fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
+pub fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
   Ok(Value::Bool(match eval.value_of(path)? {
-    Value::String { string, .. } => async_std::fs::metadata(string).await.is_ok(),
-    Value::Path(p) => p.metadata().await.is_ok(),
+    Value::String { string, .. } => std::fs::metadata(string).is_ok(),
+    Value::Path(p) => p.exists(),
     _ => false,
   }))
 }
 
-pub async fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
+pub fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
   let path = eval.value_path_of(path)?;
-  let meta = path.metadata().await?;
+  let meta = path.metadata()?;
   let r = if meta.is_dir() {
-    eval.load_file(path.join("default.nix")).await?
+    eval.load_file(path.join("default.nix"))?
   } else {
-    eval.load_file(path).await?
+    eval.load_file(path)?
   };
   Ok(Value::Ref(r))
 }
 
-pub async fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> {
+pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> {
   let entries = eval.value_list_of(path)?;
   let target = Path::new(filename);
   let mut path_parts = target.components();
@@ -58,12 +57,13 @@ pub async fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<Pat
     let (prefix, _) = eval.value_str_of(*kv.get(&Ident::from("prefix")).unwrap())?;
     if search_key == &*prefix {
       let full = add_children(path.to_string().into());
-      if full.exists().await {
+      if full.exists() {
         return Ok(full);
       }
     } else if prefix.is_empty() {
-      if let Ok(mut iter) = async_std::fs::read_dir(&*path).await {
-        while let Some(next_item) = iter.try_next().await? {
+      if let Ok(iter) = std::fs::read_dir(&*path) {
+        for next_item in iter {
+          let next_item = next_item?;
           if next_item.file_name() == search_key {
             return Ok(add_children(next_item.path()));
           }

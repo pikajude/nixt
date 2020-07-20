@@ -1,20 +1,15 @@
 #![feature(untagged_unions)]
 
-#[macro_use] extern crate async_recursion;
 #[macro_use] extern crate log;
 
 use arena::Arena;
-use async_std::{
-  path::{Path, PathBuf},
-  sync::Mutex,
-  task,
-};
 use codespan::Files;
 use std::{
-  collections::HashSet,
+  collections::{HashMap, HashSet},
+  path::{Path, PathBuf},
   sync::{
     atomic::{AtomicU16, Ordering},
-    Arc,
+    Arc, Mutex,
   },
 };
 use syntax::{
@@ -31,11 +26,13 @@ mod primop;
 mod thunk;
 mod value;
 
+pub use config::Config;
+pub use error::Result;
+
 use codespan_reporting::{
   diagnostic::{Diagnostic, Label, LabelStyle},
   term::emit,
 };
-use config::Config;
 use error::*;
 use ext::*;
 use log::Level;
@@ -50,6 +47,7 @@ pub struct Eval {
   toplevel: StaticScope,
   inline_counter: AtomicU16,
   files: Mutex<Files<String>>,
+  file_ids: Mutex<HashMap<PathBuf, ThunkId>>,
   writer: StandardStream,
   config: Config,
 }
@@ -72,6 +70,7 @@ impl Eval {
       toplevel: Default::default(),
       inline_counter: Default::default(),
       files: Default::default(),
+      file_ids: Default::default(),
       writer: StandardStream::stderr(ColorChoice::Auto),
       config,
     };
@@ -79,8 +78,17 @@ impl Eval {
     this
   }
 
-  pub async fn print_error(&self, e: Error) -> Result<()> {
-    let files = self.files.lock().await;
+  fn print_line(&self, span: FileSpan) -> Result<()> {
+    if log_enabled!(Level::Debug) {
+      let files = self.files.lock().map_err(|x| anyhow::anyhow!("{}", x))?;
+      let slice = files.source_slice(span.file_id, span.span)?;
+      debug!("{:?}", slice);
+    }
+    Ok(())
+  }
+
+  pub fn print_error(&self, e: Error) -> Result<()> {
+    let files = self.files.lock().map_err(|x| anyhow::anyhow!("{}", x))?;
     let diagnostic = Diagnostic::error()
       .with_message(format!("{:?}", e.err))
       .with_labels(
@@ -110,24 +118,28 @@ impl Eval {
     Ok(())
   }
 
-  pub async fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
+  pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
+    let path = path.as_ref();
+    let mut ids = self.file_ids.lock().unwrap();
+    if let Some(x) = ids.get(path) {
+      return Ok(*x);
+    }
     let eid = {
-      let path = path.as_ref();
-      let contents = async_std::fs::read_to_string(path).await?;
-      let mut f = self.files.lock().await;
+      let contents = std::fs::read_to_string(path)?;
+      let mut f = self.files.lock().map_err(|x| anyhow::anyhow!("{}", x))?;
       let id = f.add(path, contents);
       syntax::parse(id, &self.expr, f.source(id))?
     };
-    Ok(
-      self
-        .items
-        .alloc(Thunk::new(ThunkCell::Expr(eid, Context::new()))),
-    )
+    let thunk_id = self
+      .items
+      .alloc(Thunk::new(ThunkCell::Expr(eid, Context::new())));
+    ids.insert(path.canonicalize()?, thunk_id);
+    Ok(thunk_id)
   }
 
-  pub async fn load_inline<S: Into<String>>(&self, src: S) -> Result<ThunkId> {
+  pub fn load_inline<S: Into<String>>(&self, src: S) -> Result<ThunkId> {
     let eid = {
-      let mut f = self.files.lock().await;
+      let mut f = self.files.lock().map_err(|x| anyhow::anyhow!("{}", x))?;
       let id = f.add(
         format!(
           "<inline-{}>",
@@ -141,9 +153,6 @@ impl Eval {
   }
 
   pub fn value_of(&self, mut thunk_id: ThunkId) -> Result<&Value> {
-    if log_enabled!(Level::Trace) {
-      println!("{:?}", backtrace::Backtrace::new());
-    }
     let mut ids = HashSet::new();
     ids.insert(thunk_id);
     loop {
@@ -151,7 +160,7 @@ impl Eval {
         Some(x) => x,
         None => {
           let thunk = &self.items[thunk_id];
-          let val = task::block_on(self.step_thunk(thunk.get_thunk()))?;
+          let val = self.step_thunk(thunk.get_thunk())?;
           thunk.put_value(val)
         }
       };
@@ -218,23 +227,22 @@ impl Eval {
   //   }
   // }
 
-  async fn step_thunk(&self, thunk: ThunkCell) -> Result<Value> {
+  fn step_thunk(&self, thunk: ThunkCell) -> Result<Value> {
     match thunk {
-      ThunkCell::Expr(e, c) => self.step_eval(e, c).await,
-      ThunkCell::Apply(lhs, rhs) => self.step_fn(lhs, rhs).await,
-      ThunkCell::Blackhole => bail!("internal evaluator error"),
+      ThunkCell::Expr(e, c) => self.step_eval(e, c),
+      ThunkCell::Apply(lhs, rhs) => self.step_fn(lhs, rhs),
+      ThunkCell::Blackhole => bail!("infinite loop"),
     }
   }
 
-  #[async_recursion]
-  async fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
+  fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
     self
       .step_eval_impl(e, context)
-      .await
       .with_frame(e.span, self.config.trace)
   }
 
-  async fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
+  fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
+    self.print_line(e.span)?;
     match &self.expr[e.node] {
       Expr::Int(n) => Ok(Value::Int(*n)),
       Expr::Str(Str { body, .. }) | Expr::IndStr(IndStr { body, .. }) => {
@@ -262,32 +270,32 @@ impl Eval {
           if pb.is_absolute() {
             Ok(Value::Path(pb.into()))
           } else {
-            let files = self.files.lock().await;
+            let files = self.files.lock().map_err(|x| anyhow::anyhow!("{}", x))?;
             let filename = files.name(e.span.file_id);
             let dest = PathBuf::from(filename).parent().unwrap().join(pb);
             let thing = path_abs::PathAbs::new(dest)?;
-            Ok(Value::Path(PathBuf::from(
-              thing.as_ref() as &std::path::Path
-            )))
+            Ok(Value::Path(thing.as_path().to_path_buf()))
           }
         }
         expr::Path::Home(_) => todo!(),
         expr::Path::NixPath { path, .. } => {
           let nixpath = self.synthetic_variable(e.span, Ident::from("__nixPath"), &context);
-          Ok(Value::Path(
-            builtins::sys::find_file(self, nixpath, &path[1..path.len() - 1]).await?,
-          ))
+          Ok(Value::Path(builtins::sys::find_file(
+            self,
+            nixpath,
+            &path[1..path.len() - 1],
+          )?))
         }
       },
       Expr::Apply(Apply { lhs, rhs }) => {
         Ok(Value::Ref(self.items.alloc(Thunk::new(ThunkCell::Apply(
           self.items.alloc(Thunk::thunk(*lhs, context.clone())),
-          self.items.alloc(Thunk::thunk(*rhs, context.clone())),
+          self.items.alloc(Thunk::thunk(*rhs, context)),
         )))))
       }
       Expr::Lambda(l) => Ok(Value::Lambda {
         lambda: l.clone(),
-        captures: context.clone(),
+        captures: context,
       }),
       Expr::Var(ident) => {
         for item in &context {
@@ -306,9 +314,7 @@ impl Eval {
       }
       Expr::AttrSet(AttrSet { rec, ref attrs, .. }) => {
         let new_attrs = self.items.alloc(Thunk::new(ThunkCell::Blackhole));
-        self
-          .build_attrs(rec.is_some(), attrs, new_attrs, &context)
-          .await?;
+        self.build_attrs(rec.is_some(), attrs, new_attrs, &context)?;
         Ok(Value::Ref(new_attrs))
       }
       Expr::List(List { elems, .. }) => {
@@ -324,8 +330,8 @@ impl Eval {
         let mut lhs = self.items.alloc(Thunk::thunk(*lhs, context.clone()));
         let mut failed = None;
         for path_item in &*path.0 {
-          let attrname = self.attrname(path_item, &context).await?;
-          match self.sel(lhs, &attrname).await? {
+          let attrname = self.attrname(path_item, &context)?;
+          match self.sel(lhs, &attrname)? {
             Some(it) => {
               lhs = it;
             }
@@ -337,7 +343,7 @@ impl Eval {
         }
         if let Some(f) = failed {
           if let Some(o) = or {
-            self.step_eval(o.fallback, context).await
+            self.step_eval(o.fallback, context)
           } else {
             bail!("Missing attribute {}", &f)
           }
@@ -347,43 +353,40 @@ impl Eval {
       }
       Expr::Let(Let { binds, rhs, .. }) => {
         let bindings = self.items.alloc(Thunk::new(ThunkCell::Blackhole));
-        self.build_attrs(true, &*binds, bindings, &context).await?;
-        self
-          .step_eval(*rhs, context.prepend(Scope::Dynamic(bindings)))
-          .await
+        self.build_attrs(true, &*binds, bindings, &context)?;
+        self.step_eval(*rhs, context.prepend(Scope::Dynamic(bindings)))
       }
       Expr::If(If {
         cond, rhs1, rhs2, ..
       }) => {
         let cond = self.items.alloc(Thunk::thunk(*cond, context.clone()));
         if self.value_bool_of(cond)? {
-          self.step_eval(*rhs1, context).await
+          self.step_eval(*rhs1, context)
         } else {
-          self.step_eval(*rhs2, context).await
+          self.step_eval(*rhs2, context)
         }
       }
       Expr::With(With { env, expr, .. }) => {
         let with_scope = self.items.alloc(Thunk::thunk(*env, context.clone()));
-        self
-          .step_eval(*expr, context.prepend(Scope::Dynamic(with_scope)))
-          .await
+        // XXX: `with` scope is checked *after* every other scope, not before
+        self.step_eval(*expr, context.append(Scope::Dynamic(with_scope)))
       }
       Expr::Assert(Assert { cond, expr, .. }) => {
         let cond = self.items.alloc(Thunk::thunk(*cond, context.clone()));
         if self.value_bool_of(cond)? {
-          self.step_eval(*expr, context).await
+          self.step_eval(*expr, context)
         } else {
           bail!("assertion failed")
         }
       }
-      Expr::Binary(b) => operators::eval_binary(self, b, context).await,
-      Expr::Unary(u) => operators::eval_unary(self, u, context).await,
+      Expr::Binary(b) => operators::eval_binary(self, b, context),
+      Expr::Unary(u) => operators::eval_unary(self, u, context),
       Expr::Member(Member { lhs, path, .. }) => {
         let mut lhs = self.items.alloc(Thunk::thunk(*lhs, context.clone()));
 
         for path_item in &path.0 {
-          let attr = self.attrname(path_item, &context).await?;
-          match self.sel(lhs, &attr).await? {
+          let attr = self.attrname(path_item, &context)?;
+          match self.sel(lhs, &attr)? {
             Some(item) => {
               lhs = item;
             }
@@ -397,25 +400,23 @@ impl Eval {
     }
   }
 
-  #[async_recursion]
-  async fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
     match self.value_of(lhs)? {
       Value::Lambda { lambda, captures } => {
-        self
-          .call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
-          .await
+        self.call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
       }
       Value::Primop(Primop {
-        op: Op::Async(op), ..
-      }) => op(self, rhs).await,
+        op: Op::Dynamic(op),
+        ..
+      }) => op(self, rhs),
       Value::Primop(Primop {
-        op: Op::Sync(f), ..
+        op: Op::Static(f), ..
       }) => f(self, rhs),
       _ => todo!("not a lambda"),
     }
   }
 
-  async fn call_lambda(
+  fn call_lambda(
     &self,
     arg: &LambdaArg,
     body: ExprRef,
@@ -472,12 +473,10 @@ impl Eval {
       }
     }
 
-    self
-      .step_eval(body, context.prepend(Scope::Static(fn_body_scope)))
-      .await
+    self.step_eval(body, context.prepend(Scope::Static(fn_body_scope)))
   }
 
-  async fn attrname(&self, a: &AttrName, context: &Context) -> Result<Ident> {
+  fn attrname(&self, a: &AttrName, context: &Context) -> Result<Ident> {
     match a {
       AttrName::Plain(p) => Ok(p.clone()),
       AttrName::Str { body, .. } => {
@@ -502,14 +501,14 @@ impl Eval {
     }
   }
 
-  async fn sel(&self, lhs: ThunkId, rhs: &Ident) -> Result<Option<ThunkId>> {
+  fn sel(&self, lhs: ThunkId, rhs: &Ident) -> Result<Option<ThunkId>> {
     Ok(match self.value_of(lhs)? {
       Value::AttrSet(hs) => hs.get(rhs).copied(),
       _ => None,
     })
   }
 
-  async fn build_attrs(
+  fn build_attrs(
     &self,
     recursive: bool,
     bindings: &[Spanned<Binding>],
@@ -526,19 +525,13 @@ impl Eval {
     for b in bindings {
       match b.node {
         Binding::Plain { ref path, rhs, .. } => {
-          self
-            .push_binding(&mut binds, &path.0[..], rhs, &recursive_scope)
-            .await?
+          self.push_binding(&mut binds, &path.0[..], rhs, &recursive_scope)?
         }
         Binding::Inherit {
           ref from,
           ref attrs,
           ..
-        } => {
-          self
-            .push_inherit(&mut binds, from.as_ref(), attrs, context)
-            .await?
-        }
+        } => self.push_inherit(&mut binds, from.as_ref(), attrs, context)?,
       }
     }
 
@@ -547,8 +540,7 @@ impl Eval {
     Ok(())
   }
 
-  #[async_recursion]
-  async fn push_binding(
+  fn push_binding(
     &self,
     scope: &mut StaticScope,
     names: &[Spanned<AttrName>],
@@ -556,7 +548,7 @@ impl Eval {
     context: &Context,
   ) -> Result<()> {
     let (key1, keyrest) = names.split_first().unwrap();
-    let key1 = self.attrname(key1, context).await?;
+    let key1 = self.attrname(key1, context)?;
     let child_item = if keyrest.is_empty() {
       self.items.alloc(Thunk::thunk(rhs, context.clone()))
     } else {
@@ -564,9 +556,7 @@ impl Eval {
         Some(i) => self.value_attrs_of(*i)?.clone(),
         None => StaticScope::new(),
       };
-      self
-        .push_binding(&mut next_scope, keyrest, rhs, context)
-        .await?;
+      self.push_binding(&mut next_scope, keyrest, rhs, context)?;
       self
         .items
         .alloc(Thunk::complete(Value::AttrSet(next_scope)))
@@ -575,7 +565,7 @@ impl Eval {
     Ok(())
   }
 
-  async fn push_inherit(
+  fn push_inherit(
     &self,
     scope: &mut StaticScope,
     from: Option<&InheritFrom>,
@@ -589,7 +579,7 @@ impl Eval {
       None => context.clone(),
     };
     for attr in &attrs.0 {
-      let name = self.attrname(attr, context).await?;
+      let name = self.attrname(attr, context)?;
       scope.insert(
         name.clone(),
         self.synthetic_variable(attr.span, name, &binding_scope),
@@ -648,14 +638,13 @@ mod tests {
       std::env::set_var("NIX_PATH", nix_path);
     }
 
-    let eval = Eval::with_config(Config { trace: false });
+    let eval = Eval::with_config(Config { trace: true });
     let expr = eval
       .load_inline(r#"(import <nixpkgs> {}).hello"#)
-      .await
       .expect("no parse");
     match eval.value_of(expr) {
       Ok(x) => eprintln!("{:?}", x),
-      Err(e) => eval.print_error(e).await.unwrap(),
+      Err(e) => eval.print_error(e).unwrap(),
     }
   }
 }
