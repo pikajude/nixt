@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use syntax::expr::Ident;
 
 pub fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
-  let (varname, _) = eval.value_str_of(varname)?;
+  let varname = eval.value_string_of(varname)?;
   match std::env::var(String::from(varname)) {
     Ok(s) => Ok(Value::string_bare(s)),
     Err(_) => Ok(Value::string_bare("")),
@@ -40,7 +40,13 @@ pub fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
 
 pub fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
   let path = eval.value_path_of(path)?;
-  Ok(Value::Path(path.iter().last().expect("empty path").into()))
+  Ok(Value::string_bare(
+    path
+      .iter()
+      .last()
+      .context("baseNameOf called with an empty path")?
+      .to_string_lossy(),
+  ))
 }
 
 pub fn read_file(eval: &Eval, path: ThunkId) -> Result<Value> {
@@ -66,8 +72,15 @@ pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> 
   };
   for entry in entries {
     let kv = eval.value_attrs_of(*entry)?;
-    let (path, _) = eval.value_str_of(*kv.get(&Ident::from("path")).unwrap())?;
-    let (prefix, _) = eval.value_str_of(*kv.get(&Ident::from("prefix")).unwrap())?;
+    let path = eval.value_string_of(*kv.get(&Ident::from("path")).unwrap())?;
+
+    let (context, prefix) = crate::builtins::strings::coerce_new_string(
+      eval,
+      *kv.get(&Ident::from("prefix")).unwrap(),
+      false,
+      false,
+    )?;
+
     if search_key == &*prefix {
       let full = add_children(path.to_string().into());
       if full.exists() {

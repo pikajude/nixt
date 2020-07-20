@@ -30,7 +30,7 @@ pub fn intersect_attrs(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value>
 pub fn remove_attrs(eval: &Eval, attrset: ThunkId, to_remove: ThunkId) -> Result<Value> {
   let mut attrset = eval.value_attrs_of(attrset)?.clone();
   for attr_name in eval.value_list_of(to_remove)? {
-    let (remove_item, _) = eval.value_str_of(*attr_name)?;
+    let remove_item = eval.value_string_of(*attr_name)?;
     attrset.remove(&Ident::from(remove_item));
   }
   Ok(Value::AttrSet(attrset))
@@ -42,7 +42,7 @@ pub fn list_to_attrs(eval: &Eval, list: ThunkId) -> Result<Value> {
   let value_sym = Ident::from("value");
   for obj in eval.value_list_of(list)? {
     let obj = eval.value_attrs_of(*obj)?;
-    let (name, _) = eval.value_str_of(
+    let name = eval.value_string_of(
       obj
         .get(&name_sym)
         .copied()
@@ -73,7 +73,7 @@ pub fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
     let sort_key_id = eval
       .sel(next_item, &Ident::from("key"))?
       .ok_or_else(|| anyhow::anyhow!("attribute `key' missing"))?;
-    let (sort_key, _) = eval.value_str_of(sort_key_id)?;
+    let sort_key = eval.value_string_of(sort_key_id)?;
 
     if !done_keys.insert(sort_key.to_string()) {
       continue;
@@ -103,6 +103,6 @@ pub fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
 
 pub fn has_attr(eval: &Eval, attrname: ThunkId, attrs: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(attrs)?;
-  let (aname, _) = eval.value_str_of(attrname)?;
+  let aname = eval.value_string_of(attrname)?;
   Ok(Value::Bool(attrs.contains_key(&Ident::from(aname))))
 }

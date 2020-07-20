@@ -8,7 +8,7 @@ use crate::{
 use std::collections::BTreeSet;
 
 pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> Result<Value> {
-  let (s, ctx) = eval.value_str_of(string)?;
+  let (ctx, s) = coerce_new_string(eval, string, false, false)?;
   let start = eval.value_int_of(start)?;
   if start < 0 {
     bail!("first argument to `substring' must be >= 0");
@@ -18,16 +18,27 @@ pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> 
   let actual_end = std::cmp::min(start + (std::cmp::max(0, len) as usize), s.len());
   Ok(Value::String {
     string: s[start..actual_end].to_string(),
-    context: ctx.clone(),
+    context: ctx,
   })
 }
 
 pub fn prim_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
   let mut ctx = PathSet::new();
   Ok(Value::String {
-    string: coerce_to_string(eval, obj, &mut ctx, true)?,
+    string: coerce_to_string(eval, obj, &mut ctx, true, false)?,
     context: ctx,
   })
+}
+
+pub fn coerce_new_string(
+  eval: &Eval,
+  obj: ThunkId,
+  extended: bool,
+  copy_to_store: bool,
+) -> Result<(PathSet, String)> {
+  let mut p = PathSet::new();
+  let string = coerce_to_string(eval, obj, &mut p, extended, copy_to_store)?;
+  Ok((p, string))
 }
 
 pub fn coerce_to_string(
@@ -35,6 +46,7 @@ pub fn coerce_to_string(
   obj: ThunkId,
   ctx: &mut PathSet,
   extended: bool,
+  copy_to_store: bool,
 ) -> Result<String> {
   let v = eval.value_of(obj)?;
   Ok(match v {
@@ -57,7 +69,13 @@ pub fn coerce_to_string(
         if i > 0 {
           output.push(' ');
         }
-        output.push_str(&coerce_to_string(eval, *item, ctx, extended)?);
+        output.push_str(&coerce_to_string(
+          eval,
+          *item,
+          ctx,
+          extended,
+          copy_to_store,
+        )?);
       }
       output
     }
@@ -72,16 +90,14 @@ pub fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result
   }
   let mut all_ctx = BTreeSet::new();
   let mut output = String::new();
-  let (sep, c) = eval.value_str_of(sep)?;
-  all_ctx.extend(c.iter().cloned());
+  let (sep, pset) = eval.value_with_context_of(sep)?;
+  all_ctx.extend(pset.iter().cloned());
 
   for (ix, s) in strings.iter().enumerate() {
     if ix > 0 {
       output.push_str(sep);
     }
-    let (s1, ctx) = eval.value_str_of(*s)?;
-    output.push_str(s1);
-    all_ctx.extend(ctx.iter().cloned());
+    output.push_str(&coerce_to_string(eval, *s, &mut all_ctx, false, false)?);
   }
 
   Ok(Value::String {

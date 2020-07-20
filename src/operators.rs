@@ -30,7 +30,7 @@ pub fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value>
         Ok(Value::Bool(false))
       }
     }
-    BinaryOp::Add => cat_strings(eval, t!(bin.lhs), t!(bin.rhs)),
+    BinaryOp::Add => plus_operator(eval, t!(bin.lhs), t!(bin.rhs)),
     BinaryOp::Sub => {
       let lhs = eval.value_of(t!(bin.lhs))?;
       let rhs = eval.value_of(t!(bin.rhs))?;
@@ -178,13 +178,10 @@ pub fn eval_unary(eval: &Eval, un: &Unary, context: Context) -> Result<Value> {
   }
 }
 
-fn cat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+fn plus_operator(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   match eval.value_of(lhs)? {
     Value::Path(p) => {
-      let (pathstr, ctx) = eval.value_str_of(rhs)?;
-      if !ctx.is_empty() {
-        bail!("cannot add a store path to a path");
-      }
+      let pathstr = eval.value_string_of(rhs)?;
       Ok(Value::Path(p.join(pathstr)))
     }
     Value::Int(i) => match eval.value_of(rhs)? {
@@ -197,17 +194,7 @@ fn cat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
       Value::Float(f2) => Ok(Value::Float(f + f2)),
       v => bail!("cannot add value {} to a float", v.typename()),
     },
-    Value::String { string, context } => {
-      let mut buf = String::new();
-      let (morestr, ctx) = eval.value_str_of(rhs)?;
-      buf.push_str(string);
-      buf.push_str(&morestr);
-      Ok(Value::String {
-        string: buf,
-        context: context.union(ctx).cloned().collect(),
-      })
-    }
-    v => bail!("cannot coerce {} to a string", v.typename()),
+    _ => concat_strings(eval, lhs, rhs),
   }
 }
 
@@ -220,5 +207,50 @@ pub fn less_than(lhs: &Value, rhs: &Value) -> Result<bool> {
     (Value::String { string: s1, .. }, Value::String { string: s2, .. }) => s1 < s2,
     (Value::Path(p1), Value::Path(p2)) => p1 < p2,
     (v1, v2) => bail!("cannot compare {} with {}", v1.typename(), v2.typename()),
+  })
+}
+
+pub fn concat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  Ok(match (eval.value_of(lhs)?, eval.value_of(rhs)?) {
+    (Value::Path(p1), Value::Path(p2)) => Value::Path(p1.join(p2)),
+    (
+      Value::Path(p1),
+      Value::String {
+        string: s2,
+        context,
+      },
+    ) => {
+      if context.is_empty() {
+        Value::Path(p1.join(s2))
+      } else {
+        bail!("a string that refers to a store path cannot be appended to a path")
+      }
+    }
+    (x, _) => {
+      let lhs_is_string = match x {
+        Value::String { .. } => true,
+        _ => false,
+      };
+      let mut ctx = Default::default();
+      let mut buf = String::new();
+      buf.push_str(&crate::builtins::strings::coerce_to_string(
+        eval,
+        lhs,
+        &mut ctx,
+        false,
+        lhs_is_string,
+      )?);
+      buf.push_str(&crate::builtins::strings::coerce_to_string(
+        eval,
+        rhs,
+        &mut ctx,
+        false,
+        lhs_is_string,
+      )?);
+      Value::String {
+        string: buf,
+        context: ctx,
+      }
+    }
   })
 }

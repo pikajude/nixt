@@ -214,7 +214,7 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "stringLength".into(),
         eval.new_value(Primop::single("stringLength", |e, i| {
-          Ok(Value::Int(e.value_str_of(i)?.0.len() as _))
+          Ok(Value::Int(e.value_with_context_of(i)?.0.len() as _))
         })),
       );
       builtins.insert(
@@ -235,13 +235,13 @@ pub fn init_primops(eval: &mut Eval) {
 }
 
 fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
-  let (msg, _) = eval.value_str_of(msg)?;
+  let (msg, _) = eval.value_with_context_of(msg)?;
   bail!("evaluation aborted with the message: {}", msg)
 }
 
 fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value> {
   if let Err(mut e) = eval.value_of(value) {
-    let (ctx, _) = eval.value_str_of(ctx)?;
+    let (ctx, _) = eval.value_with_context_of(ctx)?;
     e.err = e.err.context(ctx.to_string());
     Err(e)
   } else {

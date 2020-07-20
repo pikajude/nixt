@@ -12,7 +12,7 @@ use syntax::expr::Ident;
 
 #[derive(Default, Debug)]
 struct Derivation<'a> {
-  name: String,
+  name: &'a str,
   builder: Option<&'a str>,
   system: Option<&'a str>,
   args: Vec<String>,
@@ -25,14 +25,11 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
 
   let mut context = PathSet::new();
 
-  let name = coerce_to_string(
-    eval,
+  let name = eval.value_string_of(
     attrs
       .get(&Ident::from("name"))
       .copied()
       .ok_or_else(|| anyhow::anyhow!("required attribute `name' missing"))?,
-    &mut context,
-    true,
   )?;
 
   if attrs.contains_key(&Ident::from("__structuredAttrs")) {
@@ -65,17 +62,17 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       for arg in eval.value_list_of(*v)? {
         drv
           .args
-          .push(coerce_to_string(eval, *arg, &mut context, true)?);
+          .push(coerce_to_string(eval, *arg, &mut context, true, false)?);
       }
       continue;
     }
 
     drv
       .env
-      .insert(k, coerce_to_string(eval, *v, &mut context, true)?);
+      .insert(k, coerce_to_string(eval, *v, &mut context, true, false)?);
 
     if k == "outputHashMode" {
-      is_recursive = match eval.value_str_of(*v)?.0 {
+      is_recursive = match eval.value_string_of(*v)? {
         "recursive" => true,
         "flat" => false,
         x => bail!("invalid value `{}' for outputHashMode", x),
@@ -83,17 +80,17 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "outputHashAlgo" {
-      output_hash_algo = Some(eval.value_str_of(*v)?.0);
+      output_hash_algo = Some(eval.value_string_of(*v)?);
     }
 
     if k == "outputHash" {
-      output_hash = Some(eval.value_str_of(*v)?.0);
+      output_hash = Some(eval.value_string_of(*v)?);
     }
 
     if k == "outputs" {
       outputs_set.clear();
       for name in eval.value_list_of(*v)? {
-        let name = eval.value_str_of(*name)?.0;
+        let name = eval.value_string_of(*name)?;
         if name == "drv" {
           bail!("derivation outputs cannot be named `drv'");
         }
@@ -107,10 +104,10 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "builder" {
-      drv.builder = Some(eval.value_str_of(*v)?.0);
+      drv.builder = Some(eval.value_with_context_of(*v)?.0);
     }
     if k == "system" {
-      drv.system = Some(eval.value_str_of(*v)?.0);
+      drv.system = Some(eval.value_with_context_of(*v)?.0);
     }
   }
 

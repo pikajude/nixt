@@ -173,10 +173,26 @@ impl Eval {
     }
   }
 
-  fn value_str_of(&self, ix: ThunkId) -> Result<(&str, &PathSet)> {
+  fn value_string_of(&self, ix: ThunkId) -> Result<&str> {
+    match self.value_of(ix)? {
+      Value::String { string, context } => {
+        if context.is_empty() {
+          Ok(string)
+        } else {
+          bail!("string is not allowed to refer to a store path")
+        }
+      }
+      v => bail!("wrong type: expected string without context, got {:?}", v),
+    }
+  }
+
+  fn value_with_context_of(&self, ix: ThunkId) -> Result<(&str, &PathSet)> {
     match self.value_of(ix)? {
       Value::String { string, context } => Ok((string, context)),
-      v => bail!("Wrong type: expected string, got {}", v.typename()),
+      v => bail!(
+        "wrong type: expected string with context, got {}",
+        v.typename()
+      ),
     }
   }
 
@@ -249,8 +265,8 @@ impl Eval {
             StrPart::Plain(s) => final_buf.push_str(s),
             StrPart::Quote { quote, .. } => {
               let t = self.items.alloc(Thunk::thunk(*quote, context.clone()));
-              let (contents, paths) = self.value_str_of(t)?;
-              str_context.extend(paths.iter().cloned());
+              let contents =
+                builtins::strings::coerce_to_string(self, t, &mut str_context, false, true)?;
               final_buf.push_str(&contents);
             }
           }
@@ -481,7 +497,7 @@ impl Eval {
             StrPart::Plain(s) => buf.push_str(s),
             StrPart::Quote { quote, .. } => {
               let t = self.items.alloc(Thunk::thunk(*quote, context.clone()));
-              let (value, _) = self.value_str_of(t)?;
+              let value = self.value_string_of(t)?;
               buf.push_str(&value);
             }
           }
@@ -490,8 +506,7 @@ impl Eval {
       }
       AttrName::Dynamic { quote, .. } => {
         let val = self.items.alloc(Thunk::thunk(*quote, context.clone()));
-        let (s, _) = self.value_str_of(val)?;
-        Ok(s.into())
+        Ok(self.value_string_of(val)?.into())
       }
     }
   }

@@ -36,7 +36,7 @@ fn to_json_impl(eval: &Eval, obj: ThunkId, paths: &mut PathSet) -> Result<JSON> 
 }
 
 pub fn from_json(eval: &Eval, string: ThunkId) -> Result<Value> {
-  let (json_string, _) = eval.value_str_of(string)?;
+  let json_string = eval.value_string_of(string)?;
   json_to_value(eval, serde_json::from_str(json_string)?)
 }
 
