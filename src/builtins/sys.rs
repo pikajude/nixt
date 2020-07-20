@@ -5,6 +5,7 @@ use crate::{
   value::Value,
   Eval,
 };
+use anyhow::Context as _;
 use std::path::{Path, PathBuf};
 use syntax::expr::Ident;
 
@@ -26,13 +27,20 @@ pub fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
 
 pub fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
   let path = eval.value_path_of(path)?;
-  let meta = path.metadata()?;
+  let meta = path
+    .metadata()
+    .with_context(|| format!("unable to import file `{}'", path.display()))?;
   let r = if meta.is_dir() {
     eval.load_file(path.join("default.nix"))?
   } else {
     eval.load_file(path)?
   };
   Ok(Value::Ref(r))
+}
+
+pub fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path)?;
+  Ok(Value::Path(path.iter().last().expect("empty path").into()))
 }
 
 pub fn read_file(eval: &Eval, path: ThunkId) -> Result<Value> {
@@ -84,7 +92,9 @@ pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> 
 
 pub fn mk_nix_path(eval: &Eval) -> Value {
   let mut entries = vec![];
-  for entry in get_nix_path() {
+  for entry in get_nix_path().into_iter().chain(std::iter::once(
+    "nix=/nix/store/qk8iz5x8qwp6m3580fpp31f6fgf51ial-nix-2.3.7/share/nix/corepkgs".to_string(),
+  )) {
     let mut parts = entry.splitn(2, '=');
     let first = parts.next().unwrap();
     let second = parts.next();

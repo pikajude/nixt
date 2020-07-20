@@ -10,6 +10,7 @@ use primop::Primop;
 use syntax::expr::Ident;
 
 pub mod attrs;
+pub mod derivation;
 pub mod fetch;
 pub mod functions;
 pub mod json;
@@ -29,7 +30,7 @@ pub fn init_primops(eval: &mut Eval) {
   );
   eval.toplevel.insert(
     "toString".into(),
-    eval.new_value(Primop::single("toString", strings::coerce_to_string)),
+    eval.new_value(Primop::single("toString", strings::prim_to_string)),
   );
   let nixver = eval.new_value(Value::string_bare("2.3.7"));
   eval
@@ -49,8 +50,16 @@ pub fn init_primops(eval: &mut Eval) {
     .toplevel
     .insert("false".into(), eval.new_value(Value::Bool(false)));
   eval.toplevel.insert(
+    "baseNameOf".into(),
+    eval.new_value(Primop::single("baseNameOf", sys::base_name_of)),
+  );
+  eval.toplevel.insert(
     "removeAttrs".into(),
     eval.new_value(primop2!("removeAttrs", attrs::remove_attrs)),
+  );
+  eval.toplevel.insert(
+    "derivation".into(),
+    eval.new_value(Primop::single("derivation", derivation::derivation_strict)),
   );
   eval.toplevel.insert(
     "builtins".into(),
@@ -85,6 +94,10 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "elemAt".into(),
         eval.new_value(primop2!("elemAt", lists::elem_at)),
+      );
+      builtins.insert(
+        "fetchTarball".into(),
+        eval.new_value(Primop::single("fetchTarball", fetch::fetch_tarball)),
       );
       builtins.insert(
         "fromJSON".into(),

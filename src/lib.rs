@@ -35,7 +35,6 @@ use codespan_reporting::{
 };
 use error::*;
 use ext::*;
-use log::Level;
 use primop::{Op, Primop};
 use termcolor::{ColorChoice, StandardStream};
 use thunk::*;
@@ -76,15 +75,6 @@ impl Eval {
     };
     builtins::init_primops(&mut this);
     this
-  }
-
-  fn print_line(&self, span: FileSpan) -> Result<()> {
-    if log_enabled!(Level::Debug) {
-      let files = self.files.lock().map_err(|x| anyhow::anyhow!("{}", x))?;
-      let slice = files.source_slice(span.file_id, span.span)?;
-      debug!("{:?}", slice);
-    }
-    Ok(())
   }
 
   pub fn print_error(&self, e: Error) -> Result<()> {
@@ -179,7 +169,7 @@ impl Eval {
   fn value_bool_of(&self, ix: ThunkId) -> Result<bool> {
     match self.value_of(ix)? {
       Value::Bool(b) => Ok(*b),
-      v => bail!("Wrong type: expected string, got {}", v.typename()),
+      v => bail!("Wrong type: expected bool, got {}", v.typename()),
     }
   }
 
@@ -249,7 +239,6 @@ impl Eval {
   }
 
   fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
-    self.print_line(e.span)?;
     match &self.expr[e.node] {
       Expr::Int(n) => Ok(Value::Int(*n)),
       Expr::Str(Str { body, .. }) | Expr::IndStr(IndStr { body, .. }) => {
@@ -271,6 +260,7 @@ impl Eval {
           context: str_context,
         })
       }
+      Expr::Uri(u) => Ok(Value::string_bare(u.to_string())),
       Expr::Path(p) => match p {
         expr::Path::Plain(p) => {
           let pb = Path::new(p);
@@ -643,7 +633,7 @@ mod tests {
 
     let eval = Eval::with_config(Config { trace: false });
     let expr = eval
-      .load_inline(r#"(import <nixpkgs> {}).hello"#)
+      .load_inline(r#"(import <nixpkgs> { overlays = []; }).hello"#)
       .expect("no parse");
     match eval.value_of(expr) {
       Ok(x) => eprintln!("{:?}", x),

@@ -1,4 +1,10 @@
-use crate::{bail, error::Result, thunk::ThunkId, value::Value, Eval};
+use crate::{
+  bail,
+  error::Result,
+  thunk::ThunkId,
+  value::{PathSet, Value},
+  Eval,
+};
 use std::collections::BTreeSet;
 
 pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> Result<Value> {
@@ -16,16 +22,46 @@ pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> 
   })
 }
 
-pub fn coerce_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
+pub fn prim_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
+  let mut ctx = PathSet::new();
+  Ok(Value::String {
+    string: coerce_to_string(eval, obj, &mut ctx, true)?,
+    context: ctx,
+  })
+}
+
+pub fn coerce_to_string(
+  eval: &Eval,
+  obj: ThunkId,
+  ctx: &mut PathSet,
+  extended: bool,
+) -> Result<String> {
   let v = eval.value_of(obj)?;
   Ok(match v {
-    Value::Path(p) => Value::string_bare(p.display().to_string()),
-    Value::String { string, context } => Value::String {
-      string: string.clone(),
-      context: context.clone(),
-    },
-    Value::Int(i) => Value::string_bare(i.to_string()),
-    _ => bail!("not handled, coercing to string: {}", v.typename()),
+    Value::Path(p) => p.display().to_string(),
+    Value::String { string, context } => {
+      ctx.extend(context.iter().cloned());
+      string.clone()
+    }
+    Value::Int(i) => i.to_string(),
+    Value::Bool(b) if extended => {
+      if *b {
+        "1".into()
+      } else {
+        String::new()
+      }
+    }
+    Value::List(items) if extended => {
+      let mut output = String::new();
+      for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+          output.push(' ');
+        }
+        output.push_str(&coerce_to_string(eval, *item, ctx, extended)?);
+      }
+      output
+    }
+    v => bail!("cannot convert {} to a string", v.typename()),
   })
 }
 
