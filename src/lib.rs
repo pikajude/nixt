@@ -9,9 +9,12 @@ use async_std::{
   sync::Mutex,
 };
 use codespan::Files;
-use std::sync::{
-  atomic::{AtomicU16, Ordering},
-  Arc,
+use std::{
+  collections::HashSet,
+  sync::{
+    atomic::{AtomicU16, Ordering},
+    Arc,
+  },
 };
 use syntax::{
   expr::{self, *},
@@ -140,6 +143,8 @@ impl Eval {
     if log_enabled!(Level::Trace) {
       println!("{:?}", backtrace::Backtrace::new());
     }
+    let mut ids = HashSet::new();
+    ids.insert(thunk_id);
     loop {
       let v = match self.items[thunk_id].value_ref() {
         Some(x) => x,
@@ -151,8 +156,10 @@ impl Eval {
       };
       match v {
         Value::Ref(r) => {
-          info!("{:?}", r);
           thunk_id = *r;
+          if !ids.insert(thunk_id) {
+            bail!("reference cycle");
+          }
         }
         _ => break Ok(v),
       }

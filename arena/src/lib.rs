@@ -2,6 +2,7 @@ use std::{
   cell::UnsafeCell,
   cmp,
   fmt::{self, Debug},
+  hash::{Hash, Hasher},
   marker::PhantomData,
   mem,
   ops::{Index, IndexMut},
@@ -34,6 +35,18 @@ impl<T> Copy for Id<T> {}
 impl<T> Clone for Id<T> {
   fn clone(&self) -> Self {
     *self
+  }
+}
+impl<T> PartialEq for Id<T> {
+  fn eq(&self, other: &Self) -> bool {
+    self.ix0 == other.ix0 && self.ix1 == other.ix1
+  }
+}
+impl<T> Eq for Id<T> {}
+impl<T> Hash for Id<T> {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.ix0.hash(state);
+    self.ix1.hash(state);
   }
 }
 

@@ -1396,6 +1396,7 @@ dependencies = [
  "futures",
  "im",
  "log",
+ "matches",
  "parking_lot 0.11.0",
  "path_abs",
  "pretty_env_logger",
