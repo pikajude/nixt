@@ -1,11 +1,11 @@
 use crate::{
   bail,
-  builtins::strings::coerce_to_string,
   error::Result,
   thunk::{Context, Thunk, ThunkId},
   value::Value,
-  Eval,
 };
+
+use super::{builtins::strings::coerce_to_string, Eval};
 
 use syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 

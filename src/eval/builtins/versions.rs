@@ -1,4 +1,4 @@
-use crate::{error::Result, thunk::ThunkId, value::Value, Eval};
+use crate::{error::Result, eval::Eval, thunk::ThunkId, value::Value};
 use std::cmp::Ordering;
 
 pub async fn compare_versions(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {

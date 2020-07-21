@@ -1,10 +1,10 @@
 use crate::{
   bail,
   error::Result,
+  eval::Eval,
   primop, primop2, primop3, primop_async, primop_inline,
   thunk::{StaticScope, ThunkId},
   value::Value,
-  Eval,
 };
 use primop::Primop;
 use syntax::expr::Ident;
@@ -267,5 +267,5 @@ async fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
 async fn prim_less_than(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   let lhs = eval.value_of(lhs).await?;
   let rhs = eval.value_of(rhs).await?;
-  Ok(Value::Bool(crate::operators::less_than(lhs, rhs)?))
+  Ok(Value::Bool(crate::eval::operators::less_than(lhs, rhs)?))
 }

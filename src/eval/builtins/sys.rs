@@ -1,10 +1,9 @@
 use crate::{
   bail,
-  builtins::strings::coerce_new_string,
   error::Result,
+  eval::{builtins::strings::coerce_new_string, Eval},
   thunk::{StaticScope, ThunkId},
   value::Value,
-  Eval,
 };
 use anyhow::Context as _;
 use async_std::{
@@ -32,9 +31,7 @@ pub async fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
 
 pub async fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
   let path = eval.value_path_of(path).await?;
-  let meta = path
-    .metadata()
-    .with_context(|| format!("unable to import file `{}'", path.display()))?;
+  let meta = path.metadata().await?;
   let r = if meta.is_dir() {
     eval.load_file(path.join("default.nix")).await?
   } else {
@@ -81,8 +78,12 @@ pub async fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<Pat
       .value_string_of(*kv.get(&Ident::from("path")).unwrap())
       .await?;
 
-    let (context, prefix) =
+    let (_context, prefix) =
       coerce_new_string(eval, *kv.get(&Ident::from("prefix")).unwrap(), false, false).await?;
+
+    if !_context.is_empty() {
+      warn!("try to realise context {:?}", _context);
+    }
 
     if search_key == &*prefix {
       let full = add_children(path.to_string().into());

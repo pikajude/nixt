@@ -6,10 +6,7 @@ use std::{
   cell::UnsafeCell,
   collections::HashMap,
   mem::ManuallyDrop,
-  sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-  },
+  sync::{atomic::*, Arc},
 };
 use syntax::expr::{ExprRef, Ident};
 

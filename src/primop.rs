@@ -1,4 +1,4 @@
-use crate::{error::Result, thunk::ThunkId, value::Value, Eval};
+use crate::{error::Result, eval::Eval, thunk::ThunkId, value::Value};
 use futures::future::BoxFuture;
 use std::fmt::{self, Debug};
 
@@ -40,7 +40,7 @@ macro_rules! primop_inline {
 #[macro_export]
 macro_rules! primop_async {
   ($name:literal, $op:expr) => {
-    Value::Primop(Primop {
+    $crate::value::Value::Primop(Primop {
       name: $name,
       op: $crate::primop::Op::Async(Box::new(move |e, i| Box::pin($op(e, i)))),
     })

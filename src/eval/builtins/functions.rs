@@ -1,4 +1,4 @@
-use crate::{bail, error::Result, thunk::ThunkId, value::Value, Eval};
+use crate::{bail, error::Result, eval::Eval, thunk::ThunkId, value::Value};
 use syntax::expr::LambdaArg;
 
 pub async fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {

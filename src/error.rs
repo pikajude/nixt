@@ -1,9 +1,16 @@
+use std::fmt::{self, Display};
 use syntax::span::FileSpan;
 
 #[derive(Debug)]
 pub struct Error {
   pub err: anyhow::Error,
   pub trace: Vec<FileSpan>,
+}
+
+impl Display for Error {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    self.err.fmt(f)
+  }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

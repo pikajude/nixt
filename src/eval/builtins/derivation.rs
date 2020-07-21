@@ -2,10 +2,10 @@ use super::strings::coerce_to_string;
 use crate::{
   bail,
   error::Result,
-  primop, primop2, primop3,
-  thunk::{StaticScope, ThunkId},
+  eval::Eval,
+  hash::{Hash, HashType},
+  thunk::ThunkId,
   value::{PathSet, Value},
-  Eval,
 };
 use std::collections::{BTreeSet, HashMap};
 use syntax::expr::Ident;
@@ -116,6 +116,17 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
 
   for path in &context {
     debug!("input source: {}", path.display());
+  }
+
+  if let Some(h) = output_hash {
+    if outputs_set.len() != 1 || !outputs_set.contains("out") {
+      bail!("multiple outputs are not supported in fixed-output derivations");
+    }
+
+    let drv_hash =
+      Hash::new_allow_empty(h, output_hash_algo.and_then(|x| x.parse::<HashType>().ok()))?;
+
+    debug!("{:?}", drv_hash);
   }
 
   debug!("{:?}", drv);

@@ -1,9 +1,9 @@
 use crate::{
   bail,
   error::Result,
+  eval::Eval,
   thunk::{StaticScope, ThunkId},
   value::{PathSet, Value},
-  Eval,
 };
 use serde_json::{Map, Number, Value as JSON};
 use syntax::expr::Ident;

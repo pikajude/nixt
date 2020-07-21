@@ -1,9 +1,9 @@
 use crate::{
   bail,
   error::Result,
+  eval::Eval,
   thunk::{Thunk, ThunkCell, ThunkId},
   value::Value,
-  Eval,
 };
 
 pub async fn gen_list(eval: &Eval, generator: ThunkId, len: ThunkId) -> Result<Value> {
@@ -44,7 +44,7 @@ pub async fn elem_at(eval: &Eval, list: ThunkId, index: ThunkId) -> Result<Value
 pub async fn elem(eval: &Eval, thing: ThunkId, list: ThunkId) -> Result<Value> {
   let thing = eval.value_of(thing).await?;
   for item in eval.value_list_of(list).await? {
-    if crate::operators::eval_eq(eval, thing, eval.value_of(*item).await?).await? {
+    if crate::eval::operators::eval_eq(eval, thing, eval.value_of(*item).await?).await? {
       return Ok(Value::Bool(true));
     }
   }
