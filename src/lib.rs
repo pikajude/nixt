@@ -26,24 +26,9 @@ mod error;
 mod eval;
 mod ext;
 mod hash;
-mod primop;
-mod thunk;
 mod util;
-mod value;
 
 pub use eval::Eval;
 
 pub use config::Config;
 pub use error::Result;
-
-use async_std::fs;
-use codespan_reporting::{
-  diagnostic::{Diagnostic, Label, LabelStyle},
-  term::emit,
-};
-use error::*;
-use ext::*;
-use primop::{Op, Primop};
-use termcolor::{ColorChoice, StandardStream};
-use thunk::*;
-use value::{PathSet, Value};

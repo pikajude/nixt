@@ -1,9 +1,11 @@
 use crate::{
   bail,
   error::Result,
-  eval::Eval,
-  thunk::{Thunk, ThunkCell, ThunkId},
-  value::Value,
+  eval::{
+    thunk::{Thunk, ThunkCell, ThunkId},
+    value::Value,
+    Eval,
+  },
 };
 
 pub async fn gen_list(eval: &Eval, generator: ThunkId, len: ThunkId) -> Result<Value> {

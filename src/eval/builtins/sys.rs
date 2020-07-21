@@ -1,9 +1,12 @@
 use crate::{
   bail,
   error::Result,
-  eval::{builtins::strings::coerce_new_string, Eval},
-  thunk::{StaticScope, ThunkId},
-  value::Value,
+  eval::{
+    builtins::strings::coerce_new_string,
+    thunk::{StaticScope, ThunkId},
+    value::Value,
+    Eval,
+  },
 };
 use anyhow::Context as _;
 use async_std::{

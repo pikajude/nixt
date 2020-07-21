@@ -2,10 +2,12 @@ use super::strings::coerce_to_string;
 use crate::{
   bail,
   error::Result,
-  eval::Eval,
+  eval::{
+    thunk::ThunkId,
+    value::{PathSet, Value},
+    Eval,
+  },
   hash::{Hash, HashType},
-  thunk::ThunkId,
-  value::{PathSet, Value},
 };
 use std::collections::{BTreeSet, HashMap};
 use syntax::expr::Ident;

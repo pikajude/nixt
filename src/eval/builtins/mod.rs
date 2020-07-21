@@ -1,10 +1,13 @@
 use crate::{
   bail,
   error::Result,
-  eval::Eval,
-  primop, primop2, primop3, primop_async, primop_inline,
-  thunk::{StaticScope, ThunkId},
-  value::Value,
+  eval::{
+    primop,
+    thunk::{StaticScope, ThunkId},
+    value::Value,
+    Eval,
+  },
+  primop2, primop3, primop_async, primop_inline,
 };
 use primop::Primop;
 use syntax::expr::Ident;

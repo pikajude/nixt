@@ -1,7 +1,5 @@
-use crate::{
-  primop::Primop,
-  thunk::{Context, StaticScope, ThunkId},
-};
+use super::thunk::{Context, StaticScope, ThunkId};
+use crate::eval::primop::Primop;
 use async_std::path::PathBuf;
 use std::collections::BTreeSet;
 use syntax::expr;

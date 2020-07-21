@@ -2,9 +2,6 @@ use crate::{
   bail,
   error::{Error, Result, Traced},
   ext::ImmutVec,
-  primop::{Op, Primop},
-  thunk::{Context, Scope, StaticScope, Thunk, ThunkCell, ThunkId},
-  value::{PathSet, Value},
   Config,
 };
 use arena::Arena;
@@ -23,6 +20,7 @@ use expr::{
   Apply, Assert, AttrList, AttrName, AttrSet, Binding, FormalDef, FormalsAt, If, InheritFrom,
   LambdaArg, Let, List, Member, Select, With,
 };
+use primop::{Op, Primop};
 use std::{
   collections::{HashMap, HashSet},
   sync::{
@@ -35,9 +33,14 @@ use syntax::{
   span::{spanned, FileSpan, Spanned},
 };
 use termcolor::{ColorChoice, StandardStream};
+use thunk::{Context, Scope, StaticScope, Thunk, ThunkCell, ThunkId};
+use value::{PathSet, Value};
 
-mod builtins;
-mod operators;
+pub mod builtins;
+pub mod operators;
+pub mod primop;
+pub mod thunk;
+pub mod value;
 
 pub struct Eval {
   items: Arena<Thunk>,

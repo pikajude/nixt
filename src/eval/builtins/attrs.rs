@@ -1,9 +1,11 @@
 use crate::{
   bail,
   error::Result,
-  eval::Eval,
-  thunk::{StaticScope, Thunk, ThunkId},
-  value::Value,
+  eval::{
+    thunk::{StaticScope, Thunk, ThunkId},
+    value::Value,
+    Eval,
+  },
 };
 use std::collections::HashSet;
 use syntax::expr::Ident;

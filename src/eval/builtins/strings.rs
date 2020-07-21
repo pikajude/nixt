@@ -1,9 +1,11 @@
 use crate::{
   bail,
   error::Result,
-  eval::Eval,
-  thunk::ThunkId,
-  value::{PathSet, Value},
+  eval::{
+    thunk::ThunkId,
+    value::{PathSet, Value},
+    Eval,
+  },
 };
 use std::collections::BTreeSet;
 
