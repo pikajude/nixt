@@ -2,7 +2,8 @@ use crate::{
   primop::Primop,
   thunk::{Context, StaticScope, ThunkId},
 };
-use std::{collections::BTreeSet, path::PathBuf};
+use async_std::path::PathBuf;
+use std::collections::BTreeSet;
 use syntax::expr;
 
 pub type PathSet = BTreeSet<PathBuf>;

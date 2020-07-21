@@ -1,8 +1,8 @@
 use crate::{bail, error::Result, thunk::ThunkId, value::Value, Eval};
 use syntax::expr::LambdaArg;
 
-pub fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
-  let l = match eval.value_of(fun)? {
+pub async fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
+  let l = match eval.value_of(fun).await? {
     Value::Lambda { lambda, .. } => lambda,
     v => bail!("cannot call functionArgs on {}", v.typename()),
   };

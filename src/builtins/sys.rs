@@ -1,45 +1,50 @@
 use crate::{
   bail,
+  builtins::strings::coerce_new_string,
   error::Result,
   thunk::{StaticScope, ThunkId},
   value::Value,
   Eval,
 };
 use anyhow::Context as _;
-use std::path::{Path, PathBuf};
+use async_std::{
+  fs,
+  path::{Path, PathBuf},
+};
+use futures::TryStreamExt;
 use syntax::expr::Ident;
 
-pub fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
-  let varname = eval.value_string_of(varname)?;
+pub async fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
+  let varname = eval.value_string_of(varname).await?;
   match std::env::var(String::from(varname)) {
     Ok(s) => Ok(Value::string_bare(s)),
     Err(_) => Ok(Value::string_bare("")),
   }
 }
 
-pub fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
-  Ok(Value::Bool(match eval.value_of(path)? {
-    Value::String { string, .. } => std::fs::metadata(string).is_ok(),
-    Value::Path(p) => p.exists(),
+pub async fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
+  Ok(Value::Bool(match eval.value_of(path).await? {
+    Value::String { string, .. } => fs::metadata(string).await.is_ok(),
+    Value::Path(p) => p.exists().await,
     _ => false,
   }))
 }
 
-pub fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
-  let path = eval.value_path_of(path)?;
+pub async fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path).await?;
   let meta = path
     .metadata()
     .with_context(|| format!("unable to import file `{}'", path.display()))?;
   let r = if meta.is_dir() {
-    eval.load_file(path.join("default.nix"))?
+    eval.load_file(path.join("default.nix")).await?
   } else {
-    eval.load_file(path)?
+    eval.load_file(path).await?
   };
   Ok(Value::Ref(r))
 }
 
-pub fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
-  let path = eval.value_path_of(path)?;
+pub async fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path).await?;
   Ok(Value::string_bare(
     path
       .iter()
@@ -49,13 +54,13 @@ pub fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
   ))
 }
 
-pub fn read_file(eval: &Eval, path: ThunkId) -> Result<Value> {
-  let path = eval.value_path_of(path)?;
-  Ok(Value::string_bare(std::fs::read_to_string(path)?))
+pub async fn read_file(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path).await?;
+  Ok(Value::string_bare(fs::read_to_string(path).await?))
 }
 
-pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> {
-  let entries = eval.value_list_of(path)?;
+pub async fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> {
+  let entries = eval.value_list_of(path).await?;
   let target = Path::new(filename);
   let mut path_parts = target.components();
   let search_key = path_parts
@@ -71,25 +76,23 @@ pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> 
     }
   };
   for entry in entries {
-    let kv = eval.value_attrs_of(*entry)?;
-    let path = eval.value_string_of(*kv.get(&Ident::from("path")).unwrap())?;
+    let kv = eval.value_attrs_of(*entry).await?;
+    let path = eval
+      .value_string_of(*kv.get(&Ident::from("path")).unwrap())
+      .await?;
 
-    let (context, prefix) = crate::builtins::strings::coerce_new_string(
-      eval,
-      *kv.get(&Ident::from("prefix")).unwrap(),
-      false,
-      false,
-    )?;
+    let (context, prefix) =
+      coerce_new_string(eval, *kv.get(&Ident::from("prefix")).unwrap(), false, false).await?;
 
     if search_key == &*prefix {
       let full = add_children(path.to_string().into());
-      if full.exists() {
+      if full.exists().await {
         return Ok(full);
       }
     } else if prefix.is_empty() {
-      if let Ok(iter) = std::fs::read_dir(&*path) {
-        for next_item in iter {
-          let next_item = next_item?;
+      if let Ok(mut iter) = fs::read_dir(&*path).await {
+        while let Some(next_item) = iter.try_next().await? {
+          let next_item = next_item;
           if next_item.file_name() == search_key {
             return Ok(add_children(next_item.path()));
           }

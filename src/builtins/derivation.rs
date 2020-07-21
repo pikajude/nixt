@@ -20,17 +20,19 @@ struct Derivation<'a> {
   input_sources: PathSet,
 }
 
-pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
-  let attrs = eval.value_attrs_of(args)?;
+pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
+  let attrs = eval.value_attrs_of(args).await?;
 
   let mut context = PathSet::new();
 
-  let name = eval.value_string_of(
-    attrs
-      .get(&Ident::from("name"))
-      .copied()
-      .ok_or_else(|| anyhow::anyhow!("required attribute `name' missing"))?,
-  )?;
+  let name = eval
+    .value_string_of(
+      attrs
+        .get(&Ident::from("name"))
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("required attribute `name' missing"))?,
+    )
+    .await?;
 
   if attrs.contains_key(&Ident::from("__structuredAttrs")) {
     bail!("not implemented: structuredAttrs");
@@ -42,7 +44,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   };
 
   let ignore_nulls = match attrs.get(&Ident::from("__ignoreNulls")) {
-    Some(n) => eval.value_bool_of(*n)?,
+    Some(n) => eval.value_bool_of(*n).await?,
     None => false,
   };
 
@@ -59,20 +61,21 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "args" {
-      for arg in eval.value_list_of(*v)? {
+      for arg in eval.value_list_of(*v).await? {
         drv
           .args
-          .push(coerce_to_string(eval, *arg, &mut context, true, false)?);
+          .push(coerce_to_string(eval, *arg, &mut context, true, false).await?);
       }
       continue;
     }
 
-    drv
-      .env
-      .insert(k, coerce_to_string(eval, *v, &mut context, true, false)?);
+    drv.env.insert(
+      k,
+      coerce_to_string(eval, *v, &mut context, true, false).await?,
+    );
 
     if k == "outputHashMode" {
-      is_recursive = match eval.value_string_of(*v)? {
+      is_recursive = match eval.value_string_of(*v).await? {
         "recursive" => true,
         "flat" => false,
         x => bail!("invalid value `{}' for outputHashMode", x),
@@ -80,17 +83,17 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "outputHashAlgo" {
-      output_hash_algo = Some(eval.value_string_of(*v)?);
+      output_hash_algo = Some(eval.value_string_of(*v).await?);
     }
 
     if k == "outputHash" {
-      output_hash = Some(eval.value_string_of(*v)?);
+      output_hash = Some(eval.value_string_of(*v).await?);
     }
 
     if k == "outputs" {
       outputs_set.clear();
-      for name in eval.value_list_of(*v)? {
-        let name = eval.value_string_of(*name)?;
+      for name in eval.value_list_of(*v).await? {
+        let name = eval.value_string_of(*name).await?;
         if name == "drv" {
           bail!("derivation outputs cannot be named `drv'");
         }
@@ -104,10 +107,10 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "builder" {
-      drv.builder = Some(eval.value_with_context_of(*v)?.0);
+      drv.builder = Some(eval.value_with_context_of(*v).await?.0);
     }
     if k == "system" {
-      drv.system = Some(eval.value_with_context_of(*v)?.0);
+      drv.system = Some(eval.value_with_context_of(*v).await?.0);
     }
   }
 

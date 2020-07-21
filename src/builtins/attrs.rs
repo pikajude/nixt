@@ -8,8 +8,8 @@ use crate::{
 use std::collections::HashSet;
 use syntax::expr::Ident;
 
-pub fn attr_names(eval: &Eval, attrs: ThunkId) -> Result<Value> {
-  let mut keys = eval.value_attrs_of(attrs)?.keys().collect::<Vec<_>>();
+pub async fn attr_names(eval: &Eval, attrs: ThunkId) -> Result<Value> {
+  let mut keys = eval.value_attrs_of(attrs).await?.keys().collect::<Vec<_>>();
   keys.sort_unstable();
   Ok(Value::List(
     eval.items.alloc_extend(
@@ -20,34 +20,36 @@ pub fn attr_names(eval: &Eval, attrs: ThunkId) -> Result<Value> {
   ))
 }
 
-pub fn intersect_attrs(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
-  let attrs = eval.value_attrs_of(lhs)?;
-  let mut attrs2 = eval.value_attrs_of(rhs)?.clone();
+pub async fn intersect_attrs(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  let attrs = eval.value_attrs_of(lhs).await?;
+  let mut attrs2 = eval.value_attrs_of(rhs).await?.clone();
   attrs2.retain(|key, _| attrs.contains_key(key));
   Ok(Value::AttrSet(attrs2))
 }
 
-pub fn remove_attrs(eval: &Eval, attrset: ThunkId, to_remove: ThunkId) -> Result<Value> {
-  let mut attrset = eval.value_attrs_of(attrset)?.clone();
-  for attr_name in eval.value_list_of(to_remove)? {
-    let remove_item = eval.value_string_of(*attr_name)?;
+pub async fn remove_attrs(eval: &Eval, attrset: ThunkId, to_remove: ThunkId) -> Result<Value> {
+  let mut attrset = eval.value_attrs_of(attrset).await?.clone();
+  for attr_name in eval.value_list_of(to_remove).await? {
+    let remove_item = eval.value_string_of(*attr_name).await?;
     attrset.remove(&Ident::from(remove_item));
   }
   Ok(Value::AttrSet(attrset))
 }
 
-pub fn list_to_attrs(eval: &Eval, list: ThunkId) -> Result<Value> {
+pub async fn list_to_attrs(eval: &Eval, list: ThunkId) -> Result<Value> {
   let mut attrs = StaticScope::new();
   let name_sym = Ident::from("name");
   let value_sym = Ident::from("value");
-  for obj in eval.value_list_of(list)? {
-    let obj = eval.value_attrs_of(*obj)?;
-    let name = eval.value_string_of(
-      obj
-        .get(&name_sym)
-        .copied()
-        .ok_or_else(|| anyhow::anyhow!("Missing attribute name"))?,
-    )?;
+  for obj in eval.value_list_of(list).await? {
+    let obj = eval.value_attrs_of(*obj).await?;
+    let name = eval
+      .value_string_of(
+        obj
+          .get(&name_sym)
+          .copied()
+          .ok_or_else(|| anyhow::anyhow!("Missing attribute name"))?,
+      )
+      .await?;
     let value = obj
       .get(&value_sym)
       .copied()
@@ -57,13 +59,15 @@ pub fn list_to_attrs(eval: &Eval, list: ThunkId) -> Result<Value> {
   Ok(Value::AttrSet(attrs))
 }
 
-pub fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
+pub async fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
   let starting_set = eval
-    .sel(input, &Ident::from("startSet"))?
+    .sel(input, &Ident::from("startSet"))
+    .await?
     .ok_or_else(|| anyhow::anyhow!("attribute `startSet' missing in argument to genericClosure"))?;
-  let mut work_set = eval.value_list_of(starting_set)?.to_vec();
+  let mut work_set = eval.value_list_of(starting_set).await?.to_vec();
   let operator = eval
-    .sel(input, &Ident::from("operator"))?
+    .sel(input, &Ident::from("operator"))
+    .await?
     .ok_or_else(|| anyhow::anyhow!("attribute `operator' missing in argument to genericClosure"))?;
 
   let mut res = vec![];
@@ -71,20 +75,21 @@ pub fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
 
   while let Some(next_item) = work_set.pop() {
     let sort_key_id = eval
-      .sel(next_item, &Ident::from("key"))?
+      .sel(next_item, &Ident::from("key"))
+      .await?
       .ok_or_else(|| anyhow::anyhow!("attribute `key' missing"))?;
-    let sort_key = eval.value_string_of(sort_key_id)?;
+    let sort_key = eval.value_string_of(sort_key_id).await?;
 
     if !done_keys.insert(sort_key.to_string()) {
       continue;
     }
     res.push(next_item);
 
-    let mut value_lhs = &eval.step_fn(operator, next_item)?;
+    let mut value_lhs = &eval.step_fn(operator, next_item).await?;
 
     // TODO make a convenience function here
     while let Value::Ref(r) = value_lhs {
-      value_lhs = eval.value_of(*r)?;
+      value_lhs = eval.value_of(*r).await?;
     }
 
     match value_lhs {
@@ -101,8 +106,8 @@ pub fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
   Ok(Value::List(res))
 }
 
-pub fn has_attr(eval: &Eval, attrname: ThunkId, attrs: ThunkId) -> Result<Value> {
-  let attrs = eval.value_attrs_of(attrs)?;
-  let aname = eval.value_string_of(attrname)?;
+pub async fn has_attr(eval: &Eval, attrname: ThunkId, attrs: ThunkId) -> Result<Value> {
+  let attrs = eval.value_attrs_of(attrs).await?;
+  let aname = eval.value_string_of(attrname).await?;
   Ok(Value::Bool(attrs.contains_key(&Ident::from(aname))))
 }

@@ -1,8 +1,9 @@
 use crate::{error::Result, thunk::ThunkId, value::Value, Eval};
+use futures::future::BoxFuture;
 use std::fmt::{self, Debug};
 
 pub enum Op {
-  Dynamic(Box<dyn Fn(&Eval, ThunkId) -> Result<Value>>),
+  Async(Box<dyn Fn(&Eval, ThunkId) -> BoxFuture<Result<Value>> + Send + Sync>),
   Static(fn(&Eval, ThunkId) -> Result<Value>),
 }
 
@@ -27,13 +28,36 @@ impl Primop {
 }
 
 #[macro_export]
+macro_rules! primop_inline {
+  ($name:expr, |$($p:pat),*| $e:expr) => {
+    $crate::value::Value::Primop($crate::primop::Primop {
+      name: $name,
+      op: $crate::primop::Op::Async(Box::new(move |$($p),*| Box::pin(async move { $e })))
+    })
+  }
+}
+
+#[macro_export]
+macro_rules! primop_async {
+  ($name:literal, $op:expr) => {
+    Value::Primop(Primop {
+      name: $name,
+      op: $crate::primop::Op::Async(Box::new(move |e, i| Box::pin($op(e, i)))),
+    })
+  };
+}
+
+#[macro_export]
 macro_rules! primop2 {
   ($name:literal, $op:expr) => {
-    $crate::primop::Primop::single($name, move |_, t1| {
-      Ok($crate::value::Value::Primop($crate::primop::Primop {
-        name: concat!($name, "-app"),
-        op: $crate::primop::Op::Dynamic(Box::new(move |e, t2| $op(e, t1, t2))),
-      }))
+    $crate::value::Value::Primop($crate::primop::Primop {
+      name: $name,
+      op: $crate::primop::Op::Static(move |_, t1| {
+        Ok($crate::value::Value::Primop($crate::primop::Primop {
+          name: concat!($name, "-app"),
+          op: $crate::primop::Op::Async(Box::new(move |eval, t2| Box::pin($op(eval, t1, t2)))),
+        }))
+      }),
     })
   };
 }
@@ -41,16 +65,23 @@ macro_rules! primop2 {
 #[macro_export]
 macro_rules! primop3 {
   ($name:literal, $op:expr) => {
-    $crate::primop::Primop::single($name, move |_, t1| {
-      Ok($crate::value::Value::Primop($crate::primop::Primop {
-        name: concat!($name, "-app"),
-        op: $crate::primop::Op::Dynamic(Box::new(move |_, t2| {
-          Ok($crate::value::Value::Primop($crate::primop::Primop {
-            name: concat!($name, "-app"),
-            op: $crate::primop::Op::Dynamic(Box::new(move |e, t3| $op(e, t1, t2, t3))),
-          }))
-        })),
-      }))
+    $crate::value::Value::Primop($crate::primop::Primop {
+      name: $name,
+      op: $crate::primop::Op::Static(move |_, t1| {
+        Ok($crate::value::Value::Primop($crate::primop::Primop {
+          name: concat!($name, "-app"),
+          op: $crate::primop::Op::Async(Box::new(move |_, t2| {
+            Box::pin(async move {
+              Ok($crate::value::Value::Primop($crate::primop::Primop {
+                name: concat!($name, "-app"),
+                op: $crate::primop::Op::Async(Box::new(move |eval, t3| {
+                  Box::pin($op(eval, t1, t2, t3))
+                })),
+              }))
+            })
+          })),
+        }))
+      }),
     })
   };
 }
