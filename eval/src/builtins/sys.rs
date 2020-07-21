@@ -1,19 +1,15 @@
 use crate::{
-  bail,
-  error::Result,
-  eval::{
-    builtins::strings::coerce_new_string,
-    thunk::{StaticScope, ThunkId},
-    value::Value,
-    Eval,
-  },
+  builtins::strings::coerce_new_string,
+  thunk::{StaticScope, ThunkId},
+  value::Value,
+  Eval,
 };
-use anyhow::Context as _;
 use async_std::{
   fs,
   path::{Path, PathBuf},
 };
 use futures::TryStreamExt;
+use nix_util::*;
 use syntax::expr::Ident;
 
 pub async fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {

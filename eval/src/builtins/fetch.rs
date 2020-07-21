@@ -1,8 +1,5 @@
-use crate::{
-  bail,
-  error::Result,
-  eval::{thunk::ThunkId, value::Value, Eval},
-};
+use crate::{thunk::ThunkId, value::Value, Eval};
+use nix_util::*;
 
 pub async fn fetch_tarball(_: &Eval, _: ThunkId) -> Result<Value> {
   // match eval.value_of(args).await? {

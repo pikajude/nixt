@@ -1,5 +1,5 @@
-use crate::{bail, error::Result, util};
 use derive_more::Display;
+use nix_util::*;
 use std::{
   fmt::{self, Debug},
   hash::Hasher,
@@ -166,9 +166,9 @@ impl Hash {
 
   /// Decode from serialized representation
   pub fn decode(input: &str) -> Result<Self> {
-    if let Some((ty, rest)) = util::break_str(input, ':') {
+    if let Some((ty, rest)) = break_str(input, ':') {
       Ok(Self::decode_with_type(rest, ty.parse()?, false)?)
-    } else if let Some((ty, rest)) = util::break_str(input, '-') {
+    } else if let Some((ty, rest)) = break_str(input, '-') {
       Ok(Self::decode_with_type(rest, ty.parse()?, true)?)
     } else {
       bail!(Error::UntypedHash(input.into()))

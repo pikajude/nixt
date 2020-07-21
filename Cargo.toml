@@ -28,6 +28,9 @@ derive_more = "0.99.9"
 binascii = "0.1.4"
 lazy_static = "1.4.0"
 
+eval = { path = "eval" }
+nix-util = { path = "util" }
+
 [dev-dependencies]
 tempfile = "3.1.0"
 tar = "0.4.29"
@@ -38,7 +41,7 @@ assert_matches = "1.3.0"
 hex = "0.4.2"
 
 [workspace]
-members = ["arena", "syntax"]
+members = ["arena", "syntax", "eval", "util", "core"]
 
 [features]
 blackhole = []

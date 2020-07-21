@@ -1,7 +1,5 @@
-use crate::{
-  error::Result,
-  eval::{thunk::ThunkId, value::Value, Eval},
-};
+use crate::{thunk::ThunkId, value::Value, Eval};
+use nix_util::*;
 use std::cmp::Ordering;
 
 pub async fn compare_versions(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {

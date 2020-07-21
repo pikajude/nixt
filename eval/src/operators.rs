@@ -1,12 +1,10 @@
-use crate::{bail, error::Result};
-
 use super::{
   builtins::strings::coerce_to_string,
   thunk::{Context, Thunk, ThunkId},
   value::Value,
   Eval,
 };
-
+use nix_util::*;
 use syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 
 pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {

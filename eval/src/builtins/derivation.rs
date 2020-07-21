@@ -1,14 +1,11 @@
-use super::strings::coerce_to_string;
 use crate::{
-  bail,
-  error::Result,
-  eval::{
-    thunk::ThunkId,
-    value::{PathSet, Value},
-    Eval,
-  },
-  hash::{Hash, HashType},
+  builtins::strings::coerce_to_string,
+  thunk::ThunkId,
+  value::{PathSet, Value},
+  Eval,
 };
+use nix_core::hash::{Hash, HashType};
+use nix_util::*;
 use std::collections::{BTreeSet, HashMap};
 use syntax::expr::Ident;
 

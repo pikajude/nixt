@@ -1,12 +1,9 @@
 use crate::{
-  bail,
-  error::Result,
-  eval::{
-    thunk::ThunkId,
-    value::{PathSet, Value},
-    Eval,
-  },
+  thunk::ThunkId,
+  value::{PathSet, Value},
+  Eval,
 };
+use nix_util::*;
 use std::collections::BTreeSet;
 
 pub async fn substring(

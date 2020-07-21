@@ -465,6 +465,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "eval"
+version = "0.1.0"
+dependencies = [
+ "arena",
+ "async-recursion",
+ "async-std",
+ "codespan",
+ "codespan-reporting",
+ "futures",
+ "im",
+ "log",
+ "nix-core",
+ "nix-util",
+ "parking_lot",
+ "path_abs",
+ "pretty_env_logger",
+ "reqwest",
+ "serde_json",
+ "syntax",
+ "tar",
+ "tempfile",
+ "termcolor",
+ "xz2",
+]
+
+[[package]]
 name = "fake-simd"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1050,6 +1076,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix-core"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "binascii",
+ "derive_more",
+ "hex",
+ "lazy_static",
+ "log",
+ "nix-util",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
+name = "nix-util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "syntax",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1456,11 +1505,13 @@ dependencies = [
  "codespan-reporting",
  "derive_more",
  "dirs-next",
+ "eval",
  "futures",
  "hex",
  "im",
  "lazy_static",
  "log",
+ "nix-util",
  "parking_lot",
  "path_abs",
  "pretty_env_logger",

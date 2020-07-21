@@ -1,14 +1,10 @@
 use crate::{
-  bail,
-  error::Result,
-  eval::{
-    primop,
-    thunk::{StaticScope, ThunkId},
-    value::Value,
-    Eval,
-  },
-  primop2, primop3, primop_async, primop_inline,
+  primop, primop2, primop3, primop_inline,
+  thunk::{StaticScope, ThunkId},
+  value::Value,
+  Eval,
 };
+use nix_util::*;
 use primop::Primop;
 use syntax::expr::Ident;
 
@@ -25,15 +21,14 @@ pub mod versions;
 pub fn init_primops(eval: &mut Eval) {
   eval.toplevel.insert(
     "import".into(),
-    eval.new_value(primop_async!("import", sys::import)),
+    eval.new_value(primop!("import", sys::import)),
   );
-  eval.toplevel.insert(
-    "abort".into(),
-    eval.new_value(primop_async!("abort", nix_abort)),
-  );
+  eval
+    .toplevel
+    .insert("abort".into(), eval.new_value(primop!("abort", nix_abort)));
   eval.toplevel.insert(
     "toString".into(),
-    eval.new_value(primop_async!("toString", strings::prim_to_string)),
+    eval.new_value(primop!("toString", strings::prim_to_string)),
   );
   let nixver = eval.new_value(Value::string_bare("2.3.7"));
   eval
@@ -54,7 +49,7 @@ pub fn init_primops(eval: &mut Eval) {
     .insert("false".into(), eval.new_value(Value::Bool(false)));
   eval.toplevel.insert(
     "baseNameOf".into(),
-    eval.new_value(primop_async!("baseNameOf", sys::base_name_of)),
+    eval.new_value(primop!("baseNameOf", sys::base_name_of)),
   );
   eval.toplevel.insert(
     "removeAttrs".into(),
@@ -62,7 +57,7 @@ pub fn init_primops(eval: &mut Eval) {
   );
   eval.toplevel.insert(
     "derivation".into(),
-    eval.new_value(primop_async!("derivation", derivation::derivation_strict)),
+    eval.new_value(primop!("derivation", derivation::derivation_strict)),
   );
   eval.toplevel.insert(
     "builtins".into(),
@@ -75,11 +70,11 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "attrNames".into(),
-        eval.new_value(primop_async!("attrNames", attrs::attr_names)),
+        eval.new_value(primop!("attrNames", attrs::attr_names)),
       );
       builtins.insert(
         "concatLists".into(),
-        eval.new_value(primop_async!("concatLists", lists::concat_lists)),
+        eval.new_value(primop!("concatLists", lists::concat_lists)),
       );
       builtins.insert(
         "compareVersions".into(),
@@ -100,32 +95,29 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "fetchTarball".into(),
-        eval.new_value(primop_async!("fetchTarball", fetch::fetch_tarball)),
+        eval.new_value(primop!("fetchTarball", fetch::fetch_tarball)),
       );
       builtins.insert(
         "fromJSON".into(),
-        eval.new_value(primop_async!("fromJSON", json::from_json)),
+        eval.new_value(primop!("fromJSON", json::from_json)),
       );
       builtins.insert(
         "functionArgs".into(),
-        eval.new_value(primop_async!("functionArgs", functions::function_args)),
+        eval.new_value(primop!("functionArgs", functions::function_args)),
       );
       builtins.insert(
         "genericClosure".into(),
-        eval.new_value(primop_async!("genericClosure", attrs::generic_closure)),
+        eval.new_value(primop!("genericClosure", attrs::generic_closure)),
       );
       builtins.insert(
         "getEnv".into(),
-        eval.new_value(primop_async!("getEnv", sys::get_env)),
+        eval.new_value(primop!("getEnv", sys::get_env)),
       );
       builtins.insert(
         "genList".into(),
         eval.new_value(primop2!("genList", lists::gen_list)),
       );
-      builtins.insert(
-        "head".into(),
-        eval.new_value(primop_async!("head", lists::head)),
-      );
+      builtins.insert("head".into(), eval.new_value(primop!("head", lists::head)));
       builtins.insert(
         "filter".into(),
         eval.new_value(primop2!("filter", lists::filter)),
@@ -134,10 +126,7 @@ pub fn init_primops(eval: &mut Eval) {
         "lessThan".into(),
         eval.new_value(primop2!("lessThan", prim_less_than)),
       );
-      builtins.insert(
-        "tail".into(),
-        eval.new_value(primop_async!("tail", lists::tail)),
-      );
+      builtins.insert("tail".into(), eval.new_value(primop!("tail", lists::tail)));
       builtins.insert(
         "isString".into(),
         eval.new_value(primop_inline!("isString", |e, i| {
@@ -194,15 +183,15 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "listToAttrs".into(),
-        eval.new_value(primop_async!("listToAttrs", attrs::list_to_attrs)),
+        eval.new_value(primop!("listToAttrs", attrs::list_to_attrs)),
       );
       builtins.insert(
         "pathExists".into(),
-        eval.new_value(primop_async!("pathExists", sys::path_exists)),
+        eval.new_value(primop!("pathExists", sys::path_exists)),
       );
       builtins.insert(
         "readFile".into(),
-        eval.new_value(primop_async!("readFile", sys::read_file)),
+        eval.new_value(primop!("readFile", sys::read_file)),
       );
       builtins.insert(
         "removeAttrs".into(),
@@ -226,11 +215,11 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert(
         "toJSON".into(),
-        eval.new_value(primop_async!("toJSON", json::to_json_primop)),
+        eval.new_value(primop!("toJSON", json::to_json_primop)),
       );
       builtins.insert(
         "tryEval".into(),
-        eval.new_value(primop_async!("tryEval", try_eval)),
+        eval.new_value(primop!("tryEval", try_eval)),
       );
       builtins
     })),
@@ -270,5 +259,5 @@ async fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
 async fn prim_less_than(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   let lhs = eval.value_of(lhs).await?;
   let rhs = eval.value_of(rhs).await?;
-  Ok(Value::Bool(crate::eval::operators::less_than(lhs, rhs)?))
+  Ok(Value::Bool(crate::operators::less_than(lhs, rhs)?))
 }

@@ -1,9 +1,10 @@
-use crate::{
-  bail,
-  error::{Error, Result, Traced},
-  ext::ImmutVec,
-  Config,
-};
+// used for wrapper-free Either in thunk.rs
+#![feature(untagged_unions)]
+
+#[macro_use] extern crate log;
+#[macro_use] extern crate async_recursion;
+#[macro_use] extern crate futures;
+
 use arena::Arena;
 use async_std::{
   fs,
@@ -16,10 +17,13 @@ use codespan_reporting::{
   diagnostic::{Diagnostic, Label, LabelStyle},
   term::emit,
 };
+use config::Config;
 use expr::{
   Apply, Assert, AttrList, AttrName, AttrSet, Binding, FormalDef, FormalsAt, If, InheritFrom,
   LambdaArg, Let, List, Member, Select, With,
 };
+use ext::ImmutVec;
+use nix_util::*;
 use primop::{Op, Primop};
 use std::{
   collections::{HashMap, HashSet},
@@ -37,6 +41,8 @@ use thunk::{Context, Scope, StaticScope, Thunk, ThunkCell, ThunkId};
 use value::{PathSet, Value};
 
 pub mod builtins;
+mod config;
+mod ext;
 pub mod operators;
 pub mod primop;
 pub mod thunk;

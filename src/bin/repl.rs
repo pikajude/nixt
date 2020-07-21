@@ -1,9 +1,9 @@
 #[macro_use] extern crate log;
 
-use rnix::Eval;
+use eval::Eval;
 
 #[async_std::main]
-async fn main() -> rnix::Result<()> {
+async fn main() -> nix_util::Result<()> {
   pretty_env_logger::init();
 
   let eval = Eval::new();

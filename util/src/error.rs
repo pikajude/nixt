@@ -57,12 +57,12 @@ impl<E: Into<anyhow::Error>> From<E> for Error {
 #[macro_export]
 macro_rules! bail {
     ($msg:literal $(,)?) => {
-        return Err($crate::error::Error::from(anyhow::anyhow!($msg)));
+        return Err($crate::Error::from($crate::anyhow::anyhow!($msg)));
     };
     ($err:expr $(,)?) => {
-        return Err($crate::error::Error::from(anyhow::anyhow!($err)));
+        return Err($crate::Error::from($crate::anyhow::anyhow!($err)));
     };
     ($fmt:expr, $($arg:tt)*) => {
-        return Err($crate::error::Error::from(anyhow::anyhow!($fmt, $($arg)*)));
+        return Err($crate::Error::from($crate::anyhow::anyhow!($fmt, $($arg)*)));
     };
 }

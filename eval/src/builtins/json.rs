@@ -1,12 +1,9 @@
 use crate::{
-  bail,
-  error::Result,
-  eval::{
-    thunk::{StaticScope, ThunkId},
-    value::{PathSet, Value},
-    Eval,
-  },
+  thunk::{StaticScope, ThunkId},
+  value::{PathSet, Value},
+  Eval,
 };
+use nix_util::*;
 use serde_json::{Map, Number, Value as JSON};
 use syntax::expr::Ident;
 

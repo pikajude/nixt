@@ -1,5 +1,5 @@
-use crate::Result;
 use lazy_static::lazy_static;
+use nix_util::Result;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
