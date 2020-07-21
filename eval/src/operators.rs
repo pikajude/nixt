@@ -4,8 +4,8 @@ use super::{
   value::Value,
   Eval,
 };
+use nix_syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 use nix_util::*;
-use syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 
 pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {
   macro_rules! t {
@@ -128,6 +128,7 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
     (Value::String { string: s1, .. }, Value::String { string: s2, .. }) => s1 == s2,
     (Value::Path(p1), Value::Path(p2)) => p1 == p2,
     (Value::Null, _) => true,
+    (Value::Bool(b), Value::Bool(b2)) => b == b2,
     (Value::List(l1), Value::List(l2)) => {
       if l1.len() != l2.len() {
         return Ok(false);

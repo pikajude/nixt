@@ -1,10 +1,15 @@
-use derive_more::Display;
+use crypto::digest::Digest;
 use nix_util::*;
 use std::{
+  borrow::Cow,
   fmt::{self, Debug},
   hash::Hasher,
   str::FromStr,
 };
+
+mod context;
+
+pub use context::Context;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -194,6 +199,32 @@ impl Hash {
     } else {
       todo!()
     }
+  }
+
+  pub fn hash_bytes(data: &[u8], ty: HashType) -> Self {
+    let mut ctx = Context::new(ty);
+    ctx.input(data);
+    ctx.finish().0
+  }
+
+  pub fn hash_str(data: &str, ty: HashType) -> Self {
+    Self::hash_bytes(data.as_bytes(), ty)
+  }
+
+  /// Convert `self` to a shorter hash by recursively XOR-ing bytes.
+  pub fn truncate(&self, new_size: usize) -> Cow<Self> {
+    if new_size >= self.len {
+      return Cow::Borrowed(self);
+    }
+    let mut data = [0; 64];
+    for i in 0..self.len {
+      data[i % new_size] ^= self.data[i];
+    }
+    Cow::Owned(Self {
+      len: new_size,
+      data,
+      ty: self.ty,
+    })
   }
 }
 

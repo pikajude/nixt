@@ -1,14 +1,14 @@
 use crate::value::Value;
 use arena::Id;
 use im::vector::Vector;
+use nix_syntax::expr::{ExprRef, Ident};
 use parking_lot::{lock_api::RawMutex as _, RawMutex};
 use std::{
   cell::UnsafeCell,
-  collections::HashMap,
+  collections::BTreeMap,
   mem::ManuallyDrop,
   sync::{atomic::*, Arc},
 };
-use syntax::expr::{ExprRef, Ident};
 
 #[derive(Debug, Clone)]
 pub enum Scope {
@@ -16,7 +16,7 @@ pub enum Scope {
   Static(StaticScope),
 }
 
-pub type StaticScope = HashMap<Ident, ThunkId>;
+pub type StaticScope = BTreeMap<Ident, ThunkId>;
 pub type Context = Vector<Arc<Scope>>;
 
 pub type ThunkId = Id<Thunk>;
@@ -110,6 +110,23 @@ impl Thunk {
       unsafe {
         let r = &mut *self.value.get();
         ManuallyDrop::drop(&mut r.left);
+        r.right = ManuallyDrop::new(v);
+      }
+      self.loaded.store(true, Ordering::Release);
+    }
+    self.value_ref().unwrap()
+  }
+
+  pub fn replace_value(&self, v: Value) -> &Value {
+    {
+      let _guard = self.mutex.lock();
+      assert!(
+        self.is_value(),
+        "replace_value called on uninitialized cell"
+      );
+      unsafe {
+        let r = &mut *self.value.get();
+        ManuallyDrop::drop(&mut r.right);
         r.right = ManuallyDrop::new(v);
       }
       self.loaded.store(true, Ordering::Release);

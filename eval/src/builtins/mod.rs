@@ -4,9 +4,9 @@ use crate::{
   value::Value,
   Eval,
 };
+use nix_syntax::expr::Ident;
 use nix_util::*;
 use primop::Primop;
-use syntax::expr::Ident;
 
 pub mod attrs;
 pub mod derivation;
@@ -18,11 +18,18 @@ pub mod strings;
 pub mod sys;
 pub mod versions;
 
-pub fn init_primops(eval: &mut Eval) {
+pub async fn init_primops(eval: &mut Eval) -> Result<()> {
   eval.toplevel.insert(
     "import".into(),
     eval.new_value(primop!("import", sys::import)),
   );
+  let corepkg = eval
+    .load_file(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/corepkgs/derivation.nix"
+    ))
+    .await?;
+  eval.toplevel.insert("derivation".into(), corepkg);
   eval
     .toplevel
     .insert("abort".into(), eval.new_value(primop!("abort", nix_abort)));
@@ -56,8 +63,8 @@ pub fn init_primops(eval: &mut Eval) {
     eval.new_value(primop2!("removeAttrs", attrs::remove_attrs)),
   );
   eval.toplevel.insert(
-    "derivation".into(),
-    eval.new_value(primop!("derivation", derivation::derivation_strict)),
+    "derivationStrict".into(),
+    eval.new_value(primop!("derivationStrict", derivation::derivation_strict)),
   );
   eval.toplevel.insert(
     "builtins".into(),
@@ -90,6 +97,10 @@ pub fn init_primops(eval: &mut Eval) {
       );
       builtins.insert("elem".into(), eval.new_value(primop2!("elem", lists::elem)));
       builtins.insert(
+        "map".into(),
+        eval.new_value(primop2!("map", lists::map_list)),
+      );
+      builtins.insert(
         "elemAt".into(),
         eval.new_value(primop2!("elemAt", lists::elem_at)),
       );
@@ -108,6 +119,10 @@ pub fn init_primops(eval: &mut Eval) {
       builtins.insert(
         "genericClosure".into(),
         eval.new_value(primop!("genericClosure", attrs::generic_closure)),
+      );
+      builtins.insert(
+        "getAttr".into(),
+        eval.new_value(primop2!("getAttr", attrs::get_attr)),
       );
       builtins.insert(
         "getEnv".into(),
@@ -224,6 +239,7 @@ pub fn init_primops(eval: &mut Eval) {
       builtins
     })),
   );
+  Ok(())
 }
 
 async fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {

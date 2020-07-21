@@ -9,8 +9,8 @@ use async_std::{
   path::{Path, PathBuf},
 };
 use futures::TryStreamExt;
+use nix_syntax::expr::Ident;
 use nix_util::*;
-use syntax::expr::Ident;
 
 pub async fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
   let varname = eval.value_string_of(varname).await?;

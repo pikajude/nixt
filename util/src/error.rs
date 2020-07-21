@@ -1,5 +1,5 @@
+use nix_syntax::span::FileSpan;
 use std::fmt::{self, Display};
-use syntax::span::FileSpan;
 
 #[derive(Debug)]
 pub struct Error {

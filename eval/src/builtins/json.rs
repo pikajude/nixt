@@ -3,9 +3,9 @@ use crate::{
   value::{PathSet, Value},
   Eval,
 };
+use nix_syntax::expr::Ident;
 use nix_util::*;
 use serde_json::{Map, Number, Value as JSON};
-use syntax::expr::Ident;
 
 pub async fn to_json(eval: &Eval, obj: ThunkId) -> Result<(JSON, PathSet)> {
   let mut paths = PathSet::new();

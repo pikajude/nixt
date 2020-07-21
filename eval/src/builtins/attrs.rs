@@ -3,9 +3,9 @@ use crate::{
   value::Value,
   Eval,
 };
+use nix_syntax::expr::Ident;
 use nix_util::*;
 use std::collections::HashSet;
-use syntax::expr::Ident;
 
 pub async fn attr_names(eval: &Eval, attrs: ThunkId) -> Result<Value> {
   let mut keys = eval.value_attrs_of(attrs).await?.keys().collect::<Vec<_>>();
@@ -22,7 +22,9 @@ pub async fn attr_names(eval: &Eval, attrs: ThunkId) -> Result<Value> {
 pub async fn intersect_attrs(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(lhs).await?;
   let mut attrs2 = eval.value_attrs_of(rhs).await?.clone();
-  attrs2.retain(|key, _| attrs.contains_key(key));
+  attrs2
+    .drain_filter(|key, _| !attrs.contains_key(key))
+    .last();
   Ok(Value::AttrSet(attrs2))
 }
 
@@ -33,6 +35,15 @@ pub async fn remove_attrs(eval: &Eval, attrset: ThunkId, to_remove: ThunkId) -> 
     attrset.remove(&Ident::from(remove_item));
   }
   Ok(Value::AttrSet(attrset))
+}
+
+pub async fn get_attr(eval: &Eval, attrname: ThunkId, attrset: ThunkId) -> Result<Value> {
+  let attrname = eval.value_string_of(attrname).await?;
+  let attrset = eval.value_attrs_of(attrset).await?;
+  match attrset.get(&Ident::from(attrname)) {
+    Some(x) => Ok(Value::Ref(*x)),
+    None => bail!("attribute `{}' not found", attrname),
+  }
 }
 
 pub async fn list_to_attrs(eval: &Eval, list: ThunkId) -> Result<Value> {

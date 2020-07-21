@@ -1,23 +1,17 @@
 use crate::{
   builtins::strings::coerce_to_string,
-  thunk::ThunkId,
+  thunk::{StaticScope, ThunkId},
   value::{PathSet, Value},
   Eval,
 };
-use nix_core::hash::{Hash, HashType};
+use async_std::path::{Path, PathBuf};
+use nix_core::{
+  derivation::{Derivation, FixedOutputHash, Output},
+  hash::{Hash, HashType},
+};
+use nix_syntax::expr::Ident;
 use nix_util::*;
 use std::collections::{BTreeSet, HashMap};
-use syntax::expr::Ident;
-
-#[derive(Default, Debug)]
-struct Derivation<'a> {
-  name: &'a str,
-  builder: Option<&'a str>,
-  system: Option<&'a str>,
-  args: Vec<String>,
-  env: HashMap<&'a str, String>,
-  input_sources: PathSet,
-}
 
 pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(args).await?;
@@ -38,7 +32,7 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   }
 
   let mut drv = Derivation {
-    name,
+    name: name.to_string(),
     ..Default::default()
   };
 
@@ -47,7 +41,7 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     None => false,
   };
 
-  let mut outputs_set: BTreeSet<&str> = vec!["out"].into_iter().collect();
+  let mut outputs_set: BTreeSet<String> = vec![String::from("out")].into_iter().collect();
   let mut is_recursive = false;
   let mut output_hash_algo = None;
   let mut output_hash = None;
@@ -68,13 +62,12 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       continue;
     }
 
-    drv.env.insert(
-      k,
-      coerce_to_string(eval, *v, &mut context, true, false).await?,
-    );
+    let string_value = coerce_to_string(eval, *v, &mut context, true, false).await?;
+
+    drv.env.insert(k.to_string(), string_value.clone());
 
     if k == "outputHashMode" {
-      is_recursive = match eval.value_string_of(*v).await? {
+      is_recursive = match &string_value[..] {
         "recursive" => true,
         "flat" => false,
         x => bail!("invalid value `{}' for outputHashMode", x),
@@ -82,21 +75,20 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "outputHashAlgo" {
-      output_hash_algo = Some(eval.value_string_of(*v).await?);
+      output_hash_algo = Some(string_value.clone());
     }
 
     if k == "outputHash" {
-      output_hash = Some(eval.value_string_of(*v).await?);
+      output_hash = Some(string_value.clone());
     }
 
     if k == "outputs" {
       outputs_set.clear();
-      for name in eval.value_list_of(*v).await? {
-        let name = eval.value_string_of(*name).await?;
+      for name in string_value.split(' ') {
         if name == "drv" {
           bail!("derivation outputs cannot be named `drv'");
         }
-        if !outputs_set.insert(name) {
+        if !outputs_set.insert(name.to_string()) {
           bail!("duplicate derivation output `{}'", name);
         }
       }
@@ -106,10 +98,13 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "builder" {
-      drv.builder = Some(eval.value_with_context_of(*v).await?.0);
+      drv.builder = drv
+        .env
+        .get("builder")
+        .map(|x| Path::new(x.as_str()).to_path_buf());
     }
     if k == "system" {
-      drv.system = Some(eval.value_with_context_of(*v).await?.0);
+      drv.system = Some(eval.value_with_context_of(*v).await?.0.to_string());
     }
   }
 
@@ -122,13 +117,74 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       bail!("multiple outputs are not supported in fixed-output derivations");
     }
 
-    let drv_hash =
-      Hash::new_allow_empty(h, output_hash_algo.and_then(|x| x.parse::<HashType>().ok()))?;
+    let drv_hash = Hash::new_allow_empty(
+      &h,
+      output_hash_algo.and_then(|x| x.parse::<HashType>().ok()),
+    )?;
 
-    debug!("{:?}", drv_hash);
+    let out_path =
+      eval
+        .store
+        .make_fixed_output_path(is_recursive, &drv_hash, name, vec![], false)?;
+
+    let out_str = eval.store.print_store_path(&out_path);
+
+    drv.env.insert("out".into(), out_str);
+    drv.outputs.insert(
+      "out".into(),
+      Output {
+        path: out_path,
+        hash: Some(FixedOutputHash {
+          recursive: is_recursive,
+          hash: drv_hash,
+        }),
+      },
+    );
+  } else {
+    for out in &outputs_set {
+      drv.env.insert(out.to_string(), "".into());
+      drv.outputs.insert(
+        out.to_string(),
+        Output {
+          hash: None,
+          path: nix_core::path::DUMMY.clone(),
+        },
+      );
+    }
+
+    let drv_hash = eval.store.hash_derivation_modulo(&drv, true).await?;
+
+    for out in &outputs_set {
+      let output_path =
+        eval
+          .store
+          .make_fixed_output_path(is_recursive, &drv_hash, name, vec![], false)?;
+      drv
+        .env
+        .insert(out.to_string(), eval.store.print_store_path(&output_path));
+      drv.outputs.insert(
+        out.to_string(),
+        Output {
+          path: output_path,
+          hash: None,
+        },
+      );
+    }
   }
 
-  debug!("{:?}", drv);
+  let mut attrs = StaticScope::new();
 
-  bail!("derivation: unimplemented")
+  for (name, out) in &drv.outputs {
+    attrs.insert(
+      Ident::from(name.as_str()),
+      eval.new_value(Value::String {
+        string: eval.store.print_store_path(&out.path),
+        context: vec![PathBuf::from(format!("!{}!", &name))]
+          .into_iter()
+          .collect(),
+      }),
+    );
+  }
+
+  Ok(Value::AttrSet(attrs))
 }

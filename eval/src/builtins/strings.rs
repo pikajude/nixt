@@ -3,6 +3,7 @@ use crate::{
   value::{PathSet, Value},
   Eval,
 };
+use nix_syntax::expr::Ident;
 use nix_util::*;
 use std::collections::BTreeSet;
 
@@ -68,6 +69,7 @@ pub async fn coerce_to_string(
         String::new()
       }
     }
+    Value::Null if extended => String::new(),
     Value::List(items) if extended => {
       let mut output = String::new();
       for (i, item) in items.iter().enumerate() {
@@ -77,6 +79,13 @@ pub async fn coerce_to_string(
         output.push_str(&coerce_to_string(eval, *item, ctx, extended, copy_to_store).await?);
       }
       output
+    }
+    Value::AttrSet(a) => {
+      if let Some(o) = a.get(&Ident::from("outPath")) {
+        coerce_to_string(eval, *o, ctx, extended, copy_to_store).await?
+      } else {
+        bail!("cannot coerce a set to a string unless it has an `outPath' attribute")
+      }
     }
     v => bail!("cannot convert {} to a string", v.typename()),
   })

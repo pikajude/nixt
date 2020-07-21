@@ -1,6 +1,6 @@
 #[macro_use] extern crate log;
 
-use eval::Eval;
+use nix_eval::Eval;
 
 #[async_std::main]
 async fn main() -> nix_util::Result<()> {
