@@ -23,6 +23,18 @@ pub struct Path {
   name: Name,
 }
 
+impl PartialOrd for Path {
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    self.to_string().partial_cmp(&other.to_string())
+  }
+}
+
+impl Ord for Path {
+  fn cmp(&self, other: &Self) -> Ordering {
+    self.to_string().cmp(&other.to_string())
+  }
+}
+
 lazy_static! {
   pub static ref DUMMY: Path = Path {
     hash: Hash([0xffu8; HASH_BYTES]),

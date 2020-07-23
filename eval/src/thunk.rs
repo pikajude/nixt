@@ -6,6 +6,7 @@ use parking_lot::{lock_api::RawMutex as _, RawMutex};
 use std::{
   cell::UnsafeCell,
   collections::BTreeMap,
+  fmt::{self, Debug},
   mem::ManuallyDrop,
   sync::{atomic::*, Arc},
 };
@@ -36,6 +37,17 @@ pub struct Thunk {
 
 unsafe impl Send for Thunk {}
 unsafe impl Sync for Thunk {}
+
+impl Debug for Thunk {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let _guard = self.mutex.lock();
+    if self.loaded.load(Ordering::Acquire) {
+      write!(f, "V({:?})", self.value_ref().unwrap())
+    } else {
+      write!(f, "T({:?})", unsafe { &(*self.value.get()).left })
+    }
+  }
+}
 
 union TV {
   left: ManuallyDrop<ThunkCell>,

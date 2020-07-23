@@ -8,12 +8,12 @@ use async_trait::async_trait;
 use nix_util::*;
 use std::{
   borrow::Cow,
-  collections::{HashMap, HashSet},
+  collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
   fmt::Display,
 };
 
-fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
+pub(crate) fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
   StdPath::new(i).display()
 }
 
@@ -99,9 +99,9 @@ pub trait Store: Send + Sync {
     }
   }
 
-  async fn hash_derivation_modulo<'e>(
-    &'e self,
-    derivation: &'e Derivation,
+  async fn hash_derivation_modulo(
+    &self,
+    derivation: &Derivation,
     mask_outputs: bool,
   ) -> Result<Hash> {
     if derivation.is_fixed_output() {
@@ -118,7 +118,7 @@ pub trait Store: Send + Sync {
       ));
     }
 
-    let mut inputs2: HashMap<String, &HashSet<String>> = Default::default();
+    let mut inputs2: BTreeMap<String, &BTreeSet<String>> = Default::default();
 
     for (k, v) in &derivation.input_derivations {
       let mut hashes = crate::derivation::DRV_HASHES.lock().await;
@@ -131,7 +131,10 @@ pub trait Store: Send + Sync {
       }
     }
 
-    Ok(Hash::hash_str("", HashType::SHA256))
+    Ok(Hash::hash_str(
+      &derivation.unparse(&self.store_path(), mask_outputs, inputs2),
+      HashType::SHA256,
+    ))
   }
 }
 

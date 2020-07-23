@@ -11,7 +11,7 @@ use nix_core::{
 };
 use nix_syntax::expr::Ident;
 use nix_util::*;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(args).await?;
@@ -64,6 +64,12 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
 
     let string_value = coerce_to_string(eval, *v, &mut context, true, false).await?;
 
+    if ignore_nulls {
+      if let Value::Null = eval.value_of(*v).await? {
+        continue;
+      }
+    }
+
     drv.env.insert(k.to_string(), string_value.clone());
 
     if k == "outputHashMode" {
@@ -101,10 +107,11 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       drv.builder = drv
         .env
         .get("builder")
-        .map(|x| Path::new(x.as_str()).to_path_buf());
+        .map(|x| Path::new(x.as_str()).to_path_buf())
+        .unwrap();
     }
     if k == "system" {
-      drv.system = Some(eval.value_with_context_of(*v).await?.0.to_string());
+      drv.platform = eval.value_with_context_of(*v).await?.0.to_string();
     }
   }
 

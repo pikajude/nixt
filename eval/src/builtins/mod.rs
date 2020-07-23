@@ -236,6 +236,10 @@ pub async fn init_primops(eval: &mut Eval) -> Result<()> {
         "tryEval".into(),
         eval.new_value(primop!("tryEval", try_eval)),
       );
+      builtins.insert(
+        "unsafeGetAttrPos".into(),
+        eval.new_value(primop2!("unsafeGetAttrPos", attrs::unsafe_get_attr_pos)),
+      );
       builtins
     })),
   );

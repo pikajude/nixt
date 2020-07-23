@@ -73,6 +73,13 @@ impl<T> Spanned<T> {
     self.replace(Default::default())
   }
 
+  pub fn as_ref(&self) -> Spanned<&T> {
+    Spanned {
+      span: self.span,
+      node: &self.node,
+    }
+  }
+
   // pub fn label(&self, m: impl Into<String>) -> Label {
   //   Label::new(self.span.file_id, self.span.span, m)
   // }

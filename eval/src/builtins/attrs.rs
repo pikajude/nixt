@@ -117,7 +117,15 @@ pub async fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
 }
 
 pub async fn has_attr(eval: &Eval, attrname: ThunkId, attrs: ThunkId) -> Result<Value> {
-  let attrs = eval.value_attrs_of(attrs).await?;
   let aname = eval.value_string_of(attrname).await?;
+  let attrs = eval.value_attrs_of(attrs).await?;
   Ok(Value::Bool(attrs.contains_key(&Ident::from(aname))))
+}
+
+pub async fn unsafe_get_attr_pos(eval: &Eval, attrname: ThunkId, attrs: ThunkId) -> Result<Value> {
+  let name = eval.value_string_of(attrname).await?;
+  if let Some(v) = eval.value_attrs_of(attrs).await?.get(&Ident::from(name)) {
+    warn!("unimplemented: unsafeGetAttrPos {:?}", v)
+  }
+  Ok(Value::Null)
 }

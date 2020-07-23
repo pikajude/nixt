@@ -11,6 +11,7 @@ use arena::Arena;
 use async_std::{
   fs,
   path::{Path, PathBuf},
+  prelude::*,
   sync::Mutex,
 };
 use builtins::strings::coerce_to_string;
@@ -22,6 +23,7 @@ use codespan_reporting::{
 use config::Config;
 use ext::ImmutVec;
 use itertools::{Either, Itertools};
+use log::Level;
 use nix_core::{store::LocalStore, Store};
 use nix_syntax::{
   expr::{self, *},
@@ -155,7 +157,6 @@ impl Eval {
     Ok(self.items.alloc(Thunk::thunk(eid, Context::new())))
   }
 
-  #[async_recursion]
   pub async fn value_of(&self, mut thunk_id: ThunkId) -> Result<&Value> {
     let mut ids = HashSet::new();
     ids.insert(thunk_id);
@@ -164,9 +165,10 @@ impl Eval {
         Some(x) => x,
         None => {
           let thunk = &self.items[thunk_id];
-          trace!("blackholing {:?}", thunk_id);
-          let val = self.step_thunk(thunk.get_thunk()).await?;
-          trace!("filling {:?}", thunk_id);
+          let expr = thunk.get_thunk();
+          debug!(target: "thunk", "{:?} => {:?}", thunk_id, &expr);
+          let val = self.step_thunk(expr).await?;
+          debug!(target: "thunk", "output: {:?}", &val);
           thunk.put_value(val)
         }
       };
@@ -174,7 +176,13 @@ impl Eval {
         Value::Ref(r) => {
           thunk_id = *r;
           if !ids.insert(thunk_id) {
-            bail!("reference cycle");
+            bail!(
+              "reference cycle: {:?}",
+              ids
+                .into_iter()
+                .map(|x| (x, &self.items[x]))
+                .collect::<Vec<_>>()
+            );
           }
         }
         _ => break Ok(v),
@@ -274,6 +282,18 @@ impl Eval {
 
   #[async_recursion]
   async fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
+    if log_enabled!(target: "entry", Level::Debug) {
+      let fs = self.files.lock().await;
+      debug!(
+        target: "entry",
+        "{}:{}\n  {}",
+        fs.name(e.span.file_id).to_string_lossy(),
+        fs.location(e.span.file_id, e.span.span.start())?
+          .line
+          .number(),
+        fs.source_slice(e.span.file_id, e.span.span)?
+      );
+    }
     match &self.expr[e.node] {
       Expr::Int(n) => Ok(Value::Int(*n)),
       Expr::Str(Str { body, .. }) | Expr::IndStr(IndStr { body, .. }) => {
@@ -564,7 +584,10 @@ impl Eval {
 
   async fn sel(&self, lhs: ThunkId, rhs: &Ident) -> Result<Option<ThunkId>> {
     Ok(match self.value_of(lhs).await? {
-      Value::AttrSet(hs) => hs.get(rhs).copied(),
+      Value::AttrSet(hs) => {
+        let h = hs.get(rhs).copied();
+        h
+      }
       _ => None,
     })
   }
@@ -589,25 +612,40 @@ impl Eval {
         } => Either::Right((from.as_ref(), attrs)),
       });
 
+    let recursive_scope = if recursive {
+      context.prepend(Scope::Dynamic(env))
+    } else {
+      context.clone()
+    };
+
     for (from, attrs) in inherited {
-      self.push_inherit(&mut binds, from, attrs, context).await?
+      self
+        .push_inherit(
+          &mut binds,
+          from,
+          attrs,
+          // rec { inherit foo; } tries to lookup `foo' within itself and causes an infinite loop
+          // if we don't have this part :)
+          if from.is_none() {
+            &context
+          } else {
+            &recursive_scope
+          },
+        )
+        .await?
     }
 
     let start_dyn = itertools::partition(&mut regular, |item| {
       (item.0).0.iter().any(|x| match x.node {
         AttrName::Plain(_) => true,
+        // splices that only contain a string literal are handled specially by the upstream nix
+        // parser, but since that's a bit complicated in lalrpop, we special-case it here instead
         AttrName::Dynamic { quote, .. } => self.expr[quote.node].is_plain_string(),
         _ => false,
       })
     });
 
     let (plain_attrs, splice_attrs) = regular.split_at(start_dyn);
-
-    let recursive_scope = if recursive {
-      context.prepend(Scope::Dynamic(env))
-    } else {
-      context.clone()
-    };
 
     // add plain attributes first
     for (path, rhs) in plain_attrs {
@@ -683,10 +721,12 @@ impl Eval {
   }
 
   fn synthetic_variable(&self, span: FileSpan, name: Ident, context: &Context) -> ThunkId {
-    self.items.alloc(Thunk::thunk(
-      spanned(span, self.expr.alloc(Expr::Var(name))),
+    let id = self.items.alloc(Thunk::thunk(
+      spanned(span, self.expr.alloc(Expr::Var(name.clone()))),
       context.clone(),
-    ))
+    ));
+    debug!(target: "synthetic", "{} => {:?}", name, id);
+    id
   }
 }
 
@@ -761,6 +801,7 @@ mod tests {
       Ok(Value::Int(1))
     );
     assert_eval!(r#"rec { ${"a"} = 1; b = a; }.b"#, Ok(Value::Int(1)));
+    assert_eval!(r#"rec { inherit (a) b; a.b = 3; }.b"#, Ok(Value::Int(3)));
     Ok(())
   }
 }
