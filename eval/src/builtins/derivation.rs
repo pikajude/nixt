@@ -1,6 +1,7 @@
 use crate::{
   builtins::strings::coerce_to_string,
-  thunk::{StaticScope, ThunkId},
+  context::StaticScope,
+  thunk::ThunkId,
   value::{PathSet, Value},
   Eval,
 };
@@ -10,10 +11,7 @@ use nix_core::{
 };
 use nix_syntax::expr::Ident;
 use nix_util::*;
-use std::{
-  collections::BTreeSet,
-  path::{Path, PathBuf},
-};
+use std::{collections::BTreeSet, path::Path};
 
 pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(args)?;
@@ -41,7 +39,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     None => false,
   };
 
-  let mut outputs_set: BTreeSet<String> = vec![String::from("out")].into_iter().collect();
+  let mut outputs_set: BTreeSet<String> = std::iter::once(String::from("out")).collect();
   let mut is_recursive = false;
   let mut output_hash_algo = None;
   let mut output_hash = None;
@@ -116,7 +114,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   }
 
   for path in &context {
-    debug!("input source: {}", path.display());
+    debug!("input source: {}", path);
   }
 
   if let Some(h) = output_hash {
@@ -129,10 +127,13 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       output_hash_algo.and_then(|x| x.parse::<HashType>().ok()),
     )?;
 
-    let out_path =
-      eval
-        .store
-        .make_fixed_output_path(is_recursive, &drv_hash, name, vec![], false)?;
+    let out_path = eval.store.make_fixed_output_path(
+      is_recursive,
+      &drv_hash,
+      name,
+      &mut std::iter::empty(),
+      false,
+    )?;
 
     let out_str = eval.store.print_store_path(&out_path);
 
@@ -162,10 +163,13 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     let drv_hash = eval.store.hash_derivation_modulo(&drv, true)?;
 
     for out in &outputs_set {
-      let output_path =
-        eval
-          .store
-          .make_fixed_output_path(is_recursive, &drv_hash, name, vec![], false)?;
+      let output_path = eval.store.make_fixed_output_path(
+        is_recursive,
+        &drv_hash,
+        name,
+        &mut std::iter::empty(),
+        false,
+      )?;
       drv
         .env
         .insert(out.to_string(), eval.store.print_store_path(&output_path));
@@ -179,16 +183,27 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
   }
 
+  let drv_path = eval.store.write_derivation(&drv, name, false)?;
+  let path_str = eval.store.print_store_path(&drv_path);
+
+  info!("instantiated `{}' -> `{}'", name, path_str);
+
   let mut attrs = StaticScope::new();
+
+  attrs.insert(
+    Ident::from("drvPath"),
+    eval.new_value(Value::String {
+      string: path_str.clone(),
+      context: std::iter::once(format!("={}", &path_str)).collect(),
+    }),
+  );
 
   for (name, out) in &drv.outputs {
     attrs.insert(
       Ident::from(name.as_str()),
       eval.new_value(Value::String {
         string: eval.store.print_store_path(&out.path),
-        context: vec![PathBuf::from(format!("!{}!", &name))]
-          .into_iter()
-          .collect(),
+        context: std::iter::once(format!("!{}!{}", &name, &path_str)).collect(),
       }),
     );
   }

@@ -1,8 +1,5 @@
 use crate::{
-  builtins::strings::coerce_new_string,
-  thunk::{StaticScope, ThunkId},
-  value::Value,
-  Eval,
+  builtins::strings::coerce_new_string, context::StaticScope, thunk::ThunkId, value::Value, Eval,
 };
 use nix_syntax::expr::Ident;
 use nix_util::*;

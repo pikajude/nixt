@@ -1,9 +1,14 @@
-use super::thunk::{Context, StaticScope, ThunkId};
-use crate::primop::Primop;
+use super::thunk::ThunkId;
+use crate::{
+  context::{Context, StaticScope},
+  primop::Primop,
+};
 use nix_syntax::expr;
 use std::{collections::BTreeSet, path::PathBuf};
 
-pub type PathSet = BTreeSet<PathBuf>;
+// You'd think this was a set of filepaths, but it's actually a set of formatted
+// strings that contain paths
+pub type PathSet = BTreeSet<String>;
 
 #[derive(Debug)]
 pub enum Value {
@@ -18,7 +23,7 @@ pub enum Value {
   Path(PathBuf),
   Lambda {
     lambda: expr::Lambda,
-    captures: Context,
+    captures: Box<Context>,
   },
   Primop(Primop),
   AttrSet(StaticScope),

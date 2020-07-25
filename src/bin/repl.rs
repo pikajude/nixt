@@ -5,7 +5,7 @@ use nix_eval::Eval;
 fn main() -> nix_util::Result<()> {
   pretty_env_logger::init();
 
-  let eval = Eval::new();
+  let eval = Eval::new()?;
   let mut rl = rustyline::Editor::<()>::with_config(
     rustyline::Config::builder().auto_add_history(true).build(),
   );

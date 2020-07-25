@@ -94,3 +94,25 @@ pub fn concat_lists(eval: &Eval, list: ThunkId) -> Result<Value> {
   }
   Ok(Value::List(all))
 }
+
+pub fn foldl_strict(eval: &Eval, oper: ThunkId, seed: ThunkId, list: ThunkId) -> Result<Value> {
+  eval.expect_fn(oper)?;
+  let items = eval.value_list_of(list)?;
+  if items.is_empty() {
+    let _ = eval.value_of(seed)?;
+    Ok(Value::Ref(seed))
+  } else {
+    let mut cur_item = seed;
+    for (i, thunk) in items.iter().enumerate() {
+      let acc_fn = eval.step_fn(oper, cur_item)?;
+      let acc_thunk = eval.new_value(acc_fn);
+      let next_item = eval.step_fn(acc_thunk, *thunk)?;
+      if i + 1 == items.len() {
+        return Ok(next_item);
+      } else {
+        cur_item = eval.new_value(next_item);
+      }
+    }
+    unreachable!()
+  }
+}

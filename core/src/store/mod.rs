@@ -2,6 +2,7 @@ use crate::{
   derivation::Derivation,
   hash::{Encoding, Hash, HashType},
   path::Path as StorePath,
+  settings,
 };
 use nix_util::*;
 use std::{
@@ -11,6 +12,8 @@ use std::{
   fmt::Display,
   path::Path as StdPath,
 };
+
+pub mod local;
 
 pub(crate) fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
   StdPath::new(i).display()
@@ -40,7 +43,7 @@ pub trait Store: Send + Sync {
   fn make_type<'a>(
     &self,
     mut s: String,
-    references: Vec<&'a StorePath>,
+    references: &mut dyn Iterator<Item = &'a StorePath>,
     has_self_reference: bool,
   ) -> String {
     for item in references {
@@ -71,7 +74,7 @@ pub trait Store: Send + Sync {
     recursive: bool,
     hash: &Hash,
     name: &str,
-    references: Vec<&'a StorePath>,
+    references: &mut dyn Iterator<Item = &'a StorePath>,
     has_self_reference: bool,
   ) -> Result<StorePath> {
     if hash.type_() == HashType::SHA256 && recursive {
@@ -81,7 +84,7 @@ pub trait Store: Send + Sync {
         name,
       )
     } else {
-      assert!(references.is_empty());
+      assert!(references.next().is_none());
       self.make_store_path(
         "output:out",
         &Hash::hash_str(
@@ -95,6 +98,33 @@ pub trait Store: Send + Sync {
         name,
       )
     }
+  }
+
+  fn make_text_path<'a>(
+    &self,
+    name: &str,
+    hash: &Hash,
+    references: &mut dyn Iterator<Item = &'a StorePath>,
+  ) -> Result<StorePath> {
+    assert!(hash.type_() == HashType::SHA256);
+    self.make_store_path(
+      &self.make_type("text".into(), references, false),
+      hash,
+      name,
+    )
+  }
+
+  fn store_path_for_text<'a>(
+    &self,
+    name: &str,
+    contents: &str,
+    references: &mut dyn Iterator<Item = &'a StorePath>,
+  ) -> Result<StorePath> {
+    self.make_text_path(
+      name,
+      &Hash::hash_str(contents, HashType::SHA256),
+      references,
+    )
   }
 
   fn hash_derivation_modulo(&self, derivation: &Derivation, mask_outputs: bool) -> Result<Hash> {
@@ -130,12 +160,35 @@ pub trait Store: Send + Sync {
       HashType::SHA256,
     ))
   }
-}
 
-pub struct LocalStore;
+  fn write_derivation(
+    &self,
+    derivation: &Derivation,
+    name: &str,
+    _repair: bool,
+  ) -> Result<StorePath> {
+    let mut refs = derivation.input_sources.iter().collect::<BTreeSet<_>>();
+    for k in derivation.input_derivations.keys() {
+      refs.insert(k);
+    }
+    let suffix = format!("{}.drv", name);
+    let contents = derivation.unparse(self, false, Default::default());
+    let refs = &mut refs.into_iter();
+    if settings().read_only {
+      self.store_path_for_text(&suffix, &contents, refs)
+    } else {
+      self.add_text_to_store(&suffix, &contents, refs, _repair)
+    }
+  }
 
-impl Store for LocalStore {
-  fn store_path(&self) -> Cow<OsStr> {
-    Cow::Borrowed(OsStr::new("/nix/store"))
+  #[allow(unused_variables)]
+  fn add_text_to_store<'a>(
+    &self,
+    name: &str,
+    contents: &str,
+    references: &mut dyn Iterator<Item = &'a StorePath>,
+    repair: bool,
+  ) -> Result<StorePath> {
+    bail!("add_text_to_store not supported by this backend.")
   }
 }

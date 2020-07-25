@@ -13,10 +13,10 @@ use codespan_reporting::{
   term::emit,
 };
 use config::Config;
-use ext::ImmutVec;
+use context::{Context, Scope, StaticScope};
 use itertools::{Either, Itertools};
 use log::Level;
-use nix_core::{store::LocalStore, Store};
+use nix_core::{store::local::LocalStore, Store};
 use nix_syntax::{
   expr::{self, *},
   span::{spanned, FileSpan, Spanned},
@@ -33,11 +33,12 @@ use std::{
   },
 };
 use termcolor::{ColorChoice, StandardStream};
-use thunk::{Context, Scope, StaticScope, Thunk, ThunkCell, ThunkId};
+use thunk::{Thunk, ThunkCell, ThunkId};
 use value::{PathSet, Value};
 
 pub mod builtins;
 mod config;
+pub mod context;
 mod ext;
 pub mod operators;
 pub mod primop;
@@ -56,20 +57,16 @@ pub struct Eval {
   store: Arc<dyn Store>,
 }
 
-impl Default for Eval {
-  fn default() -> Self {
-    Self::new()
-  }
-}
-
 impl Eval {
-  pub fn new() -> Self {
+  pub fn new() -> Result<Self> {
     Self::with_config(Config {
       trace: std::env::var("NIX_TRACE").map_or(false, |x| !x.is_empty()),
     })
   }
 
-  pub fn with_config(config: Config) -> Self {
+  pub fn with_config(config: Config) -> Result<Self> {
+    nix_core::Settings::init_default();
+
     let mut this = Self {
       items: Default::default(),
       expr: Default::default(),
@@ -79,10 +76,10 @@ impl Eval {
       file_ids: Default::default(),
       writer: StandardStream::stderr(ColorChoice::Auto),
       config,
-      store: Arc::new(LocalStore),
+      store: Arc::new(LocalStore::open()?),
     };
-    builtins::init_primops(&mut this).expect("unable to initialize");
-    this
+    builtins::init_primops(&mut this)?;
+    Ok(this)
   }
 
   pub fn print_error(&self, e: Error) -> Result<()> {
@@ -337,10 +334,10 @@ impl Eval {
       }
       Expr::Lambda(l) => Ok(Value::Lambda {
         lambda: l.clone(),
-        captures: context,
+        captures: Box::new(context),
       }),
       Expr::Var(ident) => {
-        for item in &context {
+        for item in &context.scopes {
           let scope = match item.as_ref() {
             Scope::Static(s1) => s1,
             Scope::Dynamic(s) => self.value_attrs_of(*s)?,
@@ -351,6 +348,12 @@ impl Eval {
         }
         if let Some(x) = self.toplevel.get(ident) {
           return Ok(Value::Ref(*x));
+        }
+        for item in &context.with {
+          let scope = self.value_attrs_of(*item)?;
+          if let Some(v) = scope.get(ident) {
+            return Ok(Value::Ref(*v));
+          }
         }
         bail!("Unbound variable {}", ident)
       }
@@ -408,8 +411,7 @@ impl Eval {
       }
       Expr::With(With { env, expr, .. }) => {
         let with_scope = self.items.alloc(Thunk::thunk(*env, context.clone()));
-        // XXX: `with` scope is checked *after* every other scope, not before
-        self.step_eval(*expr, context.append(Scope::Dynamic(with_scope)))
+        self.step_eval(*expr, context.add_with(with_scope))
       }
       Expr::Assert(Assert { cond, expr, .. }) => {
         let cond = self.items.alloc(Thunk::thunk(*cond, context.clone()));
@@ -437,6 +439,14 @@ impl Eval {
         Ok(Value::Bool(true))
       }
       e => bail!("unhandled expression {:?}", e),
+    }
+  }
+
+  fn expect_fn(&self, item: ThunkId) -> Result<()> {
+    match self.value_of(item)? {
+      Value::Lambda { .. } | Value::Primop(_) => Ok(()),
+      Value::AttrSet(a) if a.contains_key(&Ident::from("__functor")) => Ok(()),
+      v => bail!("expected a function, got {}", v.typename()),
     }
   }
 
@@ -468,7 +478,7 @@ impl Eval {
           bail!("an attrset cannot be called unless it has a `__functor' attribute")
         }
       }
-      x => todo!("not a lambda: {:?}", x),
+      x => bail!("not a lambda: {:?}", x),
     }
   }
 
@@ -700,9 +710,9 @@ impl Eval {
     context: &Context,
   ) -> Result<()> {
     let binding_scope = match from {
-      Some(ih) => Context::from(vec![Arc::new(Scope::Dynamic(
+      Some(ih) => Context::single(Scope::Dynamic(
         self.items.alloc(Thunk::thunk(ih.from, context.clone())),
-      ))]),
+      )),
       None => context.clone(),
     };
     for attr in &attrs.0 {
@@ -742,8 +752,9 @@ mod tests {
   fn test_foo() -> Result<()> {
     pretty_env_logger::init();
 
-    let eval = Eval::new();
-    let expr = eval.load_inline(r#"(import <nixpkgs> {}).hello.outPath"#)?;
+    let eval = Eval::new().unwrap();
+    let expr =
+      eval.load_inline(r#"(import /home/jude/.code/nix/pkgs { overlays = []; }).hello.outPath"#)?;
     match eval.value_of(expr) {
       Ok(x) => eprintln!("{:?}", x),
       Err(e) => {
@@ -757,7 +768,7 @@ mod tests {
 
   macro_rules! assert_eval {
     ($l:literal, $p:pat) => {{
-      let eval = Eval::new();
+      let eval = Eval::new().unwrap();
       assert_matches::assert_matches!(eval.value_of(eval.load_inline($l)?), $p)
     }};
   }
@@ -770,6 +781,15 @@ mod tests {
     );
     assert_eval!(r#"rec { ${"a"} = 1; b = a; }.b"#, Ok(Value::Int(1)));
     assert_eval!(r#"rec { inherit (a) b; a.b = 3; }.b"#, Ok(Value::Int(3)));
+    assert_eval!(r#"with { a = 1; }; with { a = 2; }; a"#, Ok(Value::Int(2)));
+    Ok(())
+  }
+
+  #[test]
+  fn test_foldl() -> Result<()> {
+    let e = Eval::new().unwrap();
+    let expr = e.load_inline(r#"builtins.foldl' (x: y: "${x}-${y}") "foo" ["bar" "baz" "qux"]"#)?;
+    assert_eq!(e.value_string_of(expr)?, "foo-bar-baz-qux");
     Ok(())
   }
 }

@@ -1,5 +1,6 @@
 use crate::{
-  thunk::{StaticScope, ThunkId},
+  context::StaticScope,
+  thunk::ThunkId,
   value::{PathSet, Value},
   Eval,
 };

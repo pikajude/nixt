@@ -15,8 +15,8 @@ extern {
 
   enum Token<'input> {
     ID => Token::Id(<&'input str>),
-    Str => Token::Str(<&'input str>),
-    IndStr => Token::IndStr(<&'input str>),
+    Str => Token::Str(<String>),
+    IndStr => Token::IndStr(<String>),
     Uri => Token::Uri(<&'input str>),
     Path => Token::Path(<&'input str>),
     HPath => Token::HomePath(<&'input str>),

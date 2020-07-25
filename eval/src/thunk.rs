@@ -1,24 +1,13 @@
-use crate::value::Value;
+use crate::{context::Context, value::Value};
 use arena::Id;
-use im::vector::Vector;
-use nix_syntax::expr::{ExprRef, Ident};
+use nix_syntax::expr::ExprRef;
 use parking_lot::{lock_api::RawMutex as _, RawMutex};
 use std::{
   cell::UnsafeCell,
-  collections::BTreeMap,
   fmt::{self, Debug},
   mem::ManuallyDrop,
-  sync::{atomic::*, Arc},
+  sync::atomic::*,
 };
-
-#[derive(Debug, Clone)]
-pub enum Scope {
-  Dynamic(ThunkId),
-  Static(StaticScope),
-}
-
-pub type StaticScope = BTreeMap<Ident, ThunkId>;
-pub type Context = Vector<Arc<Scope>>;
 
 pub type ThunkId = Id<Thunk>;
 

@@ -1,13 +1,33 @@
 use crate::{
-  thunk::{StaticScope, ThunkId},
+  context::StaticScope,
+  thunk::ThunkId,
   value::{PathSet, Value},
   Eval,
 };
+use lazy_static::lazy_static;
 use nix_core::derivation::hash_placeholder;
 use nix_syntax::expr::Ident;
 use nix_util::*;
 use regex::Regex;
-use std::collections::BTreeSet;
+use std::{
+  collections::{BTreeSet, HashMap},
+  sync::{Arc, Mutex},
+};
+
+lazy_static! {
+  static ref REGEX_CACHE: Mutex<HashMap<String, Arc<Regex>>> = Default::default();
+}
+
+fn make_regex(s: &str) -> Result<Arc<Regex>> {
+  let mut m = REGEX_CACHE.lock().unwrap();
+  match m.get(s) {
+    Some(x) => Ok(Arc::clone(x)),
+    None => {
+      m.insert(s.into(), Arc::new(Regex::new(s)?));
+      Ok(Arc::clone(&m[s]))
+    }
+  }
+}
 
 pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> Result<Value> {
   let (ctx, s) = coerce_new_string(eval, string, false, false)?;
@@ -118,7 +138,7 @@ pub fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result
 
 pub fn matches(eval: &Eval, regex: ThunkId, haystack: ThunkId) -> Result<Value> {
   let regex = eval.value_string_of(regex)?;
-  let regex = Regex::new(regex)?;
+  let regex = make_regex(regex)?;
   let (s, _) = eval.value_with_context_of(haystack)?;
   if let Some(caps) = regex.captures(s) {
     let mut matchlist = vec![];
@@ -133,6 +153,20 @@ pub fn matches(eval: &Eval, regex: ThunkId, haystack: ThunkId) -> Result<Value> 
   } else {
     Ok(Value::Null)
   }
+}
+
+pub fn split(eval: &Eval, pattern: ThunkId, string: ThunkId) -> Result<Value> {
+  let pattern = eval.value_string_of(pattern)?;
+  let pattern = make_regex(pattern)?;
+  let (haystack, _) = eval.value_with_context_of(string)?;
+  let mut items = vec![];
+  for (i, match_) in pattern.split(haystack).enumerate() {
+    if i > 0 {
+      items.push(eval.new_value(Value::List(vec![])));
+    }
+    items.push(eval.new_value(Value::string_bare(match_)));
+  }
+  Ok(Value::List(items))
 }
 
 pub fn replace_strings(
@@ -206,4 +240,8 @@ pub fn placeholder(eval: &Eval, name: ThunkId) -> Result<Value> {
   Ok(Value::string_bare(hash_placeholder(
     eval.value_string_of(name)?,
   )))
+}
+
+pub fn discard_context(eval: &Eval, string: ThunkId) -> Result<Value> {
+  Ok(Value::string_bare(eval.value_with_context_of(string)?.0))
 }

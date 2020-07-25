@@ -35,8 +35,8 @@ pub enum Token<'a> {
   IndStringOpen,
   IndStringClose,
 
-  Str(&'a str),
-  IndStr(&'a str),
+  Str(String),
+  IndStr(String),
   Path(&'a str),
   HomePath(&'a str),
   NixPath(&'a str),
@@ -235,8 +235,8 @@ impl<'a> Iterator for Lexer<'a> {
         return Some(Ok((start, Token::Any(ch), self.at)));
       }
       Mode::String => {
-        token!(STRING_INNER_0, Token::Str);
-        token!(STRING_INNER_1, Token::Str);
+        token!(STRING_INNER_0, |x| Token::Str(unescape_str(x)));
+        token!(STRING_INNER_1, |x| Token::Str(unescape_str(x)));
 
         lit!("${", || {
           self.mode.push(Mode::Default);
@@ -247,26 +247,50 @@ impl<'a> Iterator for Lexer<'a> {
           Token::Any('"')
         });
 
-        token!(STRING_END_INVALID, Token::Str);
+        token!(STRING_END_INVALID, |x: &str| Token::Str(x.to_string()));
       }
       Mode::IndString => {
-        token!(IND_STRING_INNER, Token::IndStr);
-        lit!("''$", || Token::IndStr("$"));
+        token!(IND_STRING_INNER, |x: &str| Token::IndStr(x.to_string()));
+        lit!("''$", || Token::IndStr("$".into()));
         lit!("${", || {
           self.mode.push(Mode::Default);
           Token::DollarCurly
         });
-        lit!("$", || Token::IndStr("$"));
-        lit!("'''", || Token::IndStr("''"));
-        token!(IND_STRING_ANY, Token::IndStr);
+        lit!("$", || Token::IndStr("$".into()));
+        lit!("'''", || Token::IndStr("''".into()));
+        token!(IND_STRING_ANY, |x| Token::IndStr(unescape_str(x)));
         lit!("''", || {
           self.mode.pop();
           Token::IndStringClose
         });
-        lit!("'", || Token::IndStr("'"));
+        lit!("'", || Token::IndStr("'".into()));
       }
     }
 
     Some(Err((start, LexError::UnrecognizedInput(input), self.at)))
   }
+}
+
+fn unescape_str(string: &str) -> String {
+  let mut s = String::with_capacity(string.len());
+  let mut char_iter = string.chars().peekable();
+  while let Some(mut c) = char_iter.next() {
+    if c == '\\' {
+      c = char_iter.next().expect("escape at end of string");
+      match c {
+        'n' => s.push('\n'),
+        'r' => s.push('\r'),
+        't' => s.push('\t'),
+        x => s.push(x),
+      }
+    } else if c == '\r' {
+      s.push('\n');
+      if char_iter.peek() == Some(&'\n') {
+        char_iter.next();
+      }
+    } else {
+      s.push(c)
+    }
+  }
+  s
 }

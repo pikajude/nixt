@@ -1,9 +1,10 @@
 use super::{
   builtins::strings::coerce_to_string,
-  thunk::{Context, Thunk, ThunkId},
+  thunk::{Thunk, ThunkId},
   value::Value,
   Eval,
 };
+use crate::context::Context;
 use nix_syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 use nix_util::*;
 

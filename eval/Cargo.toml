@@ -20,6 +20,8 @@ nix-util = { path = "../util" }
 arena = { path = "../arena" }
 nix-syntax = { path = "../syntax" }
 nix-core = { path = "../core" }
+lazy_static = "1.4.0"
+backtrace = "0.3.50"
 
 [dev-dependencies]
 pretty_env_logger = "0.4.0"

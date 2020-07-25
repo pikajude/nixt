@@ -1,8 +1,5 @@
 use crate::{
-  primop, primop2, primop3, primop_inline,
-  thunk::{StaticScope, ThunkId},
-  value::Value,
-  Eval,
+  context::StaticScope, primop, primop2, primop3, primop_inline, thunk::ThunkId, value::Value, Eval,
 };
 use nix_syntax::expr::Ident;
 use nix_util::*;
@@ -98,6 +95,10 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
         eval.new_value(Value::string_bare("x86_64-linux")),
       );
       builtins.insert("elem".into(), eval.new_value(primop2!("elem", lists::elem)));
+      builtins.insert(
+        "foldl'".into(),
+        eval.new_value(primop3!("foldl'", lists::foldl_strict)),
+      );
       builtins.insert(
         "map".into(),
         eval.new_value(primop2!("map", lists::map_list)),
@@ -207,6 +208,16 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
         eval.new_value(primop2!("match", strings::matches)),
       );
       builtins.insert(
+        "storeDir".into(),
+        eval.new_value(Value::string_bare(
+          eval.store.store_path().to_string_lossy(),
+        )),
+      );
+      builtins.insert(
+        "split".into(),
+        eval.new_value(primop2!("split", strings::split)),
+      );
+      builtins.insert(
         "pathExists".into(),
         eval.new_value(primop!("pathExists", sys::path_exists)),
       );
@@ -253,6 +264,13 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
       builtins.insert(
         "unsafeGetAttrPos".into(),
         eval.new_value(primop2!("unsafeGetAttrPos", attrs::unsafe_get_attr_pos)),
+      );
+      builtins.insert(
+        "unsafeDiscardStringContext".into(),
+        eval.new_value(primop!(
+          "unsafeDiscardStringContext",
+          strings::discard_context
+        )),
       );
       builtins
     })),
