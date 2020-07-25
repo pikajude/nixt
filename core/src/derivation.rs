@@ -1,12 +1,13 @@
 use crate::{
   hash::{Encoding, Hash, HashType},
   path::Path as StorePath,
+  Store,
 };
-use async_std::{path::PathBuf, sync::Mutex};
 use std::{
   collections::{BTreeMap, BTreeSet, HashMap},
-  ffi::OsStr,
   fmt::{Display, Write},
+  path::PathBuf,
+  sync::Mutex,
 };
 
 lazy_static! {
@@ -62,9 +63,9 @@ impl Derivation {
     self.outputs.len() == 1 && self.outputs.get("out").map_or(false, |x| x.hash.is_some())
   }
 
-  pub fn unparse(
+  pub fn unparse<S: Store + ?Sized>(
     &self,
-    store_path: &OsStr,
+    store: &S,
     mask_outputs: bool,
     actual_inputs: BTreeMap<String, &BTreeSet<String>>,
   ) -> String {
@@ -81,7 +82,7 @@ impl Derivation {
       if mask_outputs {
         unquoted!(s, "");
       } else {
-        unquoted!(s, "{}/{}", super::store::show_path(store_path), &out.path);
+        unquoted!(s, store.print_store_path(&out.path));
       }
 
       s.push(',');
@@ -127,10 +128,7 @@ impl Derivation {
 
     print_unquoted_strings(
       &mut s,
-      self
-        .input_sources
-        .iter()
-        .map(|i| format!("{}/{}", super::store::show_path(store_path), i)),
+      self.input_sources.iter().map(|i| store.print_store_path(i)),
     );
 
     s.push(',');

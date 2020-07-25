@@ -7,7 +7,7 @@ use super::{
 use nix_syntax::expr::{Binary, BinaryOp, Unary, UnaryOp};
 use nix_util::*;
 
-pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {
+pub fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value> {
   macro_rules! t {
     ($x:expr) => {
       eval.items.alloc(Thunk::thunk($x, context.clone()))
@@ -16,71 +16,71 @@ pub async fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<
 
   match *bin.op {
     BinaryOp::Or => {
-      if eval.value_bool_of(t!(bin.lhs)).await? {
+      if eval.value_bool_of(t!(bin.lhs))? {
         Ok(Value::Bool(true))
       } else {
-        eval.step_eval(bin.rhs, context).await
+        eval.step_eval(bin.rhs, context)
       }
     }
     BinaryOp::And => {
-      if eval.value_bool_of(t!(bin.lhs)).await? {
-        eval.step_eval(bin.rhs, context).await
+      if eval.value_bool_of(t!(bin.lhs))? {
+        eval.step_eval(bin.rhs, context)
       } else {
         Ok(Value::Bool(false))
       }
     }
-    BinaryOp::Add => plus_operator(eval, t!(bin.lhs), t!(bin.rhs)).await,
+    BinaryOp::Add => plus_operator(eval, t!(bin.lhs), t!(bin.rhs)),
     BinaryOp::Sub => {
-      let lhs = eval.value_of(t!(bin.lhs)).await?;
-      let rhs = eval.value_of(t!(bin.rhs)).await?;
+      let lhs = eval.value_of(t!(bin.lhs))?;
+      let rhs = eval.value_of(t!(bin.rhs))?;
 
       do_sub(lhs, rhs)
     }
     BinaryOp::Eq => {
-      let lhs = eval.value_of(t!(bin.lhs)).await?;
-      let rhs = eval.value_of(t!(bin.rhs)).await?;
+      let lhs = eval.value_of(t!(bin.lhs))?;
+      let rhs = eval.value_of(t!(bin.rhs))?;
 
-      Ok(Value::Bool(eval_eq(eval, lhs, rhs).await?))
+      Ok(Value::Bool(eval_eq(eval, lhs, rhs)?))
     }
     BinaryOp::Neq => {
-      let lhs = eval.value_of(t!(bin.lhs)).await?;
-      let rhs = eval.value_of(t!(bin.rhs)).await?;
+      let lhs = eval.value_of(t!(bin.lhs))?;
+      let rhs = eval.value_of(t!(bin.rhs))?;
 
-      Ok(Value::Bool(!eval_eq(eval, lhs, rhs).await?))
+      Ok(Value::Bool(!eval_eq(eval, lhs, rhs)?))
     }
     BinaryOp::Leq => {
-      let lhs = eval.value_of(t!(bin.lhs)).await?;
-      let rhs = eval.value_of(t!(bin.rhs)).await?;
+      let lhs = eval.value_of(t!(bin.lhs))?;
+      let rhs = eval.value_of(t!(bin.rhs))?;
 
       Ok(Value::Bool(!less_than(rhs, lhs)?))
     }
     BinaryOp::Le => {
-      let lhs = eval.value_of(t!(bin.lhs)).await?;
-      let rhs = eval.value_of(t!(bin.rhs)).await?;
+      let lhs = eval.value_of(t!(bin.lhs))?;
+      let rhs = eval.value_of(t!(bin.rhs))?;
 
       Ok(Value::Bool(less_than(lhs, rhs)?))
     }
     BinaryOp::Ge => {
-      let lhs = eval.value_of(t!(bin.lhs)).await?;
-      let rhs = eval.value_of(t!(bin.rhs)).await?;
+      let lhs = eval.value_of(t!(bin.lhs))?;
+      let rhs = eval.value_of(t!(bin.rhs))?;
 
       Ok(Value::Bool(less_than(rhs, lhs)?))
     }
     BinaryOp::Impl => {
-      let lhs = eval.value_bool_of(t!(bin.lhs)).await?;
-      Ok(Value::Bool(!lhs || eval.value_bool_of(t!(bin.rhs)).await?))
+      let lhs = eval.value_bool_of(t!(bin.lhs))?;
+      Ok(Value::Bool(!lhs || eval.value_bool_of(t!(bin.rhs))?))
     }
     BinaryOp::Update => {
-      let mut lhs = eval.value_attrs_of(t!(bin.lhs)).await?.clone();
+      let mut lhs = eval.value_attrs_of(t!(bin.lhs))?.clone();
       // trace!("{:?}", lhs.keys().collect::<Vec<_>>());
-      for (k, v) in eval.value_attrs_of(t!(bin.rhs)).await? {
+      for (k, v) in eval.value_attrs_of(t!(bin.rhs))? {
         lhs.insert(k.clone(), *v);
       }
       Ok(Value::AttrSet(lhs))
     }
     BinaryOp::Concat => {
-      let mut lhs = eval.value_list_of(t!(bin.lhs)).await?.to_vec();
-      let rhs = eval.value_list_of(t!(bin.rhs)).await?;
+      let mut lhs = eval.value_list_of(t!(bin.lhs))?.to_vec();
+      let rhs = eval.value_list_of(t!(bin.rhs))?;
       lhs.extend(rhs);
       Ok(Value::List(lhs))
     }
@@ -100,8 +100,7 @@ fn do_sub(lhs: &Value, rhs: &Value) -> Result<Value> {
   }
 }
 
-#[async_recursion::async_recursion]
-pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
+pub fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
   if lhs as *const _ == rhs as *const _ {
     return Ok(true);
   }
@@ -134,9 +133,9 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
         return Ok(false);
       }
       for (item1, item2) in l1.iter().zip(l2) {
-        let i1 = eval.value_of(*item1).await?;
-        let i2 = eval.value_of(*item2).await?;
-        if !eval_eq(eval, i1, i2).await? {
+        let i1 = eval.value_of(*item1)?;
+        let i2 = eval.value_of(*item2)?;
+        if !eval_eq(eval, i1, i2)? {
           return Ok(false);
         }
       }
@@ -148,9 +147,9 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
       }
       for (k, v) in a1.iter() {
         if let Some(v2) = a2.get(k) {
-          let v1_value = eval.value_of(*v).await?;
-          let v2_value = eval.value_of(*v2).await?;
-          if !eval_eq(eval, v1_value, v2_value).await? {
+          let v1_value = eval.value_of(*v)?;
+          let v2_value = eval.value_of(*v2)?;
+          if !eval_eq(eval, v1_value, v2_value)? {
             return Ok(false);
           }
         } else {
@@ -167,39 +166,35 @@ pub async fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
   })
 }
 
-pub async fn eval_unary(eval: &Eval, un: &Unary, context: Context) -> Result<Value> {
+pub fn eval_unary(eval: &Eval, un: &Unary, context: Context) -> Result<Value> {
   match *un.op {
     UnaryOp::Not => Ok(Value::Bool(
-      !eval
-        .value_bool_of(eval.items.alloc(Thunk::thunk(un.operand, context)))
-        .await?,
+      !eval.value_bool_of(eval.items.alloc(Thunk::thunk(un.operand, context)))?,
     )),
     UnaryOp::Negate => do_sub(
       &Value::Int(0),
-      eval
-        .value_of(eval.items.alloc(Thunk::thunk(un.operand, context)))
-        .await?,
+      eval.value_of(eval.items.alloc(Thunk::thunk(un.operand, context)))?,
     ),
   }
 }
 
-async fn plus_operator(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
-  match eval.value_of(lhs).await? {
+fn plus_operator(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  match eval.value_of(lhs)? {
     Value::Path(p) => {
-      let pathstr = eval.value_string_of(rhs).await?;
+      let pathstr = eval.value_string_of(rhs)?;
       Ok(Value::Path(p.join(pathstr)))
     }
-    Value::Int(i) => match eval.value_of(rhs).await? {
+    Value::Int(i) => match eval.value_of(rhs)? {
       Value::Int(i2) => Ok(Value::Int(i + i2)),
       Value::Float(f) => Ok(Value::Float(*i as f64 + f)),
       v => bail!("cannot add value {} to an integer", v.typename()),
     },
-    Value::Float(f) => match eval.value_of(rhs).await? {
+    Value::Float(f) => match eval.value_of(rhs)? {
       Value::Int(i2) => Ok(Value::Float(f + (*i2 as f64))),
       Value::Float(f2) => Ok(Value::Float(f + f2)),
       v => bail!("cannot add value {} to a float", v.typename()),
     },
-    _ => concat_strings(eval, lhs, rhs).await,
+    _ => concat_strings(eval, lhs, rhs),
   }
 }
 
@@ -215,8 +210,8 @@ pub fn less_than(lhs: &Value, rhs: &Value) -> Result<bool> {
   })
 }
 
-pub async fn concat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
-  Ok(match try_join!(eval.value_of(lhs), eval.value_of(rhs))? {
+pub fn concat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  Ok(match (eval.value_of(lhs)?, eval.value_of(rhs)?) {
     (Value::Path(p1), Value::Path(p2)) => Value::Path(p1.join(p2)),
     (
       Value::Path(p1),
@@ -238,8 +233,20 @@ pub async fn concat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<V
       };
       let mut ctx = Default::default();
       let mut buf = String::new();
-      buf.push_str(&coerce_to_string(eval, lhs, &mut ctx, false, lhs_is_string).await?);
-      buf.push_str(&coerce_to_string(eval, rhs, &mut ctx, false, lhs_is_string).await?);
+      buf.push_str(&coerce_to_string(
+        eval,
+        lhs,
+        &mut ctx,
+        false,
+        lhs_is_string,
+      )?);
+      buf.push_str(&coerce_to_string(
+        eval,
+        rhs,
+        &mut ctx,
+        false,
+        lhs_is_string,
+      )?);
       Value::String {
         string: buf,
         context: ctx,

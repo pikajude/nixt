@@ -4,15 +4,8 @@
 #![feature(btree_drain_filter)]
 
 #[macro_use] extern crate log;
-#[macro_use] extern crate async_recursion;
-#[macro_use] extern crate futures;
 
 use arena::Arena;
-use async_std::{
-  fs,
-  path::{Path, PathBuf},
-  sync::Mutex,
-};
 use builtins::strings::coerce_to_string;
 use codespan::Files;
 use codespan_reporting::{
@@ -32,9 +25,11 @@ use nix_util::*;
 use primop::{Op, Primop};
 use std::{
   collections::{HashMap, HashSet},
+  fs,
+  path::{Path, PathBuf},
   sync::{
     atomic::{AtomicU16, Ordering},
-    Arc,
+    Arc, Mutex,
   },
 };
 use termcolor::{ColorChoice, StandardStream};
@@ -86,12 +81,12 @@ impl Eval {
       config,
       store: Arc::new(LocalStore),
     };
-    async_std::task::block_on(builtins::init_primops(&mut this)).expect("unable to initialize");
+    builtins::init_primops(&mut this).expect("unable to initialize");
     this
   }
 
-  pub async fn print_error(&self, e: Error) -> Result<()> {
-    let files = self.files.lock().await;
+  pub fn print_error(&self, e: Error) -> Result<()> {
+    let files = self.files.lock().unwrap();
     let diagnostic = Diagnostic::error()
       .with_message(format!("{:?}", e.err))
       .with_labels(
@@ -121,16 +116,16 @@ impl Eval {
     Ok(())
   }
 
-  pub async fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
-    let path = path.as_ref().canonicalize().await?;
-    let mut ids = self.file_ids.lock().await;
+  pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
+    let path = path.as_ref().canonicalize()?;
+    let mut ids = self.file_ids.lock().unwrap();
     if let Some(x) = ids.get(&path) {
       return Ok(*x);
     }
     let eid = {
       debug!("loading file: {}", path.display());
-      let contents = fs::read_to_string(&path).await?;
-      let mut f = self.files.lock().await;
+      let contents = fs::read_to_string(&path)?;
+      let mut f = self.files.lock().unwrap();
       let id = f.add(&path, contents);
       nix_syntax::parse(id, &self.expr, f.source(id))?
     };
@@ -141,9 +136,9 @@ impl Eval {
     Ok(thunk_id)
   }
 
-  pub async fn load_inline<S: Into<String>>(&self, src: S) -> Result<ThunkId> {
+  pub fn load_inline<S: Into<String>>(&self, src: S) -> Result<ThunkId> {
     let eid = {
-      let mut f = self.files.lock().await;
+      let mut f = self.files.lock().unwrap();
       let id = f.add(
         format!(
           "<inline-{}>",
@@ -156,7 +151,7 @@ impl Eval {
     Ok(self.items.alloc(Thunk::thunk(eid, Context::new())))
   }
 
-  pub async fn value_of(&self, mut thunk_id: ThunkId) -> Result<&Value> {
+  pub fn value_of(&self, mut thunk_id: ThunkId) -> Result<&Value> {
     let mut ids = HashSet::new();
     ids.insert(thunk_id);
     loop {
@@ -166,7 +161,7 @@ impl Eval {
           let thunk = &self.items[thunk_id];
           let expr = thunk.get_thunk();
           debug!(target: "thunk", "{:?} => {:?}", thunk_id, &expr);
-          let val = self.step_thunk(expr).await?;
+          let val = self.step_thunk(expr)?;
           debug!(target: "thunk", "output: {:?}", &val);
           thunk.put_value(val)
         }
@@ -189,15 +184,15 @@ impl Eval {
     }
   }
 
-  async fn value_bool_of(&self, ix: ThunkId) -> Result<bool> {
-    match self.value_of(ix).await? {
+  fn value_bool_of(&self, ix: ThunkId) -> Result<bool> {
+    match self.value_of(ix)? {
       Value::Bool(b) => Ok(*b),
       v => bail!("Wrong type: expected bool, got {}", v.typename()),
     }
   }
 
-  async fn value_string_of(&self, ix: ThunkId) -> Result<&str> {
-    match self.value_of(ix).await? {
+  fn value_string_of(&self, ix: ThunkId) -> Result<&str> {
+    match self.value_of(ix)? {
       Value::String { string, context } => {
         if context.is_empty() {
           Ok(string)
@@ -209,8 +204,8 @@ impl Eval {
     }
   }
 
-  async fn value_with_context_of(&self, ix: ThunkId) -> Result<(&str, &PathSet)> {
-    match self.value_of(ix).await? {
+  fn value_with_context_of(&self, ix: ThunkId) -> Result<(&str, &PathSet)> {
+    match self.value_of(ix)? {
       Value::String { string, context } => Ok((string, context)),
       v => bail!(
         "wrong type: expected string with context, got {}",
@@ -219,37 +214,33 @@ impl Eval {
     }
   }
 
-  async fn value_path_of(&self, ix: ThunkId) -> Result<&Path> {
-    match self.value_of(ix).await? {
+  fn value_path_of(&self, ix: ThunkId) -> Result<&Path> {
+    match self.value_of(ix)? {
       Value::Path(p) => Ok(p.as_ref()),
       Value::String { string, .. } => Ok(Path::new(string)),
       Value::AttrSet(a) if a.contains_key(&Ident::from("outPath")) => {
-        match self.value_of(a[&Ident::from("outPath")]).await? {
-          Value::Path(p) => Ok(p.as_ref()),
-          Value::String { string, .. } => Ok(Path::new(string)),
-          v => bail!("wrong type: expected path, got {}", v.typename()),
-        }
+        self.value_path_of(a[&Ident::from("outPath")])
       }
       v => bail!("wrong type: expected path, got {}", v.typename()),
     }
   }
 
-  async fn value_attrs_of(&self, ix: ThunkId) -> Result<&StaticScope> {
-    match self.value_of(ix).await? {
+  fn value_attrs_of(&self, ix: ThunkId) -> Result<&StaticScope> {
+    match self.value_of(ix)? {
       Value::AttrSet(ref s) => Ok(s),
       v => bail!("Wrong type: expected attrset, got {:?}", v),
     }
   }
 
-  async fn value_list_of(&self, ix: ThunkId) -> Result<&[ThunkId]> {
-    match self.value_of(ix).await? {
+  fn value_list_of(&self, ix: ThunkId) -> Result<&[ThunkId]> {
+    match self.value_of(ix)? {
       Value::List(ref v) => Ok(v),
       v => bail!("Wrong type: expected list, got {}", v.typename()),
     }
   }
 
-  async fn value_int_of(&self, ix: ThunkId) -> Result<i64> {
-    match self.value_of(ix).await? {
+  fn value_int_of(&self, ix: ThunkId) -> Result<i64> {
+    match self.value_of(ix)? {
       Value::Int(i) => Ok(*i),
       v => bail!("Wrong type: expected list, got {}", v.typename()),
     }
@@ -259,33 +250,31 @@ impl Eval {
     self.items.alloc(Thunk::complete(v))
   }
 
-  // async fn value_float_cast(&self, ix: ThunkId) -> Result<f64> {
-  //   match self.value_of(ix).await? {
+  // fn value_float_cast(&self, ix: ThunkId) -> Result<f64> {
+  //   match self.value_of(ix)? {
   //     Value::Float(f1) => Ok(*f1),
   //     Value::Int(i1) => Ok(*i1 as f64),
   //     v => bail!("expected float, got {}", v.typename()),
   //   }
   // }
 
-  async fn step_thunk(&self, thunk: ThunkCell) -> Result<Value> {
+  fn step_thunk(&self, thunk: ThunkCell) -> Result<Value> {
     match thunk {
-      ThunkCell::Expr(e, c) => self.step_eval(e, c).await,
-      ThunkCell::Apply(lhs, rhs) => self.step_fn(lhs, rhs).await,
+      ThunkCell::Expr(e, c) => self.step_eval(e, c),
+      ThunkCell::Apply(lhs, rhs) => self.step_fn(lhs, rhs),
       ThunkCell::Blackhole => bail!("infinite loop"),
     }
   }
 
-  async fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
+  fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
     self
       .step_eval_impl(e, context)
-      .await
       .with_frame(e.span, self.config.trace)
   }
 
-  #[async_recursion]
-  async fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
+  fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
     if log_enabled!(target: "entry", Level::Debug) {
-      let fs = self.files.lock().await;
+      let fs = self.files.lock().unwrap();
       debug!(
         target: "entry",
         "{}:{}\n  {}",
@@ -306,7 +295,7 @@ impl Eval {
             StrPart::Plain(s) => final_buf.push_str(s),
             StrPart::Quote { quote, .. } => {
               let t = self.items.alloc(Thunk::thunk(*quote, context.clone()));
-              let contents = coerce_to_string(self, t, &mut str_context, false, true).await?;
+              let contents = coerce_to_string(self, t, &mut str_context, false, true)?;
               final_buf.push_str(&contents);
             }
           }
@@ -323,19 +312,21 @@ impl Eval {
           if pb.is_absolute() {
             Ok(Value::Path(pb.into()))
           } else {
-            let files = self.files.lock().await;
+            let files = self.files.lock().unwrap();
             let filename = files.name(e.span.file_id);
             let dest = PathBuf::from(filename).parent().unwrap().join(pb);
             let thing = path_abs::PathAbs::new(dest)?;
-            Ok(Value::Path(thing.as_path().to_path_buf().into()))
+            Ok(Value::Path(thing.as_path().to_path_buf()))
           }
         }
         expr::Path::Home(_) => todo!(),
         expr::Path::NixPath { path, .. } => {
           let nixpath = self.synthetic_variable(e.span, Ident::from("__nixPath"), &context);
-          Ok(Value::Path(
-            builtins::sys::find_file(self, nixpath, &path[1..path.len() - 1]).await?,
-          ))
+          Ok(Value::Path(builtins::sys::find_file(
+            self,
+            nixpath,
+            &path[1..path.len() - 1],
+          )?))
         }
       },
       Expr::Apply(Apply { lhs, rhs }) => {
@@ -352,7 +343,7 @@ impl Eval {
         for item in &context {
           let scope = match item.as_ref() {
             Scope::Static(s1) => s1,
-            Scope::Dynamic(s) => self.value_attrs_of(*s).await?,
+            Scope::Dynamic(s) => self.value_attrs_of(*s)?,
           };
           if let Some(v) = scope.get(ident) {
             return Ok(Value::Ref(*v));
@@ -364,7 +355,7 @@ impl Eval {
         bail!("Unbound variable {}", ident)
       }
       Expr::AttrSet(AttrSet { rec, ref attrs, .. }) => {
-        let new_attrs = self.build_attrs(rec.is_some(), attrs, &context).await?;
+        let new_attrs = self.build_attrs(rec.is_some(), attrs, &context)?;
         Ok(Value::Ref(new_attrs))
       }
       Expr::List(List { elems, .. }) => {
@@ -380,8 +371,8 @@ impl Eval {
         let mut lhs = self.items.alloc(Thunk::thunk(*lhs, context.clone()));
         let mut failed = None;
         for path_item in &*path.0 {
-          let attrname = self.attrname_nonnull(path_item, &context).await?;
-          match self.sel(lhs, &attrname).await? {
+          let attrname = self.attrname_nonnull(path_item, &context)?;
+          match self.sel(lhs, &attrname)? {
             Some(it) => {
               lhs = it;
             }
@@ -393,7 +384,7 @@ impl Eval {
         }
         if let Some(f) = failed {
           if let Some(o) = or {
-            self.step_eval(o.fallback, context).await
+            self.step_eval(o.fallback, context)
           } else {
             bail!("Missing attribute {}", &f)
           }
@@ -402,44 +393,40 @@ impl Eval {
         }
       }
       Expr::Let(Let { binds, rhs, .. }) => {
-        let attrset = self.build_attrs(true, &*binds, &context).await?;
-        self
-          .step_eval(*rhs, context.prepend(Scope::Dynamic(attrset)))
-          .await
+        let attrset = self.build_attrs(true, &*binds, &context)?;
+        self.step_eval(*rhs, context.prepend(Scope::Dynamic(attrset)))
       }
       Expr::If(If {
         cond, rhs1, rhs2, ..
       }) => {
         let cond = self.items.alloc(Thunk::thunk(*cond, context.clone()));
-        if self.value_bool_of(cond).await? {
-          self.step_eval(*rhs1, context).await
+        if self.value_bool_of(cond)? {
+          self.step_eval(*rhs1, context)
         } else {
-          self.step_eval(*rhs2, context).await
+          self.step_eval(*rhs2, context)
         }
       }
       Expr::With(With { env, expr, .. }) => {
         let with_scope = self.items.alloc(Thunk::thunk(*env, context.clone()));
         // XXX: `with` scope is checked *after* every other scope, not before
-        self
-          .step_eval(*expr, context.append(Scope::Dynamic(with_scope)))
-          .await
+        self.step_eval(*expr, context.append(Scope::Dynamic(with_scope)))
       }
       Expr::Assert(Assert { cond, expr, .. }) => {
         let cond = self.items.alloc(Thunk::thunk(*cond, context.clone()));
-        if self.value_bool_of(cond).await? {
-          self.step_eval(*expr, context).await
+        if self.value_bool_of(cond)? {
+          self.step_eval(*expr, context)
         } else {
           bail!("assertion failed")
         }
       }
-      Expr::Binary(b) => operators::eval_binary(self, b, context).await,
-      Expr::Unary(u) => operators::eval_unary(self, u, context).await,
+      Expr::Binary(b) => operators::eval_binary(self, b, context),
+      Expr::Unary(u) => operators::eval_unary(self, u, context),
       Expr::Member(Member { lhs, path, .. }) => {
         let mut lhs = self.items.alloc(Thunk::thunk(*lhs, context.clone()));
 
         for path_item in &path.0 {
-          let attr = self.attrname_nonnull(path_item, &context).await?;
-          match self.sel(lhs, &attr).await? {
+          let attr = self.attrname_nonnull(path_item, &context)?;
+          match self.sel(lhs, &attr)? {
             Some(item) => {
               lhs = item;
             }
@@ -453,14 +440,11 @@ impl Eval {
     }
   }
 
-  #[async_recursion]
-  async fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
-    match self.value_of(lhs).await? {
+  fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+    match self.value_of(lhs)? {
       Value::Lambda { lambda, captures } => {
         debug!(target: "fn", "lambda");
-        self
-          .call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
-          .await
+        self.call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
       }
       Value::Primop(Primop {
         op: Op::Static(f), ..
@@ -469,17 +453,17 @@ impl Eval {
         f(self, rhs)
       }
       Value::Primop(Primop {
-        op: Op::Async(f), ..
+        op: Op::Dynamic(f), ..
       }) => {
         debug!(target: "fn", "primop");
-        f(self, rhs).await
+        f(self, rhs)
       }
       Value::AttrSet(a) => {
         if let Some(ftor) = a.get(&Ident::from("__functor")) {
           debug!(target: "fn", "__functor {:?}", *ftor);
-          let inter_1 = self.step_fn(*ftor, lhs).await?;
+          let inter_1 = self.step_fn(*ftor, lhs)?;
           let inter_id = self.new_value(inter_1);
-          self.step_fn(inter_id, rhs).await
+          self.step_fn(inter_id, rhs)
         } else {
           bail!("an attrset cannot be called unless it has a `__functor' attribute")
         }
@@ -488,7 +472,7 @@ impl Eval {
     }
   }
 
-  async fn call_lambda(
+  fn call_lambda(
     &self,
     arg: &LambdaArg,
     body: ExprRef,
@@ -498,7 +482,7 @@ impl Eval {
     let mut fn_body_scope = StaticScope::new();
 
     if log_enabled!(target: "lambda", Level::Debug) {
-      let fs = self.files.lock().await;
+      let fs = self.files.lock().unwrap();
       debug!(
         target: "lambda",
         "{}:{}\n  {}",
@@ -525,7 +509,7 @@ impl Eval {
           Some(id) => id,
           None => self.new_value(Value::AttrSet(StaticScope::new())),
         };
-        let fn_argument = self.value_attrs_of(fn_arg_thunk).await?;
+        let fn_argument = self.value_attrs_of(fn_arg_thunk)?;
         let fn_scope_id = self.items.alloc(Thunk::new(ThunkCell::Blackhole));
         trace!("lambda: implicit blackholing of {:?}", fn_scope_id);
 
@@ -557,21 +541,18 @@ impl Eval {
       }
     }
 
-    self
-      .step_eval(body, context.prepend(Scope::Static(fn_body_scope)))
-      .await
+    self.step_eval(body, context.prepend(Scope::Static(fn_body_scope)))
   }
 
-  async fn attrname_nonnull(&self, a: &AttrName, context: &Context) -> Result<Ident> {
+  fn attrname_nonnull(&self, a: &AttrName, context: &Context) -> Result<Ident> {
     Ok(
       self
-        .attrname(a, context)
-        .await?
+        .attrname(a, context)?
         .ok_or_else(|| anyhow::anyhow!("an attribute name cannot be null at this position"))?,
     )
   }
 
-  async fn attrname(&self, a: &AttrName, context: &Context) -> Result<Option<Ident>> {
+  fn attrname(&self, a: &AttrName, context: &Context) -> Result<Option<Ident>> {
     match a {
       AttrName::Plain(p) => Ok(Some(p.clone())),
       AttrName::Str { body, .. } => {
@@ -581,7 +562,7 @@ impl Eval {
             StrPart::Plain(s) => buf.push_str(s),
             StrPart::Quote { quote, .. } => {
               let t = self.items.alloc(Thunk::thunk(*quote, context.clone()));
-              let value = self.value_string_of(t).await?;
+              let value = self.value_string_of(t)?;
               buf.push_str(&value);
             }
           }
@@ -590,7 +571,7 @@ impl Eval {
       }
       AttrName::Dynamic { quote, .. } => {
         let val = self.items.alloc(Thunk::thunk(*quote, context.clone()));
-        match self.value_of(val).await? {
+        match self.value_of(val)? {
           Value::Null => Ok(None),
           Value::String { string, context } => {
             if context.is_empty() {
@@ -605,8 +586,8 @@ impl Eval {
     }
   }
 
-  async fn sel(&self, lhs: ThunkId, rhs: &Ident) -> Result<Option<ThunkId>> {
-    Ok(match self.value_of(lhs).await? {
+  fn sel(&self, lhs: ThunkId, rhs: &Ident) -> Result<Option<ThunkId>> {
+    Ok(match self.value_of(lhs)? {
       Value::AttrSet(hs) => {
         let h = hs.get(rhs).copied();
         h
@@ -615,7 +596,7 @@ impl Eval {
     })
   }
 
-  async fn build_attrs(
+  fn build_attrs(
     &self,
     recursive: bool,
     bindings: &[Spanned<Binding>],
@@ -642,20 +623,18 @@ impl Eval {
     };
 
     for (from, attrs) in inherited {
-      self
-        .push_inherit(
-          &mut binds,
-          from,
-          attrs,
-          // rec { inherit foo; } tries to lookup `foo' within itself and causes an infinite loop
-          // if we don't have this part :)
-          if from.is_none() {
-            &context
-          } else {
-            &recursive_scope
-          },
-        )
-        .await?
+      self.push_inherit(
+        &mut binds,
+        from,
+        attrs,
+        // rec { inherit foo; } tries to lookup `foo' within itself and causes an infinite loop
+        // if we don't have this part :)
+        if from.is_none() {
+          &context
+        } else {
+          &recursive_scope
+        },
+      )?
     }
 
     let start_dyn = itertools::partition(&mut regular, |item| {
@@ -672,18 +651,14 @@ impl Eval {
 
     // add plain attributes first
     for (path, rhs) in plain_attrs {
-      self
-        .push_binding(&mut binds, &path.0[..], *rhs, &recursive_scope)
-        .await?
+      self.push_binding(&mut binds, &path.0[..], *rhs, &recursive_scope)?
     }
 
     self.items[env].put_value(Value::AttrSet(binds.clone()));
 
     if !splice_attrs.is_empty() {
       for (path, rhs) in splice_attrs {
-        self
-          .push_binding(&mut binds, &path.0[..], *rhs, &recursive_scope)
-          .await?
+        self.push_binding(&mut binds, &path.0[..], *rhs, &recursive_scope)?
       }
 
       return Ok(self.new_value(Value::AttrSet(binds)));
@@ -692,8 +667,7 @@ impl Eval {
     Ok(env)
   }
 
-  #[async_recursion]
-  async fn push_binding(
+  fn push_binding(
     &self,
     scope: &mut StaticScope,
     names: &[Spanned<AttrName>],
@@ -701,18 +675,16 @@ impl Eval {
     context: &Context,
   ) -> Result<()> {
     let (key1, keyrest) = names.split_first().unwrap();
-    let key1 = self.attrname(key1, context).await?;
+    let key1 = self.attrname(key1, context)?;
     if let Some(key1) = key1 {
       let child_item = if keyrest.is_empty() {
         self.items.alloc(Thunk::thunk(rhs, context.clone()))
       } else {
         let mut next_scope = match scope.get(&key1) {
-          Some(i) => self.value_attrs_of(*i).await?.clone(),
+          Some(i) => self.value_attrs_of(*i)?.clone(),
           None => StaticScope::new(),
         };
-        self
-          .push_binding(&mut next_scope, keyrest, rhs, context)
-          .await?;
+        self.push_binding(&mut next_scope, keyrest, rhs, context)?;
         self.new_value(Value::AttrSet(next_scope))
       };
       scope.insert(key1, child_item);
@@ -720,7 +692,7 @@ impl Eval {
     Ok(())
   }
 
-  async fn push_inherit(
+  fn push_inherit(
     &self,
     scope: &mut StaticScope,
     from: Option<&InheritFrom>,
@@ -734,7 +706,7 @@ impl Eval {
       None => context.clone(),
     };
     for attr in &attrs.0 {
-      let name = self.attrname_nonnull(attr, context).await?;
+      let name = self.attrname_nonnull(attr, context)?;
       debug!(target: "inherit", "{}", name);
       scope.insert(
         name.clone(),
@@ -766,18 +738,16 @@ fn preview(s: &str) -> &str {
 mod tests {
   use super::*;
 
-  #[async_std::test]
-  async fn test_foo() -> Result<()> {
+  #[test]
+  fn test_foo() -> Result<()> {
     pretty_env_logger::init();
 
     let eval = Eval::new();
-    let expr = eval
-      .load_inline(r#"(import <nixpkgs> {}).hello.outPath"#)
-      .await?;
-    match eval.value_of(expr).await {
+    let expr = eval.load_inline(r#"(import <nixpkgs> {}).hello.outPath"#)?;
+    match eval.value_of(expr) {
       Ok(x) => eprintln!("{:?}", x),
       Err(e) => {
-        eval.print_error(e).await?;
+        eval.print_error(e)?;
         panic!("eval failed")
       }
     }
@@ -788,12 +758,12 @@ mod tests {
   macro_rules! assert_eval {
     ($l:literal, $p:pat) => {{
       let eval = Eval::new();
-      assert_matches::assert_matches!(eval.value_of(eval.load_inline($l).await?).await, $p)
+      assert_matches::assert_matches!(eval.value_of(eval.load_inline($l)?), $p)
     }};
   }
 
-  #[async_std::test]
-  async fn test_rec_order() -> Result<()> {
+  #[test]
+  fn test_rec_order() -> Result<()> {
     assert_eval!(
       r#"rec { ${"${b}a"} = 1; ${"b"} = "a"; }.aa"#,
       Ok(Value::Int(1))

@@ -4,28 +4,28 @@ use crate::{
   value::{PathSet, Value},
   Eval,
 };
-use async_std::path::{Path, PathBuf};
 use nix_core::{
   derivation::{Derivation, FixedOutputHash, Output},
   hash::{Hash, HashType},
 };
 use nix_syntax::expr::Ident;
 use nix_util::*;
-use std::collections::BTreeSet;
+use std::{
+  collections::BTreeSet,
+  path::{Path, PathBuf},
+};
 
-pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
-  let attrs = eval.value_attrs_of(args).await?;
+pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
+  let attrs = eval.value_attrs_of(args)?;
 
   let mut context = PathSet::new();
 
-  let name = eval
-    .value_string_of(
-      attrs
-        .get(&Ident::from("name"))
-        .copied()
-        .ok_or_else(|| anyhow::anyhow!("required attribute `name' missing"))?,
-    )
-    .await?;
+  let name = eval.value_string_of(
+    attrs
+      .get(&Ident::from("name"))
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("required attribute `name' missing"))?,
+  )?;
 
   if attrs.contains_key(&Ident::from("__structuredAttrs")) {
     bail!("not implemented: structuredAttrs");
@@ -37,7 +37,7 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   };
 
   let ignore_nulls = match attrs.get(&Ident::from("__ignoreNulls")) {
-    Some(n) => eval.value_bool_of(*n).await?,
+    Some(n) => eval.value_bool_of(*n)?,
     None => false,
   };
 
@@ -54,18 +54,18 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "args" {
-      for arg in eval.value_list_of(*v).await? {
+      for arg in eval.value_list_of(*v)? {
         drv
           .args
-          .push(coerce_to_string(eval, *arg, &mut context, true, false).await?);
+          .push(coerce_to_string(eval, *arg, &mut context, true, false)?);
       }
       continue;
     }
 
-    let string_value = coerce_to_string(eval, *v, &mut context, true, false).await?;
+    let string_value = coerce_to_string(eval, *v, &mut context, true, false)?;
 
     if ignore_nulls {
-      if let Value::Null = eval.value_of(*v).await? {
+      if let Value::Null = eval.value_of(*v)? {
         continue;
       }
     }
@@ -111,7 +111,7 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
         .unwrap();
     }
     if k == "system" {
-      drv.platform = eval.value_with_context_of(*v).await?.0.to_string();
+      drv.platform = eval.value_with_context_of(*v)?.0.to_string();
     }
   }
 
@@ -159,7 +159,7 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       );
     }
 
-    let drv_hash = eval.store.hash_derivation_modulo(&drv, true).await?;
+    let drv_hash = eval.store.hash_derivation_modulo(&drv, true)?;
 
     for out in &outputs_set {
       let output_path =

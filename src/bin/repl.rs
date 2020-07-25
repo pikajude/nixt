@@ -2,8 +2,7 @@
 
 use nix_eval::Eval;
 
-#[async_std::main]
-async fn main() -> nix_util::Result<()> {
+fn main() -> nix_util::Result<()> {
   pretty_env_logger::init();
 
   let eval = Eval::new();
@@ -19,10 +18,10 @@ async fn main() -> nix_util::Result<()> {
   }
 
   while let Ok(line) = rl.readline("> ") {
-    match eval.load_inline(line).await {
-      Ok(expr) => match eval.value_of(expr).await {
+    match eval.load_inline(line) {
+      Ok(expr) => match eval.value_of(expr) {
         Ok(e) => eprintln!("{:?}", e),
-        Err(x) => eval.print_error(x).await?,
+        Err(x) => eval.print_error(x)?,
       },
       Err(e) => eprintln!("{}", e),
     }

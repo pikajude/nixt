@@ -2,8 +2,8 @@ use crate::{thunk::ThunkId, value::Value, Eval};
 use nix_syntax::expr::LambdaArg;
 use nix_util::*;
 
-pub async fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
-  let l = match eval.value_of(fun).await? {
+pub fn function_args(eval: &Eval, fun: ThunkId) -> Result<Value> {
+  let l = match eval.value_of(fun)? {
     Value::Lambda { lambda, .. } => lambda,
     v => bail!("cannot call functionArgs on {}", v.typename()),
   };

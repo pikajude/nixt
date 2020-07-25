@@ -9,19 +9,14 @@ use nix_util::*;
 use regex::Regex;
 use std::collections::BTreeSet;
 
-pub async fn substring(
-  eval: &Eval,
-  start: ThunkId,
-  len: ThunkId,
-  string: ThunkId,
-) -> Result<Value> {
-  let (ctx, s) = coerce_new_string(eval, string, false, false).await?;
-  let start = eval.value_int_of(start).await?;
+pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> Result<Value> {
+  let (ctx, s) = coerce_new_string(eval, string, false, false)?;
+  let start = eval.value_int_of(start)?;
   if start < 0 {
     bail!("first argument to `substring' must be >= 0");
   }
   let start = start as usize;
-  let len = eval.value_int_of(len).await?;
+  let len = eval.value_int_of(len)?;
   let actual_end = std::cmp::min(start + (std::cmp::max(0, len) as usize), s.len());
   Ok(Value::String {
     string: s[start..actual_end].to_string(),
@@ -29,34 +24,33 @@ pub async fn substring(
   })
 }
 
-pub async fn prim_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
+pub fn prim_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
   let mut ctx = PathSet::new();
   Ok(Value::String {
-    string: coerce_to_string(eval, obj, &mut ctx, true, false).await?,
+    string: coerce_to_string(eval, obj, &mut ctx, true, false)?,
     context: ctx,
   })
 }
 
-pub async fn coerce_new_string(
+pub fn coerce_new_string(
   eval: &Eval,
   obj: ThunkId,
   extended: bool,
   copy_to_store: bool,
 ) -> Result<(PathSet, String)> {
   let mut p = PathSet::new();
-  let string = coerce_to_string(eval, obj, &mut p, extended, copy_to_store).await?;
+  let string = coerce_to_string(eval, obj, &mut p, extended, copy_to_store)?;
   Ok((p, string))
 }
 
-#[async_recursion]
-pub async fn coerce_to_string(
+pub fn coerce_to_string(
   eval: &Eval,
   obj: ThunkId,
   ctx: &mut PathSet,
   extended: bool,
   copy_to_store: bool,
 ) -> Result<String> {
-  let v = eval.value_of(obj).await?;
+  let v = eval.value_of(obj)?;
   Ok(match v {
     Value::Path(p) => p.display().to_string(),
     Value::String { string, context } => {
@@ -78,13 +72,19 @@ pub async fn coerce_to_string(
         if i > 0 {
           output.push(' ');
         }
-        output.push_str(&coerce_to_string(eval, *item, ctx, extended, copy_to_store).await?);
+        output.push_str(&coerce_to_string(
+          eval,
+          *item,
+          ctx,
+          extended,
+          copy_to_store,
+        )?);
       }
       output
     }
     Value::AttrSet(a) => {
       if let Some(o) = a.get(&Ident::from("outPath")) {
-        coerce_to_string(eval, *o, ctx, extended, copy_to_store).await?
+        coerce_to_string(eval, *o, ctx, extended, copy_to_store)?
       } else {
         bail!("cannot coerce a set to a string unless it has an `outPath' attribute")
       }
@@ -93,21 +93,21 @@ pub async fn coerce_to_string(
   })
 }
 
-pub async fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result<Value> {
-  let strings = eval.value_list_of(strings).await?;
+pub fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result<Value> {
+  let strings = eval.value_list_of(strings)?;
   if strings.is_empty() {
     return Ok(Value::string_bare(""));
   }
   let mut all_ctx = BTreeSet::new();
   let mut output = String::new();
-  let (sep, pset) = eval.value_with_context_of(sep).await?;
+  let (sep, pset) = eval.value_with_context_of(sep)?;
   all_ctx.extend(pset.iter().cloned());
 
   for (ix, s) in strings.iter().enumerate() {
     if ix > 0 {
       output.push_str(sep);
     }
-    output.push_str(&coerce_to_string(eval, *s, &mut all_ctx, false, false).await?);
+    output.push_str(&coerce_to_string(eval, *s, &mut all_ctx, false, false)?);
   }
 
   Ok(Value::String {
@@ -116,10 +116,10 @@ pub async fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> 
   })
 }
 
-pub async fn matches(eval: &Eval, regex: ThunkId, haystack: ThunkId) -> Result<Value> {
-  let regex = eval.value_string_of(regex).await?;
+pub fn matches(eval: &Eval, regex: ThunkId, haystack: ThunkId) -> Result<Value> {
+  let regex = eval.value_string_of(regex)?;
   let regex = Regex::new(regex)?;
-  let (s, _) = eval.value_with_context_of(haystack).await?;
+  let (s, _) = eval.value_with_context_of(haystack)?;
   if let Some(caps) = regex.captures(s) {
     let mut matchlist = vec![];
     for m in caps.iter().skip(1) {
@@ -135,26 +135,26 @@ pub async fn matches(eval: &Eval, regex: ThunkId, haystack: ThunkId) -> Result<V
   }
 }
 
-pub async fn replace_strings(
+pub fn replace_strings(
   eval: &Eval,
   find: ThunkId,
   replace: ThunkId,
   string: ThunkId,
 ) -> Result<Value> {
-  let findl = eval.value_list_of(find).await?;
-  let replacel = eval.value_list_of(replace).await?;
+  let findl = eval.value_list_of(find)?;
+  let replacel = eval.value_list_of(replace)?;
   if findl.len() != replacel.len() {
     bail!("`from' and `to' list lengths don't match.")
   }
   let mut froms = vec![];
   for item in findl {
-    froms.push(eval.value_with_context_of(*item).await?.0);
+    froms.push(eval.value_with_context_of(*item)?.0);
   }
   let mut tos = vec![];
   for item in replacel {
-    tos.push(eval.value_with_context_of(*item).await?);
+    tos.push(eval.value_with_context_of(*item)?);
   }
-  let (rhs, rhs_context) = eval.value_with_context_of(string).await?;
+  let (rhs, rhs_context) = eval.value_with_context_of(string)?;
   let mut out: Vec<u8> = vec![];
   let mut rhs_context = rhs_context.clone();
   let bytes = rhs.as_bytes();
@@ -180,8 +180,8 @@ pub async fn replace_strings(
   })
 }
 
-pub async fn parse_drv_name(eval: &Eval, name: ThunkId) -> Result<Value> {
-  let name = eval.value_string_of(name).await?;
+pub fn parse_drv_name(eval: &Eval, name: ThunkId) -> Result<Value> {
+  let name = eval.value_string_of(name)?;
   let mut breakpoint = name.len();
   let mut iter = name.char_indices().peekable();
   while let Some((i, ch)) = iter.next() {
@@ -202,8 +202,8 @@ pub async fn parse_drv_name(eval: &Eval, name: ThunkId) -> Result<Value> {
   }))
 }
 
-pub async fn placeholder(eval: &Eval, name: ThunkId) -> Result<Value> {
+pub fn placeholder(eval: &Eval, name: ThunkId) -> Result<Value> {
   Ok(Value::string_bare(hash_placeholder(
-    eval.value_string_of(name).await?,
+    eval.value_string_of(name)?,
   )))
 }

@@ -1,7 +1,6 @@
 use crate::base32;
-use async_std::path::PathBuf;
 use nix_util::Result;
-use std::{cmp::Ordering, convert::TryInto, fmt, str::FromStr};
+use std::{cmp::Ordering, convert::TryInto, fmt, path::PathBuf, str::FromStr};
 
 const HASH_BYTES: usize = 20;
 const HASH_CHARS: usize = 32;

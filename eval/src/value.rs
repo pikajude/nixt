@@ -1,8 +1,7 @@
 use super::thunk::{Context, StaticScope, ThunkId};
 use crate::primop::Primop;
-use async_std::path::PathBuf;
 use nix_syntax::expr;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::PathBuf};
 
 pub type PathSet = BTreeSet<PathBuf>;
 

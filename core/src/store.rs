@@ -3,21 +3,19 @@ use crate::{
   hash::{Encoding, Hash, HashType},
   path::Path as StorePath,
 };
-use async_std::path::Path as StdPath;
-use async_trait::async_trait;
 use nix_util::*;
 use std::{
   borrow::Cow,
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
   fmt::Display,
+  path::Path as StdPath,
 };
 
 pub(crate) fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
   StdPath::new(i).display()
 }
 
-#[async_trait]
 pub trait Store: Send + Sync {
   fn store_path(&self) -> Cow<OsStr>;
 
@@ -99,11 +97,7 @@ pub trait Store: Send + Sync {
     }
   }
 
-  async fn hash_derivation_modulo(
-    &self,
-    derivation: &Derivation,
-    mask_outputs: bool,
-  ) -> Result<Hash> {
+  fn hash_derivation_modulo(&self, derivation: &Derivation, mask_outputs: bool) -> Result<Hash> {
     if derivation.is_fixed_output() {
       let out = &derivation.outputs["out"];
       let hash = out.hash.as_ref().unwrap();
@@ -121,18 +115,18 @@ pub trait Store: Send + Sync {
     let mut inputs2: BTreeMap<String, &BTreeSet<String>> = Default::default();
 
     for (k, v) in &derivation.input_derivations {
-      let mut hashes = crate::derivation::DRV_HASHES.lock().await;
+      let mut hashes = crate::derivation::DRV_HASHES.lock().unwrap();
       if let Some(known) = hashes.get(k) {
         inputs2.insert(known.encode(Encoding::Base16), v);
       } else {
-        let sub_hash = self.hash_derivation_modulo(derivation, false).await?;
+        let sub_hash = self.hash_derivation_modulo(derivation, false)?;
         inputs2.insert(sub_hash.encode(Encoding::Base16), v);
         hashes.insert(k.clone(), sub_hash);
       }
     }
 
     Ok(Hash::hash_str(
-      &derivation.unparse(&self.store_path(), mask_outputs, inputs2),
+      &derivation.unparse(self, mask_outputs, inputs2),
       HashType::SHA256,
     ))
   }
