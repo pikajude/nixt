@@ -59,6 +59,10 @@ pub async fn init_primops(eval: &mut Eval) -> Result<()> {
     eval.new_value(primop!("baseNameOf", sys::base_name_of)),
   );
   eval.toplevel.insert(
+    "placeholder".into(),
+    eval.new_value(primop!("placeholder", strings::placeholder)),
+  );
+  eval.toplevel.insert(
     "removeAttrs".into(),
     eval.new_value(primop2!("removeAttrs", attrs::remove_attrs)),
   );
@@ -201,8 +205,16 @@ pub async fn init_primops(eval: &mut Eval) -> Result<()> {
         eval.new_value(primop!("listToAttrs", attrs::list_to_attrs)),
       );
       builtins.insert(
+        "match".into(),
+        eval.new_value(primop2!("match", strings::matches)),
+      );
+      builtins.insert(
         "pathExists".into(),
         eval.new_value(primop!("pathExists", sys::path_exists)),
+      );
+      builtins.insert(
+        "parseDrvName".into(),
+        eval.new_value(primop!("parseDrvName", strings::parse_drv_name)),
       );
       builtins.insert(
         "readFile".into(),
@@ -211,6 +223,10 @@ pub async fn init_primops(eval: &mut Eval) -> Result<()> {
       builtins.insert(
         "removeAttrs".into(),
         eval.new_value(primop2!("removeAttrs", attrs::remove_attrs)),
+      );
+      builtins.insert(
+        "replaceStrings".into(),
+        eval.new_value(primop3!("replaceStrings", strings::replace_strings)),
       );
       builtins.insert(
         "length".into(),

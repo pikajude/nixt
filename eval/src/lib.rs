@@ -11,7 +11,6 @@ use arena::Arena;
 use async_std::{
   fs,
   path::{Path, PathBuf},
-  prelude::*,
   sync::Mutex,
 };
 use builtins::strings::coerce_to_string;
@@ -220,13 +219,16 @@ impl Eval {
     }
   }
 
-  #[async_recursion]
   async fn value_path_of(&self, ix: ThunkId) -> Result<&Path> {
     match self.value_of(ix).await? {
       Value::Path(p) => Ok(p.as_ref()),
       Value::String { string, .. } => Ok(Path::new(string)),
       Value::AttrSet(a) if a.contains_key(&Ident::from("outPath")) => {
-        self.value_path_of(a[&Ident::from("outPath")]).await
+        match self.value_of(a[&Ident::from("outPath")]).await? {
+          Value::Path(p) => Ok(p.as_ref()),
+          Value::String { string, .. } => Ok(Path::new(string)),
+          v => bail!("wrong type: expected path, got {}", v.typename()),
+        }
       }
       v => bail!("wrong type: expected path, got {}", v.typename()),
     }
@@ -291,7 +293,7 @@ impl Eval {
         fs.location(e.span.file_id, e.span.span.start())?
           .line
           .number(),
-        fs.source_slice(e.span.file_id, e.span.span)?
+        preview(fs.source_slice(e.span.file_id, e.span.span)?)
       );
     }
     match &self.expr[e.node] {
@@ -455,18 +457,26 @@ impl Eval {
   async fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
     match self.value_of(lhs).await? {
       Value::Lambda { lambda, captures } => {
+        debug!(target: "fn", "lambda");
         self
           .call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
           .await
       }
       Value::Primop(Primop {
         op: Op::Static(f), ..
-      }) => f(self, rhs),
+      }) => {
+        debug!(target: "fn", "primop");
+        f(self, rhs)
+      }
       Value::Primop(Primop {
         op: Op::Async(f), ..
-      }) => f(self, rhs).await,
+      }) => {
+        debug!(target: "fn", "primop");
+        f(self, rhs).await
+      }
       Value::AttrSet(a) => {
         if let Some(ftor) = a.get(&Ident::from("__functor")) {
+          debug!(target: "fn", "__functor {:?}", *ftor);
           let inter_1 = self.step_fn(*ftor, lhs).await?;
           let inter_id = self.new_value(inter_1);
           self.step_fn(inter_id, rhs).await
@@ -486,6 +496,19 @@ impl Eval {
     context: &Context,
   ) -> Result<Value> {
     let mut fn_body_scope = StaticScope::new();
+
+    if log_enabled!(target: "lambda", Level::Debug) {
+      let fs = self.files.lock().await;
+      debug!(
+        target: "lambda",
+        "{}:{}\n  {}",
+        fs.name(body.span.file_id).to_string_lossy(),
+        fs.location(body.span.file_id, body.span.span.start())?
+          .line
+          .number(),
+        preview(fs.source_slice(body.span.file_id, body.span.span)?)
+      );
+    }
 
     match arg {
       LambdaArg::Plain(a) => {
@@ -712,6 +735,7 @@ impl Eval {
     };
     for attr in &attrs.0 {
       let name = self.attrname_nonnull(attr, context).await?;
+      debug!(target: "inherit", "{}", name);
       scope.insert(
         name.clone(),
         self.synthetic_variable(attr.span, name, &binding_scope),
@@ -730,51 +754,25 @@ impl Eval {
   }
 }
 
+fn preview(s: &str) -> &str {
+  if s.len() <= 500 {
+    s
+  } else {
+    &s[..500]
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::ffi::OsString;
-
-  async fn yoink_nixpkgs(into: &std::path::Path) -> Result<()> {
-    eprintln!(
-      "You don't have a <nixpkgs> available, so I will download the latest unstable channel."
-    );
-    let latest = std::io::Cursor::new(
-      reqwest::Client::new()
-        .get("https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz")
-        .send()
-        .await?
-        .bytes()
-        .await?,
-    );
-    let mut decoder = tar::Archive::new(xz2::read::XzDecoder::new(latest));
-    for entry in decoder.entries()? {
-      let mut entry = entry?;
-      let dest: std::path::PathBuf = entry.path()?.components().skip(1).collect();
-      entry.unpack(into.join(dest))?;
-    }
-    Ok(())
-  }
 
   #[async_std::test]
   async fn test_foo() -> Result<()> {
     pretty_env_logger::init();
 
-    if std::env::var("NIX_PATH").unwrap_or_default().is_empty() {
-      let destdir = tempfile::tempdir()?.into_path();
-      yoink_nixpkgs(&destdir).await?;
-      let mut nix_path = OsString::from("nixpkgs=");
-      nix_path.push(&destdir);
-      eprintln!(
-        "unpacked nixpkgs-unstable into {}",
-        nix_path.to_string_lossy()
-      );
-      std::env::set_var("NIX_PATH", nix_path);
-    }
-
     let eval = Eval::new();
     let expr = eval
-      .load_inline(r#"(import <nixpkgs> { overlays = []; }).hello.outPath"#)
+      .load_inline(r#"(import <nixpkgs> {}).hello.outPath"#)
       .await?;
     match eval.value_of(expr).await {
       Ok(x) => eprintln!("{:?}", x),

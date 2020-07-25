@@ -1,10 +1,12 @@
 use crate::{
-  thunk::ThunkId,
+  thunk::{StaticScope, ThunkId},
   value::{PathSet, Value},
   Eval,
 };
+use nix_core::derivation::hash_placeholder;
 use nix_syntax::expr::Ident;
 use nix_util::*;
+use regex::Regex;
 use std::collections::BTreeSet;
 
 pub async fn substring(
@@ -112,4 +114,96 @@ pub async fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> 
     string: output,
     context: all_ctx,
   })
+}
+
+pub async fn matches(eval: &Eval, regex: ThunkId, haystack: ThunkId) -> Result<Value> {
+  let regex = eval.value_string_of(regex).await?;
+  let regex = Regex::new(regex)?;
+  let (s, _) = eval.value_with_context_of(haystack).await?;
+  if let Some(caps) = regex.captures(s) {
+    let mut matchlist = vec![];
+    for m in caps.iter().skip(1) {
+      if let Some(m_) = m {
+        matchlist.push(eval.new_value(Value::string_bare(m_.as_str())));
+      } else {
+        matchlist.push(eval.new_value(Value::Null));
+      }
+    }
+    Ok(Value::List(matchlist))
+  } else {
+    Ok(Value::Null)
+  }
+}
+
+pub async fn replace_strings(
+  eval: &Eval,
+  find: ThunkId,
+  replace: ThunkId,
+  string: ThunkId,
+) -> Result<Value> {
+  let findl = eval.value_list_of(find).await?;
+  let replacel = eval.value_list_of(replace).await?;
+  if findl.len() != replacel.len() {
+    bail!("`from' and `to' list lengths don't match.")
+  }
+  let mut froms = vec![];
+  for item in findl {
+    froms.push(eval.value_with_context_of(*item).await?.0);
+  }
+  let mut tos = vec![];
+  for item in replacel {
+    tos.push(eval.value_with_context_of(*item).await?);
+  }
+  let (rhs, rhs_context) = eval.value_with_context_of(string).await?;
+  let mut out: Vec<u8> = vec![];
+  let mut rhs_context = rhs_context.clone();
+  let bytes = rhs.as_bytes();
+  let mut p = 0;
+  while p <= bytes.len() {
+    let mut found = false;
+    for (i, f) in froms.iter().enumerate() {
+      if bytes[p..].starts_with(f.as_bytes()) {
+        found = true;
+        out.extend(tos[i].0.as_bytes());
+        rhs_context.extend(tos[i].1.iter().cloned());
+        p += f.len();
+        break;
+      }
+    }
+    if !found {
+      p += 1;
+    }
+  }
+  Ok(Value::String {
+    string: String::from_utf8_lossy(bytes).to_string(),
+    context: rhs_context,
+  })
+}
+
+pub async fn parse_drv_name(eval: &Eval, name: ThunkId) -> Result<Value> {
+  let name = eval.value_string_of(name).await?;
+  let mut breakpoint = name.len();
+  let mut iter = name.char_indices().peekable();
+  while let Some((i, ch)) = iter.next() {
+    if ch == '-' && iter.peek().map_or(false, |(_, c)| !c.is_alphanumeric()) {
+      breakpoint = i;
+      break;
+    }
+  }
+  let (name, version) = name.split_at(breakpoint);
+  Ok(Value::AttrSet({
+    let mut a = StaticScope::new();
+    a.insert("name".into(), eval.new_value(Value::string_bare(name)));
+    a.insert(
+      "version".into(),
+      eval.new_value(Value::string_bare(version)),
+    );
+    a
+  }))
+}
+
+pub async fn placeholder(eval: &Eval, name: ThunkId) -> Result<Value> {
+  Ok(Value::string_bare(hash_placeholder(
+    eval.value_string_of(name).await?,
+  )))
 }

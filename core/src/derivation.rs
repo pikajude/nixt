@@ -1,5 +1,5 @@
 use crate::{
-  hash::{Encoding, Hash},
+  hash::{Encoding, Hash, HashType},
   path::Path as StorePath,
 };
 use async_std::{path::PathBuf, sync::Mutex};
@@ -200,4 +200,12 @@ fn print_strings<'a, I: IntoIterator<Item = &'a str>>(s: &mut String, strs: I) {
     print_string(s, item);
   }
   s.push(']');
+}
+
+pub fn hash_placeholder<S: AsRef<str>>(output: S) -> String {
+  format!(
+    "/{}",
+    Hash::hash_str(&format!("nix-output:{}", output.as_ref()), HashType::SHA256)
+      .encode(Encoding::Base32)
+  )
 }
