@@ -2,6 +2,7 @@ use crate::{
   derivation::Derivation,
   hash::{Encoding, Hash, HashType},
   path::Path as StorePath,
+  path_info::{PathInfo, ValidPathInfo},
   settings,
 };
 use nix_util::*;
@@ -10,10 +11,9 @@ use std::{
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
   fmt::Display,
-  path::Path as StdPath,
+  path::{Path as StdPath, PathBuf},
+  sync::Arc,
 };
-
-pub mod local;
 
 pub(crate) fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
   StdPath::new(i).display()
@@ -38,6 +38,23 @@ pub trait Store: Send + Sync {
       .truncate(20)
       .into_owned();
     StorePath::from_parts(hash.as_bytes(), name)
+  }
+
+  fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
+    Ok(self.print_store_path(path).into())
+  }
+
+  fn get_path_info(&self, path: &StorePath) -> Result<Option<Arc<dyn PathInfo>>>;
+
+  fn is_valid_path(&self, path: &StorePath) -> Result<bool> {
+    self.get_path_info(path).map(|x| x.is_some())
+  }
+
+  fn register_valid_path(&self, path_info: ValidPathInfo) -> Result<()>;
+
+  #[allow(unused)]
+  fn add_temp_root(&self, path: &StorePath) -> Result<()> {
+    bail!("not supported by this store backend")
   }
 
   fn make_type<'a>(

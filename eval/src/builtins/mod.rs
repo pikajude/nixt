@@ -286,7 +286,7 @@ fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
 fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value> {
   if let Err(mut e) = eval.value_of(value) {
     let (ctx, _) = eval.value_with_context_of(ctx)?;
-    e.err = e.err.context(ctx.to_string());
+    e = e.context(ctx.to_string());
     Err(e)
   } else {
     Ok(Value::Ref(value))

@@ -1,17 +1,10 @@
-[package]
-name = "rnix"
-version = "0.1.0"
-authors = ["Jude Taylor <me@jude.xyz>"]
-edition = "2018"
-
-[dependencies]
-log = "0.4.11"
-rustyline = "6.2.0"
-dirs-next = "1.0.1"
-pretty_env_logger = "0.4.0"
-
-nix-eval = { path = "eval" }
-nix-util = { path = "util" }
-
 [workspace]
-members = ["arena", "syntax", "eval", "util", "core", "."]
+members = [
+  "arena",
+  "core",
+  "eval",
+  "repl",
+  "store",
+  "syntax",
+  "util",
+]

@@ -1,0 +1,13 @@
+[package]
+name = "nix-store"
+version = "0.1.0"
+authors = ["Jude Taylor <me@jude.xyz>"]
+edition = "2018"
+
+[dependencies]
+unix = { package = "nix", version = "0.17.0" }
+
+nix-core = { path = "../core" }
+nix-util = { path = "../util" }
+log = "0.4.11"
+rand = "0.7.3"

@@ -8,8 +8,10 @@ use std::{
 };
 
 mod context;
+mod sink;
 
 pub use context::Context;
+pub use sink::Sink;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -15,13 +15,15 @@ serde_json = "1.0.56"
 path_abs = "0.5.0"
 itertools = "0.9.0"
 regex = "1.3.9"
-
-nix-util = { path = "../util" }
-arena = { path = "../arena" }
-nix-syntax = { path = "../syntax" }
-nix-core = { path = "../core" }
 lazy_static = "1.4.0"
 backtrace = "0.3.50"
+thiserror = "1.0.20"
+
+arena = { path = "../arena" }
+nix-core = { path = "../core" }
+nix-store = { path = "../store" }
+nix-syntax = { path = "../syntax" }
+nix-util = { path = "../util" }
 
 [dev-dependencies]
 pretty_env_logger = "0.4.0"

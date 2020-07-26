@@ -16,7 +16,8 @@ use config::Config;
 use context::{Context, Scope, StaticScope};
 use itertools::{Either, Itertools};
 use log::Level;
-use nix_core::{store::local::LocalStore, Store};
+use nix_core::Store;
+use nix_store::LocalStore;
 use nix_syntax::{
   expr::{self, *},
   span::{spanned, FileSpan, Spanned},
@@ -24,7 +25,8 @@ use nix_syntax::{
 use nix_util::*;
 use primop::{Op, Primop};
 use std::{
-  collections::{HashMap, HashSet},
+  cell::RefCell,
+  collections::{HashMap, HashSet, VecDeque},
   fs,
   path::{Path, PathBuf},
   sync::{
@@ -45,6 +47,12 @@ pub mod primop;
 pub mod thunk;
 pub mod value;
 
+#[derive(thiserror::Error, Debug)]
+#[error("assertion failure: {:?}", at)]
+struct AssertFailure {
+  at: FileSpan,
+}
+
 pub struct Eval {
   items: Arena<Thunk>,
   expr: Arena<Expr>,
@@ -52,6 +60,7 @@ pub struct Eval {
   inline_counter: AtomicU16,
   files: Mutex<Files<String>>,
   file_ids: Mutex<HashMap<PathBuf, ThunkId>>,
+  trace: RefCell<VecDeque<FileSpan>>,
   writer: StandardStream,
   config: Config,
   store: Arc<dyn Store>,
@@ -77,6 +86,7 @@ impl Eval {
       writer: StandardStream::stderr(ColorChoice::Auto),
       config,
       store: Arc::new(LocalStore::open()?),
+      trace: Default::default(),
     };
     builtins::init_primops(&mut this)?;
     Ok(this)
@@ -84,11 +94,14 @@ impl Eval {
 
   pub fn print_error(&self, e: Error) -> Result<()> {
     let files = self.files.lock().unwrap();
+    let trace = self.trace.borrow();
+    let trace_limit = if self.config.trace { trace.len() } else { 1 };
     let diagnostic = Diagnostic::error()
-      .with_message(format!("{:?}", e.err))
+      .with_message(format!("{:?}", e))
       .with_labels(
-        e.trace
-          .into_iter()
+        trace
+          .iter()
+          .take(trace_limit)
           .enumerate()
           .map(|(i, span)| {
             Label::new(
@@ -247,14 +260,6 @@ impl Eval {
     self.items.alloc(Thunk::complete(v))
   }
 
-  // fn value_float_cast(&self, ix: ThunkId) -> Result<f64> {
-  //   match self.value_of(ix)? {
-  //     Value::Float(f1) => Ok(*f1),
-  //     Value::Int(i1) => Ok(*i1 as f64),
-  //     v => bail!("expected float, got {}", v.typename()),
-  //   }
-  // }
-
   fn step_thunk(&self, thunk: ThunkCell) -> Result<Value> {
     match thunk {
       ThunkCell::Expr(e, c) => self.step_eval(e, c),
@@ -264,9 +269,10 @@ impl Eval {
   }
 
   fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
-    self
-      .step_eval_impl(e, context)
-      .with_frame(e.span, self.config.trace)
+    self.trace.borrow_mut().push_front(e.span);
+    let result = self.step_eval_impl(e, context)?;
+    self.trace.borrow_mut().pop_front();
+    Ok(result)
   }
 
   fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
@@ -418,7 +424,7 @@ impl Eval {
         if self.value_bool_of(cond)? {
           self.step_eval(*expr, context)
         } else {
-          bail!("assertion failed")
+          bail!(AssertFailure { at: e.span })
         }
       }
       Expr::Binary(b) => operators::eval_binary(self, b, context),
@@ -753,8 +759,13 @@ mod tests {
     pretty_env_logger::init();
 
     let eval = Eval::new().unwrap();
-    let expr =
-      eval.load_inline(r#"(import /home/jude/.code/nix/pkgs { overlays = []; }).hello.outPath"#)?;
+    let expr = eval.load_inline(
+      r#"
+      (import <nixpkgs> {
+        overlays = [];
+      }).hello.outPath
+      "#,
+    )?;
     match eval.value_of(expr) {
       Ok(x) => eprintln!("{:?}", x),
       Err(e) => {

@@ -1,12 +1,12 @@
-use nix::{
-  errno::EWOULDBLOCK,
-  fcntl::{self, FlockArg},
-};
 use nix_util::*;
 use std::{
   fs::{self, File},
   os::unix::io::AsRawFd,
   path::PathBuf,
+};
+use unix::{
+  errno::EWOULDBLOCK,
+  fcntl::{self, FlockArg},
 };
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -67,7 +67,7 @@ impl PathLocks {
     Self::default()
   }
 
-  pub async fn lock<I: IntoIterator<Item = PathBuf>>(
+  pub fn lock<'a, I: IntoIterator<Item = &'a PathBuf>>(
     &mut self,
     paths: I,
     wait: bool,

@@ -355,16 +355,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "fuchsia-cprng"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -519,9 +509,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.71"
+version = "0.2.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9457b06509d27052635f90d6466700c65095fdf75409b3fbdd903e988b886f49"
+checksum = "bd7d4bd64732af4bf3a67f367c27df8520ad7e230c5817b8ff485864d80242b9"
 
 [[package]]
 name = "lock_api"
@@ -582,7 +572,6 @@ dependencies = [
  "assert_matches",
  "binascii",
  "derive_more",
- "fs2",
  "hex",
  "lazy_static",
  "log",
@@ -608,6 +597,7 @@ dependencies = [
  "lazy_static",
  "log",
  "nix-core",
+ "nix-store",
  "nix-syntax",
  "nix-util",
  "parking_lot",
@@ -616,6 +606,30 @@ dependencies = [
  "regex",
  "serde_json",
  "termcolor",
+ "thiserror",
+]
+
+[[package]]
+name = "nix-repl"
+version = "0.1.0"
+dependencies = [
+ "dirs-next",
+ "log",
+ "nix-eval",
+ "nix-util",
+ "pretty_env_logger",
+ "rustyline",
+]
+
+[[package]]
+name = "nix-store"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "nix",
+ "nix-core",
+ "nix-util",
+ "rand 0.7.3",
 ]
 
 [[package]]
@@ -639,7 +653,6 @@ name = "nix-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "nix-syntax",
 ]
 
 [[package]]
@@ -940,18 +953,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3acd125665422973a33ac9d3dd2df85edad0f4ae9b00dafb1a05e43a9f5ef8e7"
 dependencies = [
  "winapi",
-]
-
-[[package]]
-name = "rnix"
-version = "0.1.0"
-dependencies = [
- "dirs-next",
- "log",
- "nix-eval",
- "nix-util",
- "pretty_env_logger",
- "rustyline",
 ]
 
 [[package]]
