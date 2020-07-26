@@ -228,10 +228,7 @@ pub fn concat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> 
       }
     }
     (x, _) => {
-      let lhs_is_string = match x {
-        Value::String { .. } => true,
-        _ => false,
-      };
+      let lhs_is_string = matches!(x, Value::String {..});
       let mut ctx = Default::default();
       let mut buf = String::new();
       buf.push_str(&coerce_to_string(

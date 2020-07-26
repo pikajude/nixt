@@ -43,11 +43,7 @@ impl Expr {
   pub fn is_plain_string(&self) -> bool {
     match self {
       Self::Str(Str { body, .. }) | Self::IndStr(IndStr { body, .. }) => {
-        body.len() == 1
-          && match &body[0] {
-            StrPart::Plain(_) => true,
-            _ => false,
-          }
+        body.len() == 1 && matches!(&body[0], StrPart::Plain(_))
       }
       _ => false,
     }

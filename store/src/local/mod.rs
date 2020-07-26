@@ -7,13 +7,15 @@ use nix_core::{
   Store,
 };
 use nix_util::*;
+#[cfg(target_os = "linux")] use std::os::linux::fs::MetadataExt as _;
+#[cfg(target_os = "macos")] use std::os::macos::fs::MetadataExt as _;
 use std::{
   borrow::Cow,
   collections::HashSet,
   ffi::OsStr,
   fs,
   io::Write,
-  os::{linux::fs::MetadataExt as _, unix::fs::*},
+  os::unix::fs::*,
   path::{Path, PathBuf},
   sync::Arc,
 };
@@ -156,11 +158,11 @@ impl LocalStore {
     if meta.is_file() && meta.st_nlink() == 1 {
       *bytes_freed += meta.len();
     } else if meta.is_dir() {
-      let cur_mode = Mode::from_bits_truncate(meta.mode());
+      let cur_mode = Mode::from_bits_truncate(meta.mode() as _);
       let target_mode = Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IXUSR;
       if !cur_mode.contains(target_mode) {
         let mut perms = meta.permissions();
-        perms.set_mode((cur_mode & target_mode).bits());
+        perms.set_mode((cur_mode & target_mode).bits() as _);
         fs::set_permissions(path, perms)
           .with_context(|| format!("while making `{}' writable", path.display()))?;
       }

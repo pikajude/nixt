@@ -148,47 +148,33 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
       builtins.insert(
         "isString".into(),
         eval.new_value(primop_inline!("isString", |e, i| {
-          Ok(Value::Bool(match e.value_of(i)? {
-            Value::String { .. } => true,
-            _ => false,
-          }))
+          Ok(Value::Bool(matches!(e.value_of(i)?, Value::String { .. })))
         })),
       );
       builtins.insert(
         "isAttrs".into(),
         eval.new_value(primop_inline!("isAttrs", |e, i| {
-          Ok(Value::Bool(match e.value_of(i)? {
-            Value::AttrSet { .. } => true,
-            _ => false,
-          }))
+          Ok(Value::Bool(matches!(e.value_of(i)?, Value::AttrSet { .. })))
         })),
       );
       builtins.insert(
         "isBool".into(),
         eval.new_value(primop_inline!("isBool", |e, i| {
-          Ok(Value::Bool(match e.value_of(i)? {
-            Value::Bool { .. } => true,
-            _ => false,
-          }))
+          Ok(Value::Bool(matches!(e.value_of(i)?, Value::Bool(_))))
         })),
       );
       builtins.insert(
         "isFunction".into(),
         eval.new_value(primop_inline!("isFunction", |e, i| {
-          Ok(Value::Bool(match e.value_of(i)? {
-            Value::Primop { .. } => true,
-            Value::Lambda { .. } => true,
-            _ => false,
-          }))
+          Ok(Value::Bool(
+            matches!(e.value_of(i)?, Value::Primop{..} | Value::Lambda{..}),
+          ))
         })),
       );
       builtins.insert(
         "isList".into(),
         eval.new_value(primop_inline!("isList", |e, i| {
-          Ok(Value::Bool(match e.value_of(i)? {
-            Value::List(_) => true,
-            _ => false,
-          }))
+          Ok(Value::Bool(matches!(e.value_of(i)?, Value::List(_))))
         })),
       );
       builtins.insert(

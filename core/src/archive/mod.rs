@@ -65,7 +65,7 @@ fn dump_path_impl<P: AsRef<Path>, W: Write>(
   if meta.file_type().is_file() {
     sink.write_str("type")?;
     sink.write_str("regular")?;
-    if Mode::from_bits_truncate(meta.mode()).contains(Mode::S_IXUSR) {
+    if Mode::from_bits_truncate(meta.mode() as _).contains(Mode::S_IXUSR) {
       sink.write_str("executable")?;
       sink.write_str("")?;
     }
