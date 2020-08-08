@@ -220,8 +220,9 @@ impl Store for LocalStore {
 
 impl LocalStore {
   pub fn open() -> Result<Self> {
-    #[cfg(test)]
-    let _ = pretty_env_logger::try_init();
+    if cfg!(test) {
+      let _ = pretty_env_logger::try_init();
+    }
 
     let root = concat!(env!("OUT_DIR"), "/nix");
     let root_dir = PathBuf::from(root);
@@ -236,10 +237,9 @@ impl LocalStore {
     {
       #[allow(unused_mut)]
       let mut fd = File::create(&reserved_path)?;
-      #[cfg(target_os = "linux")]
-      unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
-      #[cfg(not(target_os = "linux"))]
-      {
+      if cfg!(target_os = "linux") {
+        unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
+      } else {
         fd.write_all(vec![b'X'; settings().reserved_size as usize].as_slice())?;
         ftruncate(fd.as_raw_fd(), settings().reserved_size as _)?;
       }
@@ -501,8 +501,7 @@ impl LocalStore {
     inodes: &mut HashSet<libc::ino_t>,
     stats: &mut OptimiseStats,
   ) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
+    if cfg!(target_os = "macos") {
       if path.to_string_lossy().contains(".app/Contents/") {
         debug!("path `{}' cannot be linked", path.display());
         return Ok(());

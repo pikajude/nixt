@@ -22,7 +22,7 @@ pub struct Cache(Mutex<Connection>);
 lazy_static! {
   pub static ref CACHE: Cache = {
     let db_file = dirs_next::cache_dir()
-      .expect("no cache dir found")
+      .expect("no XDG dirs found")
       .join("nix")
       .join("fetcher-cache-v1.sqlite");
     std::fs::create_dir_all(db_file.parent().unwrap()).expect("Unable to create cache directory.");
