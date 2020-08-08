@@ -35,10 +35,10 @@ lazy_static! {
 impl Cache {
   pub fn add(
     &self,
-    key: impl Serialize,
-    info: impl Serialize,
-    store_path: &StorePath,
-    immutable: bool,
+    _key: impl Serialize,
+    _info: impl Serialize,
+    _store_path: &StorePath,
+    _immutable: bool,
   ) -> Result<()> {
     Ok(())
   }

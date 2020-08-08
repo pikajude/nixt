@@ -19,7 +19,7 @@ pub fn download_file(
   store: &dyn Store,
   url: &str,
   name: &str,
-  immutable: bool,
+  _immutable: bool,
 ) -> Result<DownloadFile> {
   info!("fetching {}", url);
   let mut download_file = tempfile::NamedTempFile::new()?;

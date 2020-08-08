@@ -145,7 +145,7 @@ impl Store for LocalStore {
     path_info: &dyn PathInfo,
     input: &mut dyn std::io::Read,
     repair: RepairFlag,
-    check_sigs: CheckSigsFlag,
+    _check_sigs: CheckSigsFlag,
   ) -> Result<()> {
     self.add_temp_root(path_info.store_path())?;
 
@@ -171,7 +171,7 @@ impl Store for LocalStore {
     name: &str,
     path: &Path,
     ingest_method: FileIngestionMethod,
-    hash_type: HashType,
+    _hash_type: HashType,
     filter: &PathFilter,
     repair: RepairFlag,
   ) -> Result<StorePath> {

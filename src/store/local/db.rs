@@ -5,7 +5,6 @@ use crate::{
 };
 use rusqlite::{named_params, DatabaseName};
 use std::{
-  rc::Rc,
   time::{Duration, SystemTime},
 };
 
@@ -92,7 +91,7 @@ pub fn get_path_info<S: Store + ?Sized>(
     },
   )?;
 
-  if let Some(mut pinfo) = maybe_valid.next().transpose()? {
+  if let Some(pinfo) = maybe_valid.next().transpose()? {
     // gather references
     Ok(Some(pinfo))
   } else {
