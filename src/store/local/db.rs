@@ -1,12 +1,6 @@
-use crate::{
-  path_info::{PathInfo, ValidPathInfo},
-  prelude::*,
-  sqlite::Sqlite,
-};
+use crate::{path_info::ValidPathInfo, prelude::*, sqlite::Sqlite};
 use rusqlite::{named_params, DatabaseName};
-use std::{
-  time::{Duration, SystemTime},
-};
+use std::time::{Duration, SystemTime};
 
 static QUERY_PATH_INFO: &str = "select id, hash, registrationTime, deriver, narSize, ultimate, \
                                 sigs, ca from ValidPaths where path = :path";

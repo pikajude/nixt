@@ -82,6 +82,11 @@ pub fn filter(eval: &Eval, filter: ThunkId, list: ThunkId) -> Result<Value> {
           out.push(*item);
         }
       }
+      Value::Ref(r) => {
+        if eval.value_bool_of(r)? {
+          out.push(*item);
+        }
+      }
       v => bail!("unexpected type: expected bool, got {}", v.typename()),
     }
   }

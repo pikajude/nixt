@@ -1,81 +1,38 @@
 use crate::prelude::*;
-use std::{ffi::CStr, mem::MaybeUninit};
-use unix::NixPath;
+use libarchive::{archive::*, reader::*};
+use libarchive3_sys::ffi;
 
-mod sys;
+pub struct Archive(FileReader);
 
-pub struct TarArchive {
-  archive: *mut sys::archive,
-}
-
-impl TarArchive {
+impl Archive {
   pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-    let ptr = unsafe { sys::archive_read_new() };
-    unsafe {
-      sys::archive_read_support_filter_all(ptr);
-      sys::archive_read_support_format_all(ptr);
-    }
-    let this = Self { archive: ptr };
-    this.check(path.as_ref().with_nix_path(|cstr| unsafe {
-      sys::archive_read_open_filename(this.archive, cstr.as_ptr(), 16384)
-    })?)?;
-    Ok(this)
+    let mut builder = Builder::new();
+    builder.support_filter(ReadFilter::All)?;
+    builder.support_format(ReadFormat::All)?;
+    Ok(Self(builder.open_file(path)?))
   }
 
-  fn check(&self, err: i32) -> Result<()> {
-    if err == sys::ARCHIVE_EOF as i32 {
-      bail!("reached end of archive")
-    } else if err != sys::ARCHIVE_OK as i32 {
-      let cstr = unsafe { CStr::from_ptr(sys::archive_error_string(self.archive)) };
-      bail!("failed to extract archive: {}", cstr.to_str()?);
-    }
-    Ok(())
-  }
-
-  pub fn extract_to<P: AsRef<Path>>(self, dest: P) -> Result<()> {
+  pub fn extract_to<P: AsRef<Path>>(mut self, dest: P) -> Result<()> {
     let dest = dest.as_ref();
-    let flags = sys::ARCHIVE_EXTRACT_FFLAGS
-      | sys::ARCHIVE_EXTRACT_PERM
-      | sys::ARCHIVE_EXTRACT_TIME
-      | sys::ARCHIVE_EXTRACT_SECURE_SYMLINKS
-      | sys::ARCHIVE_EXTRACT_SECURE_NODOTDOT;
+    let ptr = unsafe { self.0.handle() };
+    let mut opts = ExtractOptions::new();
+    opts
+      .add(ExtractOption::FFlags)
+      .add(ExtractOption::Permissions)
+      .add(ExtractOption::Time)
+      .add(ExtractOption::SecureSymlinks)
+      .add(ExtractOption::SecureNoDotDot);
 
-    unsafe {
-      loop {
-        let mut ent = MaybeUninit::<*mut sys::archive_entry>::uninit();
-        let r = sys::archive_read_next_header(self.archive, ent.as_mut_ptr());
-        if r == sys::ARCHIVE_EOF as i32 {
-          break;
-        } else if r == sys::ARCHIVE_WARN as i32 {
-          let cstr = CStr::from_ptr(sys::archive_error_string(self.archive));
-          warn!("{}", cstr.to_str()?);
-        } else {
-          self.check(r)?;
-        }
-        let ent = ent.assume_init();
-
-        let pathname = sys::archive_entry_pathname(ent);
-        let pathname_str = CStr::from_ptr(pathname);
-
-        dest
-          .join(pathname_str.to_str()?)
-          .with_nix_path(|cstr| sys::archive_entry_set_pathname(ent, cstr.as_ptr()))?;
-
-        self.check(sys::archive_read_extract(self.archive, ent, flags as i32))?;
+    while let Some(entry) = self.0.next_header() {
+      let pathname = entry.pathname();
+      let new_path = dest.join(pathname);
+      entry.set_pathname(&new_path);
+      let res = unsafe { ffi::archive_read_extract(ptr, entry.entry(), opts.flags) };
+      if res != 0 {
+        bail!("failed to extract archive: {}", self.0.err_msg())
       }
     }
 
     Ok(())
-  }
-}
-
-impl Drop for TarArchive {
-  fn drop(&mut self) {
-    if let Err(e) = self.check(unsafe { sys::archive_read_close(self.archive) }) {
-      info!("{}", e);
-    }
-    if !self.archive.is_null() {
-      unsafe { sys::archive_read_free(self.archive) };
-    }
   }
 }

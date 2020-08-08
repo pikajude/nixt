@@ -44,7 +44,7 @@ impl Value {
       Value::Primop(_) => "primop",
       Value::AttrSet(_) => "attrset",
       Value::List(_) => "list",
-      Value::Ref(_) => panic!(),
+      Value::Ref(_) => "ref", // panic!(),
     }
   }
 

@@ -92,7 +92,7 @@ pub fn download_tarball(
 
   let file = download_file(store, url, name, immutable)?;
 
-  tar::TarArchive::open(store.to_real_path(&file.store_path)?)?.extract_to(&unpack_to)?;
+  tar::Archive::open(store.to_real_path(&file.store_path)?)?.extract_to(&unpack_to)?;
 
   let mut dir_reader = std::fs::read_dir(&unpack_to)?;
 

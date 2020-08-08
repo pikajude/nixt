@@ -53,7 +53,7 @@ pub struct LocalStore {
   state_dir: PathBuf,
   temproots_dir: PathBuf,
   links_dir: PathBuf,
-  db_dir: PathBuf,
+  _db_dir: PathBuf,
   db: Mutex<Sqlite>,
 }
 
@@ -203,7 +203,7 @@ impl Store for LocalStore {
       lock::PathLocks::new().lock(iter::once(&real_path), false, None)?;
       if repair.repair() || !self.is_valid_path(&dest_path)? {
         self.delete_path(&real_path)?;
-        std::fs::rename(&tmpdir, &real_path)?;
+        fs::rename(&tmpdir, &real_path)?;
 
         self.canonicalise_path_metadata(&real_path, None)?;
         self.optimise_path(&real_path)?;
@@ -273,7 +273,7 @@ impl LocalStore {
       state_dir: root_dir.join("var").join("nix"),
       temproots_dir: root_dir.join("var").join("nix").join("gcroots"),
       links_dir: root_dir.join("store").join(".links"),
-      db_dir: root_dir.join("var").join("nix").join("db"),
+      _db_dir: db_dir,
       db: Mutex::new(sqlite),
     };
     fs::create_dir_all(&this.store_dir)?;
@@ -395,7 +395,7 @@ impl LocalStore {
       }
     }
 
-    let info = std::fs::symlink_metadata(path)?;
+    let info = fs::symlink_metadata(path)?;
     let ty = info.file_type();
 
     if !ty.is_file() && !ty.is_dir() && !ty.is_symlink() {
