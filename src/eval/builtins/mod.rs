@@ -1,3 +1,4 @@
+use super::AssertFailure;
 use crate::{
   eval::{context::StaticScope, primop::Primop, thunk::ThunkId, value::Value, Eval},
   primop, primop2, primop3, primop_inline,
@@ -178,6 +179,12 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
         })),
       );
       builtins.insert(
+        "isNull".into(),
+        eval.new_value(primop_inline!("isNull", |e, i| {
+          Ok(Value::Bool(matches!(e.value_of(i)?, Value::Null)))
+        })),
+      );
+      builtins.insert(
         "hasAttr".into(),
         eval.new_value(primop2!("hasAttr", attrs::has_attr)),
       );
@@ -282,11 +289,13 @@ fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value>
 fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
   let mut attrs = StaticScope::new();
   if let Err(e) = eval.value_of(thing) {
-    warn!("tryEval is currently wrong");
-    warn!("we are eating: {:?}", e);
-    attrs.insert(Ident::from("success"), eval.new_value(Value::Bool(false)));
-    attrs.insert(Ident::from("value"), eval.new_value(Value::Bool(false)));
-    Ok(Value::AttrSet(attrs))
+    if let Some(AssertFailure { .. }) = e.downcast_ref() {
+      attrs.insert(Ident::from("success"), eval.new_value(Value::Bool(false)));
+      attrs.insert(Ident::from("value"), eval.new_value(Value::Bool(false)));
+      Ok(Value::AttrSet(attrs))
+    } else {
+      Err(e)
+    }
   } else {
     attrs.insert(Ident::from("success"), eval.new_value(Value::Bool(true)));
     attrs.insert(Ident::from("value"), thing);

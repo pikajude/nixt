@@ -1,6 +1,7 @@
 use crate::{
   eval::{
-    builtins::strings::coerce_new_string, context::StaticScope, thunk::ThunkId, value::Value, Eval,
+    builtins::strings::coerce_new_string, context::StaticScope, thunk::ThunkId, value::Value,
+    AssertFailure, Eval,
   },
   syntax::expr::Ident,
   util::*,
@@ -96,17 +97,20 @@ pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> 
       }
     }
   }
-  bail!(
-    "Entry `{}' was not found in the Nix search path",
-    target.display()
-  )
+  Err(anyhow!(AssertFailure {
+    message: format!(
+      "Entry `{}' was not found in the Nix search path",
+      target.display()
+    )
+  }))
 }
 
 pub fn mk_nix_path(eval: &Eval) -> Value {
   let mut entries = vec![];
-  for entry in get_nix_path().into_iter().chain(std::iter::once(
-    "nix=/nix/store/qk8iz5x8qwp6m3580fpp31f6fgf51ial-nix-2.3.7/share/nix/corepkgs".to_string(),
-  )) {
+  for entry in get_nix_path().into_iter().chain(std::iter::once(format!(
+    "nix={}/corepkgs",
+    env!("CARGO_MANIFEST_DIR")
+  ))) {
     let mut parts = entry.splitn(2, '=');
     let first = parts.next().unwrap();
     let second = parts.next();

@@ -1,4 +1,4 @@
-use super::{hash::Hash, path::Path as StorePath};
+use crate::prelude::*;
 use std::{
   collections::BTreeSet,
   fmt::Debug,
@@ -17,7 +17,7 @@ pub struct ValidPathInfo {
   pub references: BTreeSet<StorePath>,
   pub registration_time: SystemTime,
   pub nar_size: Option<u64>,
-  pub id: u64,
+  pub id: i64,
   pub signatures: BTreeSet<String>,
   pub content_addressed: Option<String>,
   pub ultimate: bool,
@@ -30,7 +30,7 @@ impl ValidPathInfo {
       nar_hash,
       deriver: Default::default(),
       references: Default::default(),
-      registration_time: UNIX_EPOCH,
+      registration_time: SystemTime::now(),
       nar_size: Default::default(),
       id: Default::default(),
       signatures: Default::default(),

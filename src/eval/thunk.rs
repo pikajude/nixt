@@ -1,5 +1,5 @@
 use super::{context::Context, value::Value};
-use crate::{arena::Id, syntax::expr::ExprRef};
+use crate::{arena::Id, prelude::FileSpan, syntax::expr::ExprRef};
 use parking_lot::{lock_api::RawMutex as _, RawMutex};
 use std::{
   cell::UnsafeCell,
@@ -13,7 +13,7 @@ pub type ThunkId = Id<Thunk>;
 #[derive(Clone, Debug)]
 pub enum ThunkCell {
   Expr(ExprRef, Context),
-  Apply(ThunkId, ThunkId),
+  Apply(FileSpan, ThunkId, ThunkId),
   Blackhole,
 }
 

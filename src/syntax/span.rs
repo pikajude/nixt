@@ -103,6 +103,13 @@ impl FileSpan {
     }
   }
 
+  pub fn null() -> Self {
+    Self {
+      span: codespan::Span::new(0, 0),
+      file_id: unsafe { std::mem::transmute(1u32) },
+    }
+  }
+
   pub fn merge(&self, other: &Self) -> Self {
     if self.file_id != other.file_id {
       panic!("file id mismatch")

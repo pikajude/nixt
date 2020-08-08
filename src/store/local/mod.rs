@@ -1,30 +1,40 @@
+use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
 use crate::{
   archive::{self, PathFilter},
   hash::{Encoding, Hash, HashType},
   path::Path as StorePath,
   path_info::{PathInfo, ValidPathInfo},
+  settings,
+  sqlite::Sqlite,
   util::*,
   Store,
 };
+use fs::File;
 use lock::{FsExt2, LockType};
 #[cfg(target_os = "linux")] use std::os::linux::fs::MetadataExt as _;
 #[cfg(target_os = "macos")] use std::os::macos::fs::MetadataExt as _;
+#[cfg(unix)] use std::os::unix::io::AsRawFd;
 use std::{
   borrow::Cow,
   collections::HashSet,
   ffi::OsStr,
   fs,
   io::Write,
+  iter,
   os::unix::fs::*,
   path::{Path, PathBuf},
-  sync::Arc,
+  rc::Rc,
+  sync::Mutex,
 };
+use tee_readwrite::TeeWriter;
 use unix::{
+  fcntl,
   libc::{self, mode_t},
   sys::{stat::*, time::TimeSpec},
   unistd::*,
 };
 
+mod db;
 mod gc;
 mod lock;
 
@@ -46,6 +56,8 @@ pub struct LocalStore {
   state_dir: PathBuf,
   temproots_dir: PathBuf,
   links_dir: PathBuf,
+  db_dir: PathBuf,
+  db: Mutex<Sqlite>,
 }
 
 impl Store for LocalStore {
@@ -58,8 +70,9 @@ impl Store for LocalStore {
     name: &str,
     contents: &str,
     references: &mut dyn Iterator<Item = &'a StorePath>,
-    repair: bool,
+    repair: RepairFlag,
   ) -> Result<StorePath> {
+    let repair = repair == RepairFlag::Repair;
     let hash = Hash::hash_str(contents, HashType::SHA256);
     let dest_path = self.make_text_path(name, &hash, references)?;
 
@@ -68,7 +81,7 @@ impl Store for LocalStore {
     if repair || !self.is_valid_path(&dest_path)? {
       let real_path = self.to_real_path(&dest_path)?;
 
-      let _ = lock::PathLocks::new().lock(std::iter::once(&real_path), true, None)?;
+      let _ = lock::PathLocks::new().lock(iter::once(&real_path), true, None)?;
 
       if repair || !self.is_valid_path(&dest_path)? {
         self.delete_path(&real_path)?;
@@ -79,7 +92,7 @@ impl Store for LocalStore {
 
         self.canonicalise_path_metadata(&real_path, None)?;
 
-        let nar_bytes = archive::dump_to_bytes(contents)?;
+        let nar_bytes = archive::dump_to_bytes(contents.len(), contents.as_bytes())?;
         let nar_hash = Hash::hash_bytes(&nar_bytes, HashType::SHA256);
 
         self.optimise_path(&real_path)?;
@@ -95,20 +108,21 @@ impl Store for LocalStore {
     Ok(dest_path)
   }
 
-  fn get_path_info(&self, path: &StorePath) -> Result<Option<Arc<dyn PathInfo>>> {
-    debug!("path info: {}", path);
-    Ok(None)
+  fn get_path_info(&self, path: &StorePath) -> Result<Option<Rc<dyn PathInfo>>> {
+    let conn = self.db.lock().unwrap();
+    if let Some(x) = db::get_path_info(&conn, self, path)? {
+      Ok(Some(Rc::new(x)))
+    } else {
+      Ok(None)
+    }
   }
 
   fn add_temp_root(&self, path: &StorePath) -> Result<()> {
     let file = self.temproots_dir.join(std::process::id().to_string());
     let mut temp_file = loop {
       let all_gc_roots = gc::open_gc_lock(&self.state_dir, LockType::Read)?;
-      let _ = fs::remove_file(&file);
-      let temproots_file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&file)?;
+      self.delete_path(&file)?;
+      let temproots_file = File::create(&file)?;
       drop(all_gc_roots);
       debug!("acquiring read lock on `{}'", file.display());
       temproots_file.lock(LockType::Read)?;
@@ -124,19 +138,146 @@ impl Store for LocalStore {
   }
 
   fn register_valid_path(&self, _path_info: ValidPathInfo) -> Result<()> {
-    todo!()
+    let mut sql = self.db.lock().unwrap();
+    db::insert_valid_paths(&mut sql, self, iter::once(&_path_info))?;
+    Ok(())
+  }
+
+  fn add_to_store_from_source(
+    &self,
+    path_info: &dyn PathInfo,
+    input: &mut dyn std::io::Read,
+    repair: RepairFlag,
+    check_sigs: CheckSigsFlag,
+  ) -> Result<()> {
+    self.add_temp_root(path_info.store_path())?;
+
+    if repair.repair() || !self.is_valid_path(path_info.store_path())? {
+      let dest = self.to_real_path(path_info.store_path())?;
+
+      lock::PathLocks::new().lock(&mut iter::once(&dest), true, None)?;
+
+      if repair.repair() || !self.is_valid_path(path_info.store_path())? {
+        self.delete_path(&dest)?;
+
+        archive::restore_path(&dest, input)?;
+
+        self.canonicalise_path_metadata(&dest, None)?;
+      }
+    }
+
+    Ok(())
+  }
+
+  fn add_to_store_from_path(
+    &self,
+    name: &str,
+    path: &Path,
+    ingest_method: FileIngestionMethod,
+    hash_type: HashType,
+    filter: &PathFilter,
+    repair: RepairFlag,
+  ) -> Result<StorePath> {
+    let path = path.canonicalize()?;
+    if ingest_method != FileIngestionMethod::Recursive {
+      bail!("add a flat file")
+    }
+
+    let tmpdir = tempfile::tempdir_in(Path::new(&self.store_path()))?.into_path();
+
+    let mut nar_hash = crate::hash::Sink::new(HashType::SHA256);
+
+    crate::archive::restore_path(
+      &tmpdir,
+      SourceSink::new(|sink| {
+        crate::archive::dump_path(&path, TeeWriter::new(&mut nar_hash, sink), filter)
+      }),
+    )?;
+
+    let (nar_hash, nar_size) = nar_hash.finish();
+
+    let dest_path =
+      self.make_fixed_output_path(ingest_method, &nar_hash, name, &mut iter::empty(), false)?;
+
+    self.add_temp_root(&dest_path)?;
+
+    if repair.repair() || !self.is_valid_path(&dest_path)? {
+      let real_path = self.to_real_path(&dest_path)?;
+      lock::PathLocks::new().lock(iter::once(&real_path), false, None)?;
+      if repair.repair() || !self.is_valid_path(&dest_path)? {
+        self.delete_path(&real_path)?;
+        std::fs::rename(&tmpdir, &real_path)?;
+
+        self.canonicalise_path_metadata(&real_path, None)?;
+        self.optimise_path(&real_path)?;
+
+        let mut pi = ValidPathInfo::new(dest_path.clone(), nar_hash);
+        pi.nar_size = Some(nar_size as _);
+        self.register_valid_path(pi)?;
+      }
+    }
+
+    Ok(dest_path)
   }
 }
 
 impl LocalStore {
   pub fn open() -> Result<Self> {
+    #[cfg(test)]
+    let _ = pretty_env_logger::try_init();
+
     let root = concat!(env!("OUT_DIR"), "/nix");
     let root_dir = PathBuf::from(root);
+    let db_dir = root_dir.join("var").join("nix").join("db");
+
+    fs::create_dir_all(&db_dir)?;
+
+    let reserved_path = db_dir.join("reserved");
+    if fs::metadata(&reserved_path)
+      .map(|x| x.len() != settings().reserved_size)
+      .unwrap_or(true)
+    {
+      #[allow(unused_mut)]
+      let mut fd = File::create(&reserved_path)?;
+      #[cfg(target_os = "linux")]
+      fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
+      #[cfg(not(target_os = "linux"))]
+      {
+        fd.write_all(vec![b'X'; settings().reserved_size as usize].as_slice())?;
+        ftruncate(fd.as_raw_fd(), settings().reserved_size as _)?;
+      }
+    }
+
+    let schema_path = db_dir.join("schema");
+
+    let global_lock_path = db_dir.join("big-lock");
+    let lock = File::create(&global_lock_path)?;
+    if !lock.try_lock(LockType::Write)? {
+      info!("waiting for the big Nix store lock...");
+      lock.lock(LockType::Write)?;
+    }
+
+    let cur_schema = match fs::read_to_string(&schema_path) {
+      Ok(s) => Some(s.parse::<u32>()?),
+      Err(_) => None,
+    };
+
+    let sqlite = Sqlite::open(&db_dir.join("db.sqlite"))?;
+
+    if cur_schema.is_none() {
+      db::init(&sqlite, true)?;
+      fs::write(&schema_path, "10")?;
+    } else {
+      db::init(&sqlite, false)?;
+    }
+
     let this = Self {
       store_dir: root_dir.join("store"),
       state_dir: root_dir.join("var").join("nix"),
       temproots_dir: root_dir.join("var").join("nix").join("gcroots"),
       links_dir: root_dir.join("store").join(".links"),
+      db_dir: root_dir.join("var").join("nix").join("db"),
+      db: Mutex::new(sqlite),
     };
     fs::create_dir_all(&this.store_dir)?;
     fs::create_dir_all(&this.temproots_dir)?;
@@ -154,7 +295,7 @@ impl LocalStore {
   }
 
   fn delete_path_impl(&self, path: &Path, bytes_freed: &mut u64) -> Result<()> {
-    let meta = fs::metadata(path)?;
+    let meta = fs::symlink_metadata(path)?;
     if meta.is_file() && meta.st_nlink() == 1 {
       *bytes_freed += meta.len();
     } else if meta.is_dir() {
@@ -162,7 +303,7 @@ impl LocalStore {
       let target_mode = Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IXUSR;
       if !cur_mode.contains(target_mode) {
         let mut perms = meta.permissions();
-        perms.set_mode((cur_mode & target_mode).bits() as _);
+        perms.set_mode((cur_mode | target_mode).bits() as _);
         fs::set_permissions(path, perms)
           .with_context(|| format!("while making `{}' writable", path.display()))?;
       }
@@ -173,8 +314,8 @@ impl LocalStore {
       fs::remove_dir(path)?;
       return Ok(());
     }
-
-    fs::remove_file(path)?;
+    fs::remove_file(path)
+      .with_context(|| format!("while trying to delete file `{}'", path.display()))?;
     Ok(())
   }
 
@@ -209,11 +350,6 @@ impl LocalStore {
           bail!(std::io::Error::last_os_error());
         }
       }
-    }
-
-    let info = lstat(path)?;
-    if !(s_isreg(info.st_mode) || s_isdir(info.st_mode) || s_islnk(info.st_mode)) {
-      bail!("file `{}' has an unsupported type", path.display());
     }
 
     #[cfg(target_os = "linux")]
@@ -262,32 +398,39 @@ impl LocalStore {
       }
     }
 
-    if uid.map_or(false, |x| x != info.st_uid) {
-      assert!(!s_isdir(info.st_mode));
+    let info = std::fs::symlink_metadata(path)?;
+    let ty = info.file_type();
+
+    if !ty.is_file() && !ty.is_dir() && !ty.is_symlink() {
+      bail!("file `{}' has an unsupported type", path.display());
+    }
+
+    if uid.map_or(false, |x| x != info.uid()) {
+      assert!(!ty.is_dir());
       if !inodes.contains(&Inode {
-        dev: info.st_dev,
-        ino: info.st_ino,
+        dev: info.st_dev(),
+        ino: info.st_ino(),
       }) {
         bail!("invalid ownership on file `{}'", path.display());
       }
 
-      let mode = info.st_mode & !libc::S_IFMT;
+      let mode = info.st_mode() & !libc::S_IFMT;
       assert!(
         s_islnk(mode)
-          || (info.st_uid == getuid().as_raw()
+          || (info.st_uid() == getuid().as_raw()
             && (mode == 0o444 || mode == 0o555)
-            && info.st_mtime == 1)
+            && info.st_mtime() == 1)
       );
     }
 
     inodes.insert(Inode {
-      dev: info.st_dev,
-      ino: info.st_ino,
+      dev: info.st_dev(),
+      ino: info.st_ino(),
     });
 
-    self.canonicalize_timestamp_and_permissions(path, info)?;
+    self.canonicalize_timestamp_and_permissions(path, &info)?;
 
-    if info.st_uid != geteuid().as_raw() {
+    if info.uid() != geteuid().as_raw() {
       fchownat(
         None,
         path,
@@ -298,7 +441,7 @@ impl LocalStore {
       .with_context(|| format!("while changing ownership of path `{}'", path.display()))?;
     }
 
-    if s_isdir(info.st_mode) {
+    if ty.is_dir() {
       for entry in fs::read_dir(path)? {
         self.canonicalise_path_metadata_impl(entry?.path(), uid, inodes)?;
       }
@@ -310,14 +453,14 @@ impl LocalStore {
   fn canonicalize_timestamp_and_permissions<P: AsRef<Path>>(
     &self,
     path: P,
-    info: FileStat,
+    info: &fs::Metadata,
   ) -> Result<()> {
-    if !s_islnk(info.st_mode) {
-      let mut mode = info.st_mode & !libc::S_IFMT;
+    if !info.file_type().is_symlink() {
+      let mut mode = info.st_mode() & !libc::S_IFMT;
       if mode != 0o444 && mode != 0o555 {
-        mode = (info.st_mode & libc::S_IFMT)
+        mode = (info.st_mode() & libc::S_IFMT)
           | 0o444
-          | (if info.st_mode & libc::S_IXUSR > 0 {
+          | (if info.st_mode() & libc::S_IXUSR > 0 {
             0o111
           } else {
             0
@@ -331,12 +474,12 @@ impl LocalStore {
       }
     }
 
-    if info.st_mtime != 1 {
+    if info.st_mtime() != 1 {
       use unix::sys::time::TimeValLike;
       utimensat(
         None,
         path.as_ref(),
-        &TimeSpec::seconds(info.st_atime),
+        &TimeSpec::seconds(info.st_atime()),
         &TimeSpec::seconds(1),
         UtimensatFlags::NoFollowSymlink,
       )?;
@@ -403,7 +546,7 @@ impl LocalStore {
       return Ok(());
     }
 
-    let (file_hash, _) = archive::hash_path(path, HashType::SHA256, &PathFilter::no_filter())?;
+    let (file_hash, _) = archive::hash_path(path, HashType::SHA256, &PathFilter::none())?;
 
     debug!(
       "path `{}' has hash `{}'",
@@ -452,14 +595,20 @@ impl LocalStore {
       }
       if stat.st_size != st_link.st_size {
         warn!("removing corrupted link `{}'", link_path.display());
-        let _ = fs::remove_file(&link_path);
+        self.delete_path(&link_path)?;
         continue;
       }
 
       info!("linking `{}' to `{}'", path.display(), link_path.display());
 
-      if path.parent() != Some(&self.store_dir) {
-        // make_writable(path.parent())
+      let parent = path.parent().unwrap();
+      let need_temp_permissions = parent != self.store_dir;
+
+      if need_temp_permissions {
+        let meta = fs::metadata(parent)?;
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o700);
+        fs::set_permissions(parent, perms)?;
       }
 
       let temp_link = self.store_dir.join(format!(
@@ -469,11 +618,21 @@ impl LocalStore {
       ));
 
       fs::hard_link(&link_path, &temp_link)?;
-      fs::rename(&temp_link, path)?;
+      fs::rename(&temp_link, path).with_context(|| {
+        format!(
+          "while trying to move `{}' to `{}'",
+          temp_link.display(),
+          path.display()
+        )
+      })?;
 
       stats.files_linked += 1;
       stats.bytes_freed += stat.st_size as u64;
       stats.blocks_freed += stat.st_blocks as u64;
+
+      if need_temp_permissions {
+        self.canonicalize_timestamp_and_permissions(parent, &fs::symlink_metadata(parent)?)?;
+      }
 
       break;
     }

@@ -1,12 +1,8 @@
 use crate::{
   arena::Arena,
+  prelude::{Path, *},
   store::LocalStore,
-  syntax::{
-    expr::{self, *},
-    span::{spanned, FileSpan, Spanned},
-  },
-  util::*,
-  Store,
+  syntax::expr::{self, *},
 };
 use builtins::strings::coerce_to_string;
 use codespan::Files;
@@ -23,7 +19,6 @@ use std::{
   cell::RefCell,
   collections::{HashMap, HashSet, VecDeque},
   fs,
-  path::{Path, PathBuf},
   sync::{
     atomic::{AtomicU16, Ordering},
     Arc, Mutex,
@@ -36,16 +31,15 @@ use value::{PathSet, Value};
 pub mod builtins;
 mod config;
 pub mod context;
-mod ext;
 pub mod operators;
 pub mod primop;
 pub mod thunk;
 pub mod value;
 
 #[derive(thiserror::Error, Debug)]
-#[error("assertion failure: {:?}", at)]
+#[error("assertion failure: {}", message)]
 struct AssertFailure {
-  at: FileSpan,
+  message: String,
 }
 
 pub struct Eval {
@@ -126,7 +120,7 @@ impl Eval {
       return Ok(*x);
     }
     let eid = {
-      debug!("loading file: {}", path.display());
+      trace!("loading file: {}", path.display());
       let contents = fs::read_to_string(&path)?;
       let mut f = self.files.lock().unwrap();
       let id = f.add(&path, contents);
@@ -163,9 +157,9 @@ impl Eval {
         None => {
           let thunk = &self.items[thunk_id];
           let expr = thunk.get_thunk();
-          debug!(target: "thunk", "{:?} => {:?}", thunk_id, &expr);
+          trace!(target: "eval::thunk", "{:?} => {:?}", thunk_id, &expr);
           let val = self.step_thunk(expr)?;
-          debug!(target: "thunk", "output: {:?}", &val);
+          trace!(target: "eval::thunk", "output: {:?}", &val);
           thunk.put_value(val)
         }
       };
@@ -256,7 +250,12 @@ impl Eval {
   fn step_thunk(&self, thunk: ThunkCell) -> Result<Value> {
     match thunk {
       ThunkCell::Expr(e, c) => self.step_eval(e, c),
-      ThunkCell::Apply(lhs, rhs) => self.step_fn(lhs, rhs),
+      ThunkCell::Apply(loc, lhs, rhs) => {
+        self.trace.borrow_mut().push_front(loc);
+        let res = self.step_fn(lhs, rhs)?;
+        self.trace.borrow_mut().pop_front();
+        Ok(res)
+      }
       ThunkCell::Blackhole => bail!("infinite loop"),
     }
   }
@@ -269,10 +268,10 @@ impl Eval {
   }
 
   fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
-    if log_enabled!(target: "entry", Level::Debug) {
+    if log_enabled!(target: "eval::entry", Level::Trace) {
       let fs = self.files.lock().unwrap();
-      debug!(
-        target: "entry",
+      trace!(
+        target: "eval::entry",
         "{}:{}\n  {}",
         fs.name(e.span.file_id).to_string_lossy(),
         fs.location(e.span.file_id, e.span.span.start())?
@@ -327,6 +326,7 @@ impl Eval {
       },
       Expr::Apply(Apply { lhs, rhs }) => {
         Ok(Value::Ref(self.items.alloc(Thunk::new(ThunkCell::Apply(
+          lhs.span.merge(&rhs.span),
           self.items.alloc(Thunk::thunk(*lhs, context.clone())),
           self.items.alloc(Thunk::thunk(*rhs, context)),
         )))))
@@ -413,11 +413,13 @@ impl Eval {
         self.step_eval(*expr, context.add_with(with_scope))
       }
       Expr::Assert(Assert { cond, expr, .. }) => {
-        let cond = self.items.alloc(Thunk::thunk(*cond, context.clone()));
-        if self.value_bool_of(cond)? {
+        let cond_ = self.items.alloc(Thunk::thunk(*cond, context.clone()));
+        if self.value_bool_of(cond_)? {
           self.step_eval(*expr, context)
         } else {
-          bail!(AssertFailure { at: e.span })
+          bail!(AssertFailure {
+            message: format!("assertion failed at {:?}", cond.span)
+          })
         }
       }
       Expr::Binary(b) => operators::eval_binary(self, b, context),
@@ -452,24 +454,24 @@ impl Eval {
   fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
     match self.value_of(lhs)? {
       Value::Lambda { lambda, captures } => {
-        debug!(target: "fn", "lambda");
+        trace!(target: "eval::fn", "lambda");
         self.call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
       }
       Value::Primop(Primop {
         op: Op::Static(f), ..
       }) => {
-        debug!(target: "fn", "primop");
+        trace!(target: "eval::fn", "primop");
         f(self, rhs)
       }
       Value::Primop(Primop {
         op: Op::Dynamic(f), ..
       }) => {
-        debug!(target: "fn", "primop");
+        trace!(target: "eval::fn", "primop");
         f(self, rhs)
       }
       Value::AttrSet(a) => {
         if let Some(ftor) = a.get(&Ident::from("__functor")) {
-          debug!(target: "fn", "__functor {:?}", *ftor);
+          trace!(target: "eval::fn", "__functor {:?}", *ftor);
           let inter_1 = self.step_fn(*ftor, lhs)?;
           let inter_id = self.new_value(inter_1);
           self.step_fn(inter_id, rhs)
@@ -490,10 +492,10 @@ impl Eval {
   ) -> Result<Value> {
     let mut fn_body_scope = StaticScope::new();
 
-    if log_enabled!(target: "lambda", Level::Debug) {
+    if log_enabled!(target: "eval::lambda", Level::Trace) {
       let fs = self.files.lock().unwrap();
-      debug!(
-        target: "lambda",
+      trace!(
+        target: "eval::lambda",
         "{}:{}\n  {}",
         fs.name(body.span.file_id).to_string_lossy(),
         fs.location(body.span.file_id, body.span.span.start())?
@@ -520,7 +522,6 @@ impl Eval {
         };
         let fn_argument = self.value_attrs_of(fn_arg_thunk)?;
         let fn_scope_id = self.items.alloc(Thunk::new(ThunkCell::Blackhole));
-        trace!("lambda: implicit blackholing of {:?}", fn_scope_id);
 
         for arg in &fs.args {
           let name = &*arg.arg_name;
@@ -716,7 +717,6 @@ impl Eval {
     };
     for attr in &attrs.0 {
       let name = self.attrname_nonnull(attr, context)?;
-      debug!(target: "inherit", "{}", name);
       scope.insert(
         name.clone(),
         self.synthetic_variable(attr.span, name, &binding_scope),
@@ -726,12 +726,10 @@ impl Eval {
   }
 
   fn synthetic_variable(&self, span: FileSpan, name: Ident, context: &Context) -> ThunkId {
-    let id = self.items.alloc(Thunk::thunk(
-      spanned(span, self.expr.alloc(Expr::Var(name.clone()))),
+    self.items.alloc(Thunk::thunk(
+      spanned(span, self.expr.alloc(Expr::Var(name))),
       context.clone(),
-    ));
-    debug!(target: "synthetic", "{} => {:?}", name, id);
-    id
+    ))
   }
 }
 
@@ -746,33 +744,6 @@ fn preview(s: &str) -> &str {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::Settings;
-
-  #[test]
-  // evaluating nixpkgs is very expensive in debug mode due to the parser
-  #[cfg_attr(debug_assertions, ignore)]
-  fn test_basic_eval() -> Result<()> {
-    pretty_env_logger::init();
-    Settings::init(Settings { read_only: true });
-
-    let eval = Eval::new().unwrap();
-    let expr = eval.load_inline(
-      r#"
-      (import <nixpkgs> {
-        overlays = [];
-      }).hello.outPath
-      "#,
-    )?;
-    match eval.value_of(expr) {
-      Ok(x) => eprintln!("{:?}", x),
-      Err(e) => {
-        eval.print_error(e)?;
-        panic!("eval failed")
-      }
-    }
-
-    Ok(())
-  }
 
   macro_rules! assert_eval {
     ($l:literal, $p:pat) => {{

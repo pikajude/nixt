@@ -8,6 +8,7 @@ use crate::{
     Eval,
   },
   hash::{Hash, HashType},
+  store::{FileIngestionMethod, RepairFlag},
   syntax::expr::Ident,
   util::*,
 };
@@ -128,7 +129,11 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     )?;
 
     let out_path = eval.store.make_fixed_output_path(
-      is_recursive,
+      if is_recursive {
+        FileIngestionMethod::Recursive
+      } else {
+        FileIngestionMethod::Flat
+      },
       &drv_hash,
       name,
       &mut std::iter::empty(),
@@ -164,7 +169,11 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
 
     for out in &outputs_set {
       let output_path = eval.store.make_fixed_output_path(
-        is_recursive,
+        if is_recursive {
+          FileIngestionMethod::Recursive
+        } else {
+          FileIngestionMethod::Flat
+        },
         &drv_hash,
         name,
         &mut std::iter::empty(),
@@ -183,7 +192,9 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
   }
 
-  let drv_path = eval.store.write_derivation(&drv, name, false)?;
+  let drv_path = eval
+    .store
+    .write_derivation(&drv, name, RepairFlag::NoRepair)?;
   let path_str = eval.store.print_store_path(&drv_path);
 
   info!("instantiated `{}' -> `{}'", name, path_str);

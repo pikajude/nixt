@@ -159,7 +159,7 @@ impl Hash {
       }
       Encoding::Base32 => {
         let mut bytes = vec![0; self.len_base32()];
-        super::base32::encode_into(self.as_bytes(), &mut bytes);
+        base32::encode_into(self.as_bytes(), &mut bytes);
         bytes
       }
       Encoding::Base64 | Encoding::SRI => {
@@ -192,7 +192,7 @@ impl Hash {
         len: ty.size(),
       })
     } else if !sri && input.len() == len_base32(ty.size()) {
-      super::base32::decode_into(input.as_bytes(), &mut bytes)?;
+      base32::decode_into(input.as_bytes(), &mut bytes)?;
       Ok(Self {
         data: bytes,
         ty,
@@ -211,6 +211,12 @@ impl Hash {
 
   pub fn hash_str(data: &str, ty: HashType) -> Self {
     Self::hash_bytes(data.as_bytes(), ty)
+  }
+
+  pub fn hash_file<P: AsRef<std::path::Path>>(path: P, ty: HashType) -> Result<(Self, usize)> {
+    let mut ctx = Sink::new(ty);
+    std::io::copy(&mut std::fs::File::open(path)?, &mut ctx)?;
+    Ok(ctx.finish())
   }
 
   /// Convert `self` to a shorter hash by recursively XOR-ing bytes.

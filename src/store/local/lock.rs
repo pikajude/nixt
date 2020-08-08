@@ -81,7 +81,7 @@ impl PathLocks {
           e.push(".lock");
           e
         }),
-        None => path.with_extension(".lock"),
+        None => path.with_extension("lock"),
       };
       loop {
         let lockfile = File::create(&lock_path)?;

@@ -4,6 +4,7 @@ use crate::{
     value::Value,
     Eval,
   },
+  prelude::FileSpan,
   util::*,
 };
 
@@ -17,20 +18,20 @@ pub fn gen_list(eval: &Eval, generator: ThunkId, len: ThunkId) -> Result<Value> 
   let mut out_list = vec![];
   for val in 0..target_len {
     let fn_arg = eval.new_value(Value::Int(val as _));
-    out_list.push(
-      eval
-        .items
-        .alloc(Thunk::new(ThunkCell::Apply(generator, fn_arg))),
-    );
+    out_list.push(eval.items.alloc(Thunk::new(ThunkCell::Apply(
+      FileSpan::null(),
+      generator,
+      fn_arg,
+    ))));
   }
   Ok(Value::List(out_list))
 }
 
 pub fn map_list(eval: &Eval, op: ThunkId, value: ThunkId) -> Result<Value> {
   let thunks = eval.value_list_of(value)?;
-  Ok(Value::List(eval.items.alloc_extend(
-    thunks.iter().map(|t| Thunk::new(ThunkCell::Apply(op, *t))),
-  )))
+  Ok(Value::List(eval.items.alloc_extend(thunks.iter().map(
+    |t| Thunk::new(ThunkCell::Apply(FileSpan::null(), op, *t)),
+  ))))
 }
 
 pub fn elem_at(eval: &Eval, list: ThunkId, index: ThunkId) -> Result<Value> {

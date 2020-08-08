@@ -1,6 +1,5 @@
-use super::base32;
-use crate::util::*;
-use std::{cmp::Ordering, convert::TryInto, fmt, path::PathBuf, str::FromStr};
+use crate::prelude::*;
+use std::{cmp::Ordering, fmt, path::Path as StdPath, str::FromStr};
 
 const HASH_BYTES: usize = 20;
 const HASH_CHARS: usize = 32;
@@ -22,6 +21,50 @@ pub struct Path {
   name: Name,
 }
 
+lazy_static! {
+  pub static ref DUMMY: Path = Path {
+    hash: Hash([0xffu8; HASH_BYTES]),
+    name: Name(String::from("x")),
+  };
+}
+
+impl Path {
+  pub fn new(p: &StdPath, store_dir: &StdPath) -> Result<Self> {
+    if p.parent() != Some(store_dir) {
+      bail!(Error::NotInStore(p.into()));
+    }
+
+    Self::from_base_name(
+      p.file_name()
+        .ok_or_else(|| Error::InvalidFilepath(p.into()))?
+        .to_str()
+        .ok_or_else(|| Error::InvalidFilepath(p.into()))?,
+    )
+  }
+
+  pub fn from_parts(bytes: &[u8], name: &str) -> Result<Self> {
+    Ok(Self {
+      hash: Hash(
+        bytes
+          .try_into()
+          .map_err(|_| super::hash::Error::WrongHashLen(bytes.len()))?,
+      ),
+      name: name.parse()?,
+    })
+  }
+
+  pub fn from_base_name(base_name: &str) -> Result<Self> {
+    if base_name.len() < HASH_CHARS + 1 || base_name.as_bytes()[HASH_CHARS] != b'-' {
+      bail!(Error::InvalidFilepath(base_name.into()));
+    }
+
+    Ok(Path {
+      hash: Hash::decode(&base_name[0..HASH_CHARS])?,
+      name: base_name[HASH_CHARS + 1..].parse()?,
+    })
+  }
+}
+
 impl PartialOrd for Path {
   fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
     self.to_string().partial_cmp(&other.to_string())
@@ -34,28 +77,20 @@ impl Ord for Path {
   }
 }
 
-lazy_static! {
-  pub static ref DUMMY: Path = Path {
-    hash: Hash([0xffu8; HASH_BYTES]),
-    name: Name(String::from("x")),
-  };
-}
-
-impl Path {
-  pub fn from_parts(bytes: &[u8], name: &str) -> Result<Self> {
-    Ok(Self {
-      hash: Hash(
-        bytes
-          .try_into()
-          .map_err(|_| super::hash::Error::WrongHashLen(bytes.len()))?,
-      ),
-      name: name.parse()?,
-    })
-  }
-}
-
 #[derive(Clone, PartialEq, Eq, std::hash::Hash, Debug, Deref)]
 pub struct Hash([u8; HASH_BYTES]);
+
+impl Hash {
+  pub fn decode<S: AsRef<str>>(s: S) -> Result<Self> {
+    let s = s.as_ref();
+    assert_eq!(s.len(), HASH_CHARS);
+    let v = base32::decode(s.as_bytes())?;
+    assert_eq!(v.len(), HASH_BYTES);
+    let mut bytes: [u8; 20] = Default::default();
+    bytes.copy_from_slice(&v[..HASH_BYTES]);
+    Ok(Self(bytes))
+  }
+}
 
 impl fmt::Display for Hash {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -1,4 +1,5 @@
 use crate::{
+  archive::PathFilter,
   derivation::Derivation,
   hash::{Encoding, Hash, HashType},
   path::Path as StorePath,
@@ -12,7 +13,7 @@ use std::{
   ffi::OsStr,
   fmt::Display,
   path::{Path as StdPath, PathBuf},
-  sync::Arc,
+  rc::Rc,
 };
 
 mod local;
@@ -21,6 +22,30 @@ pub use local::*;
 
 pub(crate) fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
   StdPath::new(i).display()
+}
+
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub enum RepairFlag {
+  NoRepair,
+  Repair,
+}
+
+impl RepairFlag {
+  pub fn repair(self) -> bool {
+    self == Self::Repair
+  }
+}
+
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub enum CheckSigsFlag {
+  NoCheckSigs,
+  CheckSigs,
+}
+
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub enum FileIngestionMethod {
+  Flat,
+  Recursive,
 }
 
 pub trait Store: Send + Sync {
@@ -44,11 +69,15 @@ pub trait Store: Send + Sync {
     StorePath::from_parts(hash.as_bytes(), name)
   }
 
+  fn parse_store_path(&self, path: &StdPath) -> Result<StorePath> {
+    StorePath::new(path, self.store_path().as_ref())
+  }
+
   fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
     Ok(self.print_store_path(path).into())
   }
 
-  fn get_path_info(&self, path: &StorePath) -> Result<Option<Arc<dyn PathInfo>>>;
+  fn get_path_info(&self, path: &StorePath) -> Result<Option<Rc<dyn PathInfo>>>;
 
   fn is_valid_path(&self, path: &StorePath) -> Result<bool> {
     self.get_path_info(path).map(|x| x.is_some())
@@ -92,12 +121,13 @@ pub trait Store: Send + Sync {
 
   fn make_fixed_output_path<'a>(
     &self,
-    recursive: bool,
+    ingest_method: FileIngestionMethod,
     hash: &Hash,
     name: &str,
     references: &mut dyn Iterator<Item = &'a StorePath>,
     has_self_reference: bool,
   ) -> Result<StorePath> {
+    let recursive = ingest_method == FileIngestionMethod::Recursive;
     if hash.type_() == HashType::SHA256 && recursive {
       self.make_store_path(
         &self.make_type("source".into(), references, has_self_reference),
@@ -186,7 +216,7 @@ pub trait Store: Send + Sync {
     &self,
     derivation: &Derivation,
     name: &str,
-    _repair: bool,
+    repair: RepairFlag,
   ) -> Result<StorePath> {
     let mut refs = derivation.input_sources.iter().collect::<BTreeSet<_>>();
     for k in derivation.input_derivations.keys() {
@@ -198,7 +228,7 @@ pub trait Store: Send + Sync {
     if settings().read_only {
       self.store_path_for_text(&suffix, &contents, refs)
     } else {
-      self.add_text_to_store(&suffix, &contents, refs, _repair)
+      self.add_text_to_store(&suffix, &contents, refs, repair)
     }
   }
 
@@ -208,8 +238,26 @@ pub trait Store: Send + Sync {
     name: &str,
     contents: &str,
     references: &mut dyn Iterator<Item = &'a StorePath>,
-    repair: bool,
+    repair: RepairFlag,
   ) -> Result<StorePath> {
     bail!("add_text_to_store not supported by this backend.")
   }
+
+  fn add_to_store_from_source(
+    &self,
+    info: &dyn PathInfo,
+    source: &mut dyn std::io::Read,
+    repair: RepairFlag,
+    check_signatures: CheckSigsFlag,
+  ) -> Result<()>;
+
+  fn add_to_store_from_path(
+    &self,
+    name: &str,
+    path: &StdPath,
+    ingest_method: FileIngestionMethod,
+    hash_type: HashType,
+    path_filter: &PathFilter,
+    repair: RepairFlag,
+  ) -> Result<StorePath>;
 }

@@ -2,6 +2,7 @@
 #![feature(fn_traits)]
 #![feature(untagged_unions)]
 #![feature(btree_drain_filter)]
+#![feature(duration_zero)]
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate derive_more;
@@ -9,13 +10,15 @@
 
 pub mod archive;
 mod arena;
-pub mod base32;
 pub mod derivation;
 pub mod eval;
+mod fetch;
 pub mod hash;
 pub mod path;
 pub mod path_info;
+mod prelude;
 pub mod settings;
+mod sqlite;
 pub mod store;
 pub mod syntax;
 pub mod util;
