@@ -13,9 +13,9 @@ impl Sqlite {
     Ok(Self(conn))
   }
 
-  // pub fn set_is_cache(&self) -> Result<()> {
-  //   self.pragma_update(None, "synchronous", &"off")?;
-  //   self.pragma_update(Some(DatabaseName::Main), "journal_mode", &"truncate")?;
-  //   Ok(())
-  // }
+  pub fn set_is_cache(&self) -> Result<()> {
+    self.pragma_update(None, "synchronous", &"off")?;
+    self.pragma_update(Some(DatabaseName::Main), "journal_mode", &"truncate")?;
+    Ok(())
+  }
 }

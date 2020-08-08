@@ -11,8 +11,6 @@ use crate::{
 };
 use fs::File;
 use lock::{FsExt2, LockType};
-#[cfg(target_os = "linux")] use std::os::linux::fs::MetadataExt as _;
-#[cfg(target_os = "macos")] use std::os::macos::fs::MetadataExt as _;
 #[cfg(unix)] use std::os::unix::io::AsRawFd;
 use std::{
   borrow::Cow,
@@ -28,8 +26,7 @@ use std::{
 };
 use tee_readwrite::TeeWriter;
 use unix::{
-  fcntl,
-  libc::{self, mode_t},
+  libc,
   sys::{stat::*, time::TimeSpec},
   unistd::*,
 };
@@ -40,8 +37,8 @@ mod lock;
 
 #[derive(Eq, PartialEq, Hash)]
 struct Inode {
-  dev: libc::dev_t,
-  ino: libc::ino_t,
+  dev: u64,
+  ino: u64,
 }
 
 #[derive(Default)]
@@ -240,7 +237,7 @@ impl LocalStore {
       #[allow(unused_mut)]
       let mut fd = File::create(&reserved_path)?;
       #[cfg(target_os = "linux")]
-      fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
+      unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
       #[cfg(not(target_os = "linux"))]
       {
         fd.write_all(vec![b'X'; settings().reserved_size as usize].as_slice())?;
@@ -296,7 +293,7 @@ impl LocalStore {
 
   fn delete_path_impl(&self, path: &Path, bytes_freed: &mut u64) -> Result<()> {
     let meta = fs::symlink_metadata(path)?;
-    if meta.is_file() && meta.st_nlink() == 1 {
+    if meta.is_file() && meta.nlink() == 1 {
       *bytes_freed += meta.len();
     } else if meta.is_dir() {
       let cur_mode = Mode::from_bits_truncate(meta.mode() as _);
@@ -408,24 +405,24 @@ impl LocalStore {
     if uid.map_or(false, |x| x != info.uid()) {
       assert!(!ty.is_dir());
       if !inodes.contains(&Inode {
-        dev: info.st_dev(),
-        ino: info.st_ino(),
+        dev: info.dev(),
+        ino: info.ino(),
       }) {
         bail!("invalid ownership on file `{}'", path.display());
       }
 
-      let mode = info.st_mode() & !libc::S_IFMT;
+      let mode = info.mode() & !(libc::S_IFMT as u32);
       assert!(
-        s_islnk(mode)
-          || (info.st_uid() == getuid().as_raw()
+        ty.is_symlink()
+          || (info.uid() == getuid().as_raw()
             && (mode == 0o444 || mode == 0o555)
-            && info.st_mtime() == 1)
+            && info.mtime() == 1)
       );
     }
 
     inodes.insert(Inode {
-      dev: info.st_dev(),
-      ino: info.st_ino(),
+      dev: info.dev(),
+      ino: info.ino(),
     });
 
     self.canonicalize_timestamp_and_permissions(path, &info)?;
@@ -456,11 +453,11 @@ impl LocalStore {
     info: &fs::Metadata,
   ) -> Result<()> {
     if !info.file_type().is_symlink() {
-      let mut mode = info.st_mode() & !libc::S_IFMT;
+      let mut mode = info.mode() & !(libc::S_IFMT as u32);
       if mode != 0o444 && mode != 0o555 {
-        mode = (info.st_mode() & libc::S_IFMT)
+        mode = (info.mode() & libc::S_IFMT as u32)
           | 0o444
-          | (if info.st_mode() & libc::S_IXUSR > 0 {
+          | (if info.mode() & libc::S_IXUSR as u32 > 0 {
             0o111
           } else {
             0
@@ -468,18 +465,18 @@ impl LocalStore {
         fchmodat(
           None,
           path.as_ref(),
-          Mode::from_bits_truncate(mode),
+          Mode::from_bits_truncate(mode as libc::mode_t),
           FchmodatFlags::FollowSymlink,
         )?;
       }
     }
 
-    if info.st_mtime() != 1 {
+    if info.mtime() != 1 {
       use unix::sys::time::TimeValLike;
       utimensat(
         None,
         path.as_ref(),
-        &TimeSpec::seconds(info.st_atime()),
+        &TimeSpec::seconds(info.atime()),
         &TimeSpec::seconds(1),
         UtimensatFlags::NoFollowSymlink,
       )?;
@@ -504,8 +501,6 @@ impl LocalStore {
     inodes: &mut HashSet<libc::ino_t>,
     stats: &mut OptimiseStats,
   ) -> Result<()> {
-    let stat = lstat(path)?;
-
     #[cfg(target_os = "macos")]
     {
       if path.to_string_lossy().contains(".app/Contents/") {
@@ -514,7 +509,10 @@ impl LocalStore {
       }
     }
 
-    if s_isdir(stat.st_mode) {
+    let info = fs::symlink_metadata(path)?;
+    let ty = info.file_type();
+
+    if ty.is_dir() {
       for x in fs::read_dir(path)? {
         let x = x?;
         let this_path = x.path();
@@ -528,20 +526,20 @@ impl LocalStore {
       return Ok(());
     }
 
-    if !s_isreg(stat.st_mode) && !s_islnk(stat.st_mode) {
+    if !ty.is_file() && !ty.is_symlink() {
       return Ok(());
     }
 
-    if s_isreg(stat.st_mode) && (stat.st_mode & libc::S_IWUSR != 0) {
+    if ty.is_file() && info.mode() & libc::S_IWUSR as u32 != 0 {
       warn!("ignoring suspicious writable file `{}'", path.display());
       return Ok(());
     }
 
-    if stat.st_nlink > 1 && inodes.contains(&stat.st_ino) {
+    if info.nlink() > 1 && inodes.contains(&info.ino()) {
       debug!(
         "`{}' is already linked to {} other file(s)",
         path.display(),
-        stat.st_nlink - 2
+        info.nlink() - 2
       );
       return Ok(());
     }
@@ -560,7 +558,7 @@ impl LocalStore {
       if fs::metadata(&link_path).is_err() {
         match fs::hard_link(path, &link_path) {
           Ok(_) => {
-            inodes.insert(stat.st_ino);
+            inodes.insert(info.ino());
             return Ok(());
           }
           Err(e) => {
@@ -584,8 +582,8 @@ impl LocalStore {
         }
       }
 
-      let st_link = lstat(&link_path)?;
-      if stat.st_ino == st_link.st_ino {
+      let info_link = fs::symlink_metadata(&link_path)?;
+      if info.ino() == info_link.ino() {
         debug!(
           "`{}' is already linked to `{}'",
           path.display(),
@@ -593,7 +591,7 @@ impl LocalStore {
         );
         return Ok(());
       }
-      if stat.st_size != st_link.st_size {
+      if info.size() != info_link.size() {
         warn!("removing corrupted link `{}'", link_path.display());
         self.delete_path(&link_path)?;
         continue;
@@ -627,8 +625,8 @@ impl LocalStore {
       })?;
 
       stats.files_linked += 1;
-      stats.bytes_freed += stat.st_size as u64;
-      stats.blocks_freed += stat.st_blocks as u64;
+      stats.bytes_freed += info.size();
+      stats.blocks_freed += info.blocks();
 
       if need_temp_permissions {
         self.canonicalize_timestamp_and_permissions(parent, &fs::symlink_metadata(parent)?)?;
@@ -639,14 +637,4 @@ impl LocalStore {
 
     Ok(())
   }
-}
-
-fn s_isreg(mode: mode_t) -> bool {
-  (mode & SFlag::S_IFMT.bits()) == SFlag::S_IFREG.bits()
-}
-fn s_isdir(mode: mode_t) -> bool {
-  (mode & SFlag::S_IFMT.bits()) == SFlag::S_IFDIR.bits()
-}
-fn s_islnk(mode: mode_t) -> bool {
-  (mode & SFlag::S_IFMT.bits()) == SFlag::S_IFLNK.bits()
 }

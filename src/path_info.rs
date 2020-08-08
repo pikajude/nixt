@@ -1,9 +1,5 @@
 use crate::prelude::*;
-use std::{
-  collections::BTreeSet,
-  fmt::Debug,
-  time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeSet, fmt::Debug, time::SystemTime};
 
 pub trait PathInfo: Send + Sync + Debug {
   fn store_path(&self) -> &StorePath;
