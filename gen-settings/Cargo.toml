@@ -1,0 +1,14 @@
+[package]
+name = "gen-settings"
+version = "0.1.0"
+authors = ["Jude Taylor <me@jude.xyz>"]
+edition = "2018"
+
+[dependencies]
+darling = "0.10.2"
+syn = { version = "1.0.38", features = ["derive"] }
+quote = "1.0.7"
+proc-macro2 = "1.0.19"
+
+[lib]
+proc-macro = true
