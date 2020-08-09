@@ -6,7 +6,6 @@
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate derive_more;
-#[macro_use] extern crate doc_comment;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate gen_settings;
 
