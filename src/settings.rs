@@ -42,6 +42,18 @@ impl Paths {
   fn builders(&self) -> String {
     format!("@{}", self.nix_conf_dir.join("machines").display())
   }
+
+  fn default_substituters(&self) -> Vec<String> {
+    if self.nix_store.to_str() == Some("/nix/store") {
+      vec![String::from("https://cache.nixos.org/")]
+    } else {
+      vec![]
+    }
+  }
+
+  fn netrc_file(&self) -> PathBuf {
+    self.nix_conf_dir.join("netrc")
+  }
 }
 
 #[settings]
@@ -282,11 +294,11 @@ pub struct Settings {
   pub sandbox_mode: SandboxMode,
 
   #[setting(
-    value = "Default::default()",
+    value = "Self::get_default_sandbox_paths()",
     help = "The paths to make available inside the build sandbox.",
     alias = "build-chroot-dirs,build-sandbox-paths"
   )]
-  pub sandbox_paths: HashSet<PathBuf>,
+  pub sandbox_paths: HashSet<String>,
 
   #[setting(
     value = "true",
@@ -386,6 +398,93 @@ pub struct Settings {
   )]
   pub require_sigs: bool,
 
+  #[setting(
+    value = "Self::get_extra_platforms()",
+    help = "Additional platforms that can be built on the local system. These may be supported \
+            natively (e.g. armv7 on some aarch64 CPUs or using hacks like qemu-user."
+  )]
+  pub extra_platforms: HashSet<String>,
+
+  #[setting(
+    value = "Self::get_default_system_features()",
+    help = "Optional features that this system supports (like `kvm`)."
+  )]
+  pub system_features: HashSet<String>,
+
+  #[setting(
+    value = "paths.default_substituters()",
+    help = "The URIs of substituters (such as https://cache.nixos.org/).",
+    alias = "binary-caches"
+  )]
+  pub substituters: Vec<String>,
+
+  #[setting(
+    value = "vec![]",
+    help = "Additional URIs of substituters.",
+    alias = "extra-binary-caches"
+  )]
+  pub extra_substituters: Vec<String>,
+
+  #[setting(
+    value = "Default::default()",
+    help = "Disabled substituters that may be enabled via the substituters option by untrusted \
+            users.",
+    alias = "trusted-binary-caches"
+  )]
+  pub trusted_substituters: HashSet<String>,
+
+  #[setting(
+    value = "vec![String::from(\"root\")]",
+    help = "Which users or groups are trusted to ask the daemon to do unsafe things."
+  )]
+  pub trusted_users: Vec<String>,
+
+  #[setting(
+    value = "Duration::from_secs(3600)",
+    help = "The TTL in seconds for negative lookups in the disk cache i.e binary cache lookups \
+            that return an invalid path result",
+    flag = "narinfo-cache-negative-ttl"
+  )]
+  pub ttl_negative_nar_info_cache: Duration,
+
+  #[setting(
+    value = "Duration::from_secs(30 * 24 * 3600)",
+    help = "The TTL in seconds for positive lookups in the disk cache i.e binary cache lookups \
+            that return a valid path result.",
+    flag = "narinfo-cache-positive-ttl"
+  )]
+  pub ttl_positive_nar_info_cache: Duration,
+
+  #[setting(
+    value = "vec![String::from(\"*\")]",
+    help = "Which users or groups are allowed to connect to the daemon."
+  )]
+  pub allowed_users: Vec<String>,
+
+  #[setting(
+    value = "true",
+    help = "Whether to print what paths need to be built or downloaded."
+  )]
+  pub print_missing: bool,
+
+  #[setting(
+    value = "None",
+    help = "A program to run before each build to set derivation-specific build settings."
+  )]
+  pub pre_build_hook: Option<PathBuf>,
+
+  #[setting(value = "None", help = "A program to run after each successful build.")]
+  pub post_build_hook: Option<PathBuf>,
+
+  #[setting(
+    value = "paths.netrc_file()",
+    help = "Path to the netrc file used to obtain usernames/passwords for downloads."
+  )]
+  pub netrc_file: PathBuf,
+
+  #[setting(hidden, value = "Self::get_ca_file()")]
+  pub ca_file: Option<PathBuf>,
+
   #[cfg(any(target_os = "linux", doc))]
   #[doc(cfg(target_os = "linux"))]
   #[setting(
@@ -405,87 +504,61 @@ pub struct Settings {
   )]
   pub allow_new_privileges: bool,
 
+  #[setting(
+    value = "0",
+    help = "Automatically run the garbage collector when free disk space drops below the \
+            specified amount."
+  )]
+  pub min_free: u64,
+
+  #[setting(
+    value = "std::u64::MAX",
+    help = "Stop deleting garbage when free disk space is above the specified amount."
+  )]
+  pub max_free: u64,
+
+  #[setting(
+    value = "Duration::from_secs(5)",
+    help = "Number of seconds between checking free disk space."
+  )]
+  pub min_free_check_interval: Duration,
+
+  #[setting(
+    value = "vec![]",
+    help = "Plugins to dynamically load at nix initialization time."
+  )]
+  pub plugin_files: Vec<PathBuf>,
+
+  #[setting(
+    value = "None",
+    help = "GitHub access token to get access to GitHub data through the GitHub API for \
+            github:<..> flakes."
+  )]
+  pub github_access_token: Option<String>,
+
   #[setting(value = "vec![]", help = "Experimental Nix features.")]
   pub experimental_features: Vec<String>,
-  /*
-   * pub try_fallback: TryFallback,
-   * pub verbose_build: bool,
-   * pub log_lines: LogLines,
-   * pub max_build_jobs: BuildJobs,
-   * pub build_cores: usize,
-   * pub read_only: bool,
-   * pub this_system: String,
-   * pub max_silent_time: Option<Duration>,
-   * pub build_timeout: Option<Duration>,
-   * pub build_hook: PathBuf,
-   * pub builders: String,
-   * pub builders_use_substitutes: bool,
-   * pub reserved_size: u64,
-   * pub fsync_metadata: bool,
-   * pub use_sqlite_wal: bool,
-   * pub sync_before_registering: bool,
-   * pub use_substitutes: bool,
-   * pub build_users_group: Option<String>,
-   * pub impersonate_linux26: bool,
-   * pub keep_log: bool,
-   * pub compress_log: bool,
-   * pub max_log_size: Option<usize>,
-   * pub print_repeated_builds: bool,
-   * pub poll_interval: Duration,
-   * pub check_root_reachability: bool,
-   * pub gc_keep_outputs: bool,
-   * pub gc_keep_derivations: bool,
-   * pub auto_optimise_store: bool,
-   * pub keep_env_derivations: bool,
-   * pub lock_cpu: bool,
-   * #[setting(default = "SandboxMode::Enabled")]
-   * pub sandbox: SandboxMode,
-   * pub sandbox_paths: HashSet<String>,
-   * pub sandbox_fallback: bool,
-   * pub extra_sandbox_paths: HashSet<String>,
-   * pub build_repeat: usize,
-   * #[cfg(target_os = "linux")]
-   * pub sandbox_shm_size: String,
-   * #[cfg(target_os = "linux")]
-   * pub sandbox_build_dir: PathBuf,
-   * pub allowed_impure_host_deps: HashSet<String>,
-   * #[cfg(target_os = "macos")]
-   * pub darwin_log_sandbox_violations: bool,
-   * pub run_diff_hook: bool,
-   * pub diff_hook: Option<PathBuf>,
-   * pub enforce_determinism: bool,
-   * pub trusted_public_keys: Vec<String>,
-   * pub secret_key_files: Vec<String>,
-   * pub tarball_ttl: Duration,
-   * pub require_sigs: bool,
-   * pub extra_platforms: HashSet<String>,
-   * pub system_features: HashSet<String>,
-   * pub substituters: Vec<String>,
-   * pub extra_substituters: Vec<String>,
-   * pub trusted_substituters: HashSet<String>,
-   * pub trusted_users: Vec<String>,
-   * pub ttl_negative_nar_info_cache: Duration,
-   * pub ttl_positive_nar_info_cache: Duration,
-   * pub allowed_users: Vec<String>,
-   * pub print_missing: bool,
-   * pub pre_build_hook: Option<PathBuf>,
-   * pub post_build_hook: Option<PathBuf>,
-   * pub netrc_file: PathBuf,
-   * pub ca_file: Option<PathBuf>,
-   * #[cfg(target_os = "linux")]
-   * pub filter_syscalls: bool,
-   * #[cfg(target_os = "linux")]
-   * pub allow_new_privileges: bool,
-   * pub min_free: u64,
-   * pub max_free: u64,
-   * pub min_free_check_interval: Duration,
-   * pub plugin_files: Vec<String>,
-   * pub github_access_token: Option<String>,
-   * pub experimental_features: Vec<String>,
-   * pub allow_dirty: bool,
-   * pub warn_dirty: bool,
-   * pub nar_buffer_size: usize,
-   * pub flake_registry: String, */
+
+  #[setting(value = "true", help = "Whether to allow dirty Git/Mercurial trees.")]
+  pub allow_dirty: bool,
+
+  #[setting(
+    value = "true",
+    help = "Whether to warn about dirty Git/Mercurial trees."
+  )]
+  pub warn_dirty: bool,
+
+  #[setting(
+    value = "32 * 1024 * 1024",
+    help = "Maximum size of NARs before spilling them to disk."
+  )]
+  pub nar_buffer_size: usize,
+
+  #[setting(
+    value = "String::from(\"https://github.com/NixOS/flake-registry/raw/master/flake-registry.json\")",
+    help = "Path or URI of the global flake registry."
+  )]
+  pub flake_registry: String,
 }
 
 #[derive(Debug, Clone)]
@@ -519,6 +592,14 @@ impl Settings {
 
   fn get_default_cores() -> usize {
     cmp::max(1, num_cpus::get())
+  }
+
+  fn get_extra_platforms() -> HashSet<String> {
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+      std::iter::once(String::from("i686-linux")).collect()
+    } else {
+      HashSet::new()
+    }
   }
 
   fn build_users_group() -> Option<String> {
@@ -635,114 +716,6 @@ impl Default for Paths {
     }
   }
 }
-
-/*
-impl Default for Settings {
-  fn default() -> Self {
-    let paths = Paths::default();
-    Self {
-      store_uri: Default::default(),
-      keep_failed: Default::default(),
-      keep_going: Default::default(),
-      try_fallback: Default::default(),
-      verbose_build: true,
-      log_lines: Default::default(),
-      max_build_jobs: Default::default(),
-      build_cores: Self::get_default_cores(),
-      read_only: false,
-      this_system: Self::system().to_string(),
-      max_silent_time: None,
-      build_timeout: None,
-      build_hook: paths.nix_libexec_dir.join("nix").join("build-remote"),
-      builders: if let Ok(x) = std::env::var("NIX_REMOTE_SYSTEMS") {
-        itertools::Itertools::join(&mut x.split(":").map(|x| format!("@{}", x)), " ")
-      } else {
-        format!("@{}", paths.nix_conf_dir.join("machines").display())
-      },
-      builders_use_substitutes: false,
-      reserved_size: 8 * 1024 * 1024,
-      fsync_metadata: true,
-      use_sqlite_wal: !Self::is_wsl1(),
-      sync_before_registering: false,
-      use_substitutes: true,
-      build_users_group: if unix::unistd::getuid().is_root() {
-        Some(String::from("nixbld"))
-      } else {
-        None
-      },
-      impersonate_linux26: false,
-      keep_log: true,
-      compress_log: true,
-      max_log_size: None,
-      print_repeated_builds: true,
-      poll_interval: Duration::from_secs(5),
-      check_root_reachability: false,
-      gc_keep_outputs: false,
-      gc_keep_derivations: true,
-      auto_optimise_store: false,
-      keep_env_derivations: false,
-      lock_cpu: env::var("NIX_AFFINITY_HACK").map_or(false, |y| y == "1"),
-      sandbox: if cfg!(target_os = "linux") {
-        SandboxMode::Enabled
-      } else {
-        SandboxMode::Disabled
-      },
-      sandbox_paths: Self::get_default_sandbox_paths(),
-      sandbox_fallback: true,
-      extra_sandbox_paths: Default::default(),
-      build_repeat: 0,
-      sandbox_shm_size: String::from("50%"),
-      sandbox_build_dir: PathBuf::from("/build"),
-      allowed_impure_host_deps: Default::default(),
-      run_diff_hook: false,
-      diff_hook: None,
-      enforce_determinism: true,
-      trusted_public_keys: vec![String::from(
-        "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=",
-      )],
-      secret_key_files: vec![],
-      tarball_ttl: Duration::from_secs(60 * 60),
-      require_sigs: true,
-      extra_platforms: if cfg!(target_os = "linux") && !Self::is_wsl1() {
-        std::iter::once(String::from("i686-linux")).collect()
-      } else {
-        Default::default()
-      },
-      system_features: Self::get_default_system_features(),
-      substituters: if paths.nix_store.to_str() == Some("/nix/store") {
-        vec!["https://cache.nixos.org".into()]
-      } else {
-        vec![]
-      },
-      extra_substituters: Default::default(),
-      trusted_substituters: Default::default(),
-      trusted_users: vec![String::from("root")],
-      ttl_negative_nar_info_cache: Duration::from_secs(3600),
-      ttl_positive_nar_info_cache: Duration::from_secs(30 * 24 * 3600),
-      allowed_users: vec![String::from("*")],
-      print_missing: true,
-      pre_build_hook: None,
-      post_build_hook: None,
-      netrc_file: paths.nix_conf_dir.join("netrc"),
-      ca_file: Self::get_ca_file(),
-      filter_syscalls: true,
-      allow_new_privileges: false,
-      min_free: 0,
-      max_free: std::u64::MAX,
-      min_free_check_interval: Duration::from_secs(5),
-      plugin_files: vec![],
-      github_access_token: None,
-      experimental_features: vec![],
-      allow_dirty: true,
-      warn_dirty: true,
-      nar_buffer_size: 32 * 1024 * 1024,
-      flake_registry: String::from(
-        "https://github.com/NixOS/flake-registry/raw/master/flake-registry.json",
-      ),
-    }
-  }
-}
-*/
 
 fn get_user_config_files() -> Vec<PathBuf> {
   if let Ok(f) = env::var("NIX_USER_CONF_FILES") {
