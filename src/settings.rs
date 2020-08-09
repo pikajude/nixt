@@ -77,6 +77,34 @@ pub struct Settings {
   pub verbose_build: bool,
 
   #[setting(
+    value = "10",
+    help = "If verbose-build is false, the number of lines of the tail of the log to show if a \
+            build fails."
+  )]
+  pub log_lines: usize,
+
+  #[setting(
+    value = "MaxBuildJobs::N(1)",
+    help = "Maximum number of parallel build jobs. \"auto\" means use number of cores.",
+    flag = "max-jobs",
+    alias = "build-max-jobs"
+  )]
+  pub max_build_jobs: MaxBuildJobs,
+
+  #[setting(
+    value = "Self::get_default_cores()",
+    help = "Number of CPU cores to utilize in parallel within a build, i.e. by passing this \
+            number to Make via '-j'. 0 means that the number of actual CPU cores on the local \
+            host ought to be auto-detected.",
+    flag = "cores",
+    alias = "build-cores"
+  )]
+  pub build_cores: usize,
+
+  #[setting(hidden, value = "false")]
+  pub read_only: bool,
+
+  #[setting(
     value = "Self::system().to_string()",
     help = "The canonical Nix system name.",
     flag = "system"
@@ -351,6 +379,13 @@ pub struct Settings {
   )]
   pub tarball_ttl: Duration,
 
+  #[setting(
+    value = "true",
+    help = "Whether to check that any non-content-addressed path added to the Nix store has a \
+            valid signature (that is, one signed using a key listed in 'trusted-public-keys'."
+  )]
+  pub require_sigs: bool,
+
   #[cfg(any(target_os = "linux", doc))]
   #[doc(cfg(target_os = "linux"))]
   #[setting(
@@ -372,9 +407,6 @@ pub struct Settings {
 
   #[setting(value = "vec![]", help = "Experimental Nix features.")]
   pub experimental_features: Vec<String>,
-
-  #[setting(hidden, value = "false")]
-  pub read_only: bool,
   /*
    * pub try_fallback: TryFallback,
    * pub verbose_build: bool,
