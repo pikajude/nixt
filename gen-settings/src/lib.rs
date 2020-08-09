@@ -28,7 +28,7 @@ pub fn settings(_: TokenStream, input: TokenStream) -> TokenStream {
     flag,
     alias,
     value,
-    hide,
+    hidden,
   } in fields.iter()
   {
     let flag = flag
@@ -44,7 +44,7 @@ pub fn settings(_: TokenStream, input: TokenStream) -> TokenStream {
       #(#attrs)*
       #ident: #value
     });
-    if *hide {
+    if *hidden {
       field_toks.push(quote! {
         #(#attrs)*
         #[doc(hidden)]
@@ -92,7 +92,7 @@ struct SettingField {
   #[darling(default)]
   help: String,
   #[darling(default)]
-  hide: bool,
+  hidden: bool,
   #[darling(default)]
   flag: Option<String>,
   #[darling(default)]

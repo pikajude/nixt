@@ -501,11 +501,9 @@ impl LocalStore {
     inodes: &mut HashSet<libc::ino_t>,
     stats: &mut OptimiseStats,
   ) -> Result<()> {
-    if cfg!(target_os = "macos") {
-      if path.to_string_lossy().contains(".app/Contents/") {
-        debug!("path `{}' cannot be linked", path.display());
-        return Ok(());
-      }
+    if cfg!(target_os = "macos") && path.to_string_lossy().contains(".app/Contents/") {
+      debug!("path `{}' cannot be linked", path.display());
+      return Ok(());
     }
 
     let info = fs::symlink_metadata(path)?;

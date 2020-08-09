@@ -11,6 +11,8 @@ use std::{
 };
 use unix::unistd;
 
+static NIXOS_CACHE_PUBKEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
+
 static SETTINGS: Lazy<Settings> = Lazy::new(|| {
   let mut settings = Settings::default();
   settings.apply_overrides();
@@ -71,7 +73,7 @@ pub struct Settings {
   )]
   pub try_fallback: bool,
 
-  #[setting(value = "true", hide)]
+  #[setting(value = "true", hidden)]
   pub verbose_build: bool,
 
   #[setting(
@@ -127,7 +129,8 @@ pub struct Settings {
 
   #[setting(
     value = "!Self::is_wsl1()",
-    help = "Whether SQLite should use WAL mode."
+    help = "Whether SQLite should use WAL mode. Default: `false` if running in a WSL 1 container, \
+            `true` otherwise."
   )]
   pub use_sqlite_wal: bool,
 
@@ -158,6 +161,148 @@ pub struct Settings {
   )]
   pub impersonate_linux_26: bool,
 
+  #[setting(
+    value = "true",
+    help = "Whether to store build logs.",
+    flag = "keep-build-log",
+    alias = "build-keep-log"
+  )]
+  pub keep_log: bool,
+
+  #[setting(
+    value = "true",
+    help = "Compress logs when storing them.",
+    flag = "compress-build-log",
+    alias = "build-compress-log"
+  )]
+  pub compress_log: bool,
+
+  #[setting(
+    value = "None",
+    help = "Maximum number of bytes a builder can write to stdout and stderr before being killed \
+            (0 means no limit).",
+    flag = "max-build-log-size",
+    alias = "build-max-log-size"
+  )]
+  pub max_log_size: Option<usize>,
+
+  #[setting(hidden, value = "true")]
+  pub print_repeated_builds: bool,
+
+  #[setting(
+    value = "Duration::from_secs(5)",
+    help = "How often (in seconds) to poll for locks.",
+    flag = "build-poll-interval"
+  )]
+  pub poll_interval: Duration,
+
+  #[setting(
+    value = "false",
+    help = "Whether to check if new GC roots can in fact be found by the garbage collector.",
+    flag = "gc-check-reachability"
+  )]
+  pub check_root_reachability: bool,
+
+  #[setting(
+    value = "false",
+    help = "Whether the garbage collector should keep outputs of live derivations.",
+    flag = "keep-outputs",
+    alias = "gc-keep-outputs"
+  )]
+  pub gc_keep_outputs: bool,
+
+  #[setting(
+    value = "true",
+    help = "Whether the garbage collector should keep derivers of live paths.",
+    flag = "keep-derivations",
+    alias = "gc-keep-derivations"
+  )]
+  pub gc_keep_derivations: bool,
+
+  #[setting(
+    value = "false",
+    help = "Whether to automatically replace files with identical contents with hard links."
+  )]
+  pub auto_optimise_store: bool,
+
+  #[setting(
+    value = "false",
+    help = "Whether to add derivations as a dependency of user environments (to prevent them from \
+            being GCed).",
+    flag = "keep-env-derivations",
+    alias = "env-keep-derivations"
+  )]
+  pub env_keep_derivations: bool,
+
+  #[setting(
+    hidden,
+    value = r#"env::var("NIX_AFFINITY_HACK").map_or(false, |y| y == "1")"#
+  )]
+  pub lock_cpu: bool,
+
+  #[setting(
+    value = "false",
+    help = "Whether to show a stack trace on evaluation errors."
+  )]
+  pub show_trace: bool,
+
+  #[setting(
+    value = "SandboxMode::Enabled",
+    help = "Whether to enable sandboxed builds. Can be \"true\", \"false\" or \"relaxed\".",
+    alias = "build-use-chroot,build-use-sandbox"
+  )]
+  pub sandbox_mode: SandboxMode,
+
+  #[setting(
+    value = "Default::default()",
+    help = "The paths to make available inside the build sandbox.",
+    alias = "build-chroot-dirs,build-sandbox-paths"
+  )]
+  pub sandbox_paths: HashSet<PathBuf>,
+
+  #[setting(
+    value = "true",
+    help = "Whether to disable sandboxing if the kernel doesn't allow it."
+  )]
+  pub sandbox_fallback: bool,
+
+  #[setting(
+    value = "Default::default()",
+    help = "Additional paths to make available inside the build sandbox.",
+    alias = "build-extra-chroot-dirs,build-extra-sandbox-paths"
+  )]
+  pub extra_sandbox_paths: HashSet<PathBuf>,
+
+  #[setting(
+    value = "0",
+    help = "The number of times to repeat a build to verify determinism.",
+    alias = "build-repeat"
+  )]
+  pub build_repeat: usize,
+
+  #[cfg(any(target_os = "linux", doc))]
+  #[doc(cfg(target_os = "linux"))]
+  #[setting(
+    value = "String::from(\"50%\")",
+    help = "The size of /dev/shm in the build sandbox."
+  )]
+  pub sandbox_shm_size: String,
+
+  #[cfg(any(target_os = "linux", doc))]
+  #[doc(cfg(target_os = "linux"))]
+  #[setting(
+    value = "PathBuf::from(\"/build\")",
+    help = "The build directory inside the sandbox. Default: `/build`"
+  )]
+  pub sandbox_build_dir: PathBuf,
+
+  #[setting(
+    value = "Default::default()",
+    help = "Which prefixes to allow derivations to ask for access to (primarily for Darwin).",
+    flag = "allowed-impure-host-deps"
+  )]
+  pub allowed_impure_host_prefixes: HashSet<PathBuf>,
+
   #[cfg(any(target_os = "macos", doc))]
   #[doc(cfg(target_os = "macos"))]
   #[setting(
@@ -166,6 +311,45 @@ pub struct Settings {
             debugging the sandbox."
   )]
   pub darwin_log_sandbox_violations: bool,
+
+  #[setting(
+    value = "false",
+    help = "Whether to run the program specified by the diff-hook setting repeated builds produce \
+            a different result. Typically used to plug in diffoscope."
+  )]
+  pub run_diff_hook: bool,
+
+  #[setting(
+    value = "None",
+    help = "A program that prints out the differences between the two paths specified on its \
+            command line."
+  )]
+  pub diff_hook: Option<PathBuf>,
+
+  #[setting(
+    value = "true",
+    help = "Whether to fail if repeated builds produce different output."
+  )]
+  pub enforce_determinism: bool,
+
+  #[setting(
+    value = "vec![String::from(NIXOS_CACHE_PUBKEY)]",
+    help = "Trusted public keys for secure substitution.",
+    alias = "binary-cache-public-keys"
+  )]
+  pub trusted_public_keys: Vec<String>,
+
+  #[setting(
+    value = "vec![]",
+    help = "Secret keys with which to sign local builds."
+  )]
+  pub secret_key_files: Vec<String>,
+
+  #[setting(
+    value = "Duration::from_secs(60 * 60)",
+    help = "How long downloaded files are considered up-to-date."
+  )]
+  pub tarball_ttl: Duration,
 
   #[cfg(any(target_os = "linux", doc))]
   #[doc(cfg(target_os = "linux"))]
@@ -189,13 +373,7 @@ pub struct Settings {
   #[setting(value = "vec![]", help = "Experimental Nix features.")]
   pub experimental_features: Vec<String>,
 
-  #[setting(
-    value = "Duration::from_secs(60 * 60)",
-    help = "How long downloaded files are considered up-to-date. Default: 1 hour."
-  )]
-  pub tarball_ttl: Duration,
-
-  #[setting(hide, value = "false")]
+  #[setting(hidden, value = "false")]
   pub read_only: bool,
   /*
    * pub try_fallback: TryFallback,
@@ -298,7 +476,7 @@ impl Settings {
 
   fn apply_overrides(&mut self) {}
 
-  pub fn has_experimental_feature<B: Borrow<String>>(&self, feature: &B) -> bool {
+  pub fn has_experimental_feature<B: Borrow<str>>(&self, feature: &B) -> bool {
     let feature = feature.borrow();
     self.experimental_features.iter().any(|x| feature == x)
   }
