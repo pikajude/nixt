@@ -3,6 +3,7 @@
 #![feature(untagged_unions)]
 #![feature(btree_drain_filter)]
 #![feature(duration_zero)]
+#![feature(doc_cfg)]
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate derive_more;

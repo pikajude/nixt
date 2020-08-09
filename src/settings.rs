@@ -1,3 +1,5 @@
+#![allow(unused_doc_comments)] // false positive
+
 use once_cell::sync::Lazy;
 use std::{
   borrow::Borrow,
@@ -15,6 +17,7 @@ static SETTINGS: Lazy<Settings> = Lazy::new(|| {
   settings
 });
 
+#[derive(Debug, Clone)]
 pub struct Paths {
   pub nix_prefix: PathBuf,
   pub nix_store: PathBuf,
@@ -29,51 +32,169 @@ pub struct Paths {
   pub nix_daemon_socket_file: PathBuf,
 }
 
-fn default_store() -> String {
-  std::env::var("NIX_REMOTE").unwrap_or_else(|_| String::from("auto"))
+impl Paths {
+  fn get_build_hook(&self) -> PathBuf {
+    self.nix_libexec_dir.join("nix").join("build-remote")
+  }
+
+  fn builders(&self) -> String {
+    format!("@{}", self.nix_conf_dir.join("machines").display())
+  }
 }
 
 #[settings]
 #[derive(Debug, Clone)]
 pub struct Settings {
   #[setting(
-    value = "default_store()",
+    value = "Self::default_store()",
     flag = "store",
     help = "The default Nix store to use."
   )]
   pub store_uri: String,
+
   #[setting(
     value = "false",
     help = "Whether to keep temporary directories of failed builds."
   )]
   pub keep_failed: bool,
+
   #[setting(
     value = "false",
     help = "Whether to continue building other derivations if one fails."
   )]
   pub keep_going: bool,
+
   #[setting(
     value = "false",
     alias = "build-fallback",
     help = "Whether to fall back to building when substitution fails."
   )]
   pub try_fallback: bool,
+
   #[setting(value = "true", hide)]
   pub verbose_build: bool,
 
   #[setting(
+    value = "Self::system().to_string()",
+    help = "The canonical Nix system name.",
+    flag = "system"
+  )]
+  pub this_system: String,
+
+  #[setting(
+    value = "None",
+    help = "The maximum time in seconds that a builer can go without producing any output on \
+            stdout/stderr before it is killed. 0 means infinity.",
+    alias = "build-max-silent-time"
+  )]
+  pub max_silent_time: Option<Duration>,
+
+  #[setting(
+    value = "None",
+    help = "The maximum duration in seconds that a builder can run. 0 means infinity.",
+    alias = "build-timeout"
+  )]
+  pub timeout: Option<Duration>,
+
+  #[setting(
+    value = "paths.get_build_hook()",
+    help = "The path of the helper program that executes builds on remote machines."
+  )]
+  pub build_hook: PathBuf,
+
+  #[setting(
+    value = "paths.builders()",
+    help = "A semicolon-separated list of build machines, in the format of nix.machines."
+  )]
+  pub builders: String,
+
+  #[setting(
+    value = "false",
+    help = "Whether build machines should use their own substitutes for obtaining build \
+            dependencies if possible, rather than waiting for this host to upload them."
+  )]
+  pub builders_use_substituters: bool,
+
+  #[setting(
     value = "8 * 1024 * 1024",
-    help = "Amount of reserved disk space for the garbage collector.",
+    help = "Amount of reserved disk space for the garbage collector. Default: 8MB.",
     flag = "gc-reserved-space"
   )]
   pub reserved_size: u64,
+
+  #[setting(value = "true", help = "Whether SQLite should use fsync().")]
+  pub fsync_metadata: bool,
+
+  #[setting(
+    value = "!Self::is_wsl1()",
+    help = "Whether SQLite should use WAL mode."
+  )]
+  pub use_sqlite_wal: bool,
+
+  #[setting(
+    value = "false",
+    help = "Whether to call sync() before registering a path as valid."
+  )]
+  pub sync_before_registering: bool,
+
+  #[setting(
+    value = "false",
+    help = "Whether to use substitutes.",
+    flag = "substitute",
+    alias = "build-use-substitutes"
+  )]
+  pub use_substitutes: bool,
+
+  #[setting(
+    value = "Self::build_users_group()",
+    help = "The Unix group that contains the build users."
+  )]
+  pub build_users_group: Option<String>,
+
+  #[setting(
+    value = "false",
+    help = "Whether to impersonate a Linux 2.6 machine on newer kernels.",
+    alias = "build-impersonate-linux-26"
+  )]
+  pub impersonate_linux_26: bool,
+
+  #[cfg(any(target_os = "macos", doc))]
+  #[doc(cfg(target_os = "macos"))]
+  #[setting(
+    value = "false",
+    help = "Whether to log Darwin sandbox access violations to the system log. Useful for \
+            debugging the sandbox."
+  )]
+  pub darwin_log_sandbox_violations: bool,
+
+  #[cfg(any(target_os = "linux", doc))]
+  #[doc(cfg(target_os = "linux"))]
+  #[setting(
+    value = "true",
+    help = "Whether to prevent certain dangerous system calls, such as creation of setuid/setgid \
+            files or adding ACLs or extended attributes. Only disable this if you're aware of the \
+            security implications."
+  )]
+  pub filter_syscalls: bool,
+
+  #[cfg(any(target_os = "linux", doc))]
+  #[doc(cfg(target_os = "linux"))]
+  #[setting(
+    value = "false",
+    help = "Whether builders can acquire new privileges by calling programs with setuid/setgid \
+            bits or with file capabilities."
+  )]
+  pub allow_new_privileges: bool,
+
   #[setting(value = "vec![]", help = "Experimental Nix features.")]
   pub experimental_features: Vec<String>,
+
   #[setting(
     value = "Duration::from_secs(60 * 60)",
-    help = "How long downloaded files are considered up-to-date."
+    help = "How long downloaded files are considered up-to-date. Default: 1 hour."
   )]
   pub tarball_ttl: Duration,
+
   #[setting(hide, value = "false")]
   pub read_only: bool,
   /*
@@ -182,8 +303,20 @@ impl Settings {
     self.experimental_features.iter().any(|x| feature == x)
   }
 
+  fn default_store() -> String {
+    std::env::var("NIX_REMOTE").unwrap_or_else(|_| String::from("auto"))
+  }
+
   fn get_default_cores() -> usize {
     cmp::max(1, num_cpus::get())
+  }
+
+  fn build_users_group() -> Option<String> {
+    if unix::unistd::getuid().is_root() {
+      Some(String::from("nixbld"))
+    } else {
+      None
+    }
   }
 
   fn system() -> &'static str {
@@ -403,14 +536,14 @@ impl Default for Settings {
 
 fn get_user_config_files() -> Vec<PathBuf> {
   if let Ok(f) = env::var("NIX_USER_CONF_FILES") {
-    return f.split(":").map(PathBuf::from).collect();
+    return f.split(':').map(PathBuf::from).collect();
   }
 
   std::iter::once(dirs_next::config_dir().expect("no config dir"))
     .chain(
       env::var("XDG_CONFIG_DIRS")
-        .unwrap_or(String::new())
-        .split(":")
+        .unwrap_or_else(|_| String::new())
+        .split(':')
         .map(PathBuf::from),
     )
     .map(|x| x.join("nix").join("nix.conf"))

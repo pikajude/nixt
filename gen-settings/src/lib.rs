@@ -3,7 +3,6 @@
 
 use darling::{ast, util, FromDeriveInput};
 use proc_macro::TokenStream;
-use quote::ToTokens;
 use syn::*;
 
 #[proc_macro_attribute]
@@ -35,26 +34,26 @@ pub fn settings(_: TokenStream, input: TokenStream) -> TokenStream {
     let flag = flag
       .as_ref()
       .cloned()
-      .unwrap_or(ident.as_ref().unwrap().to_string().replace('-', "_"));
-    flags.push(quote! { #(#attrs),* #flag });
+      .unwrap_or_else(|| ident.as_ref().unwrap().to_string().replace('-', "_"));
+    flags.push(quote! { #(#attrs)* #flag });
     if let Some(a) = alias {
-      flags.push(quote! { #(#attrs),* #a });
+      flags.push(quote! { #(#attrs)* #a });
     }
     let value = syn::parse_str::<Expr>(value).unwrap();
     field_values.push(quote! {
-      #(#attrs),*
+      #(#attrs)*
       #ident: #value
     });
     if *hide {
       field_toks.push(quote! {
-        #(#attrs),*
+        #(#attrs)*
+        #[doc(hidden)]
         pub #ident: #ty
       });
     } else {
-      let docstr = format!("{}\n\nType = [`{}`]", help, ty.into_token_stream());
       field_toks.push(quote! {
-        #(#attrs),*
-        #[doc = #docstr]
+        #(#attrs)*
+        #[doc = #help]
         pub #ident: #ty
       });
     }
@@ -67,13 +66,16 @@ pub fn settings(_: TokenStream, input: TokenStream) -> TokenStream {
 
     #(#item_attrs),*
     pub struct Settings {
-      #(#field_toks),*
+      #(#field_toks,)*
+      paths: Paths
     }
 
     impl Default for Settings {
       fn default() -> Self {
+        let paths = Paths::default();
         Self {
-          #(#field_values),*
+          #(#field_values,)*
+          paths
         }
       }
     }
