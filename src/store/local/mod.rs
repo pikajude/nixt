@@ -237,9 +237,9 @@ impl LocalStore {
     {
       #[allow(unused_mut)]
       let mut fd = File::create(&reserved_path)?;
-      if cfg!(target_os = "linux") {
-        unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
-      } else {
+      #[cfg(target_os = "linux")]
+      unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
+      if cfg!(not(target_os = "linux")) {
         fd.write_all(vec![b'X'; settings().reserved_size as usize].as_slice())?;
         ftruncate(fd.as_raw_fd(), settings().reserved_size as _)?;
       }
