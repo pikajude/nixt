@@ -154,6 +154,31 @@ impl Derivation {
 
     s
   }
+
+  pub fn is_builtin(&self) -> bool {
+    self.builder.starts_with("builtin:")
+  }
+
+  pub fn can_build_locally(&self) -> bool {
+    if self.platform != settings().this_system
+      && !settings().extra_platforms.contains(&self.platform)
+      && !self.is_builtin()
+    {
+      return false;
+    }
+
+    self
+      .required_system_features()
+      .into_iter()
+      .all(|x| settings().system_features.contains(x))
+  }
+
+  pub fn required_system_features(&self) -> BTreeSet<&str> {
+    self
+      .env
+      .get("requiredSystemFeatures")
+      .map_or(Default::default(), |x| x.split_ascii_whitespace().collect())
+  }
 }
 
 fn print_unquoted_strings<I: IntoIterator<Item = D>, D: Display>(s: &mut String, items: I) {

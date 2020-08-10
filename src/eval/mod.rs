@@ -52,7 +52,7 @@ pub struct Eval {
   trace: RefCell<VecDeque<FileSpan>>,
   writer: StandardStream,
   config: Config,
-  store: Arc<dyn Store>,
+  pub store: Arc<dyn Store>,
 }
 
 impl Eval {
@@ -201,7 +201,7 @@ impl Eval {
     }
   }
 
-  fn value_with_context_of(&self, ix: ThunkId) -> Result<(&str, &PathSet)> {
+  pub fn value_with_context_of(&self, ix: ThunkId) -> Result<(&str, &PathSet)> {
     match self.value_of(ix)? {
       Value::String { string, context } => Ok((string, context)),
       v => bail!(

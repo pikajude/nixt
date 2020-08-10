@@ -1,19 +1,8 @@
-use crate::{
-  archive::PathFilter,
-  derivation::Derivation,
-  hash::{Encoding, Hash, HashType},
-  path::Path as StorePath,
-  path_info::{PathInfo, ValidPathInfo},
-  settings,
-  util::*,
-};
+use crate::{archive::PathFilter, prelude::*};
 use std::{
-  borrow::Cow,
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
   fmt::Display,
-  path::{Path as StdPath, PathBuf},
-  rc::Rc,
 };
 
 mod local;
@@ -21,7 +10,7 @@ mod local;
 pub use local::*;
 
 pub(crate) fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
-  StdPath::new(i).display()
+  Path::new(i).display()
 }
 
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -69,8 +58,24 @@ pub trait Store: Send + Sync {
     StorePath::from_parts(hash.as_bytes(), name)
   }
 
-  fn parse_store_path(&self, path: &StdPath) -> Result<StorePath> {
+  fn parse_store_path(&self, path: &Path) -> Result<StorePath> {
     StorePath::new(path, self.store_path().as_ref())
+  }
+
+  fn parse_path_with_outputs(&self, input: &str) -> Result<StorePathWithOutputs> {
+    let (path, outputs) = if let Some(n) = input.find('!') {
+      (
+        &input[..n],
+        input[n + 1..].split(',').map(String::from).collect(),
+      )
+    } else {
+      (input, Default::default())
+    };
+
+    Ok(StorePathWithOutputs {
+      path: StorePath::new(Path::new(path), self.store_path().as_ref())?,
+      outputs,
+    })
   }
 
   fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
@@ -254,10 +259,17 @@ pub trait Store: Send + Sync {
   fn add_to_store_from_path(
     &self,
     name: &str,
-    path: &StdPath,
+    path: &Path,
     ingest_method: FileIngestionMethod,
     hash_type: HashType,
     path_filter: &PathFilter,
     repair: RepairFlag,
   ) -> Result<StorePath>;
+
+  fn build_paths(&self, _paths: Vec<StorePathWithOutputs>) -> Result<()> {
+    bail!(
+      "store backend {} does not support building paths",
+      self.store_path().to_string_lossy()
+    )
+  }
 }

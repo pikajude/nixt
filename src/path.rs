@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use std::{cmp::Ordering, fmt, path::Path as StdPath, str::FromStr};
+use std::{cmp::Ordering, collections::BTreeSet, fmt, path::Path as StdPath, str::FromStr};
 
 const HASH_BYTES: usize = 20;
 const HASH_CHARS: usize = 32;
@@ -17,8 +17,8 @@ pub enum Error {
 #[derive(Clone, PartialEq, Eq, std::hash::Hash, Debug, Display)]
 #[display(fmt = "{}-{}", hash, name)]
 pub struct Path {
-  hash: Hash,
-  name: Name,
+  pub hash: Hash,
+  pub name: Name,
 }
 
 lazy_static! {
@@ -62,6 +62,10 @@ impl Path {
       hash: Hash::decode(&base_name[0..HASH_CHARS])?,
       name: base_name[HASH_CHARS + 1..].parse()?,
     })
+  }
+
+  pub fn is_derivation(&self) -> bool {
+    self.name.0.ends_with(".drv")
   }
 }
 
@@ -145,4 +149,10 @@ impl FromStr for Name {
     }
     Ok(Self(s.into()))
   }
+}
+
+#[derive(Debug, Clone)]
+pub struct PathWithOutputs {
+  pub path: Path,
+  pub outputs: BTreeSet<String>,
 }

@@ -1,14 +1,6 @@
 use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
-use crate::{
-  archive::{self, PathFilter},
-  hash::{Encoding, Hash, HashType},
-  path::Path as StorePath,
-  path_info::{PathInfo, ValidPathInfo},
-  settings,
-  sqlite::Sqlite,
-  util::*,
-  Store,
-};
+use crate::{archive, prelude::*, sqlite::Sqlite};
+use archive::PathFilter;
 use fs::File;
 use lock::{FsExt2, LockType};
 #[cfg(unix)] use std::os::unix::io::AsRawFd;
@@ -26,6 +18,7 @@ use std::{
 };
 use tee_readwrite::TeeWriter;
 use unix::{
+  errno::Errno,
   libc,
   sys::{stat::*, time::TimeSpec},
   unistd::*,
@@ -49,17 +42,14 @@ pub struct OptimiseStats {
 }
 
 pub struct LocalStore {
-  store_dir: PathBuf,
-  state_dir: PathBuf,
   temproots_dir: PathBuf,
   links_dir: PathBuf,
-  _db_dir: PathBuf,
   db: Mutex<Sqlite>,
 }
 
 impl Store for LocalStore {
   fn store_path(&self) -> Cow<OsStr> {
-    Cow::Borrowed(self.store_dir.as_os_str())
+    Cow::Borrowed(settings().paths.nix_store.as_os_str())
   }
 
   fn add_text_to_store<'a>(
@@ -117,7 +107,7 @@ impl Store for LocalStore {
   fn add_temp_root(&self, path: &StorePath) -> Result<()> {
     let file = self.temproots_dir.join(std::process::id().to_string());
     let mut temp_file = loop {
-      let all_gc_roots = gc::open_gc_lock(&self.state_dir, LockType::Read)?;
+      let all_gc_roots = gc::open_gc_lock(&settings().paths.nix_state_dir, LockType::Read)?;
       self.delete_path(&file)?;
       let temproots_file = File::create(&file)?;
       drop(all_gc_roots);
@@ -216,6 +206,13 @@ impl Store for LocalStore {
 
     Ok(dest_path)
   }
+
+  fn build_paths(&self, paths: Vec<StorePathWithOutputs>) -> Result<()> {
+    for path in paths {
+      if path.path.is_derivation() {}
+    }
+    Ok(())
+  }
 }
 
 impl LocalStore {
@@ -224,31 +221,36 @@ impl LocalStore {
       let _ = pretty_env_logger::try_init();
     }
 
-    let root = concat!(env!("OUT_DIR"), "/nix");
-    let root_dir = PathBuf::from(root);
-    let db_dir = root_dir.join("var").join("nix").join("db");
+    let settings = settings();
+
+    let db_dir = settings.paths.nix_state_dir.join("db");
 
     fs::create_dir_all(&db_dir)?;
 
     let reserved_path = db_dir.join("reserved");
     if fs::metadata(&reserved_path)
-      .map(|x| x.len() != settings().reserved_size)
+      .map(|x| x.len() != settings.reserved_size)
       .unwrap_or(true)
     {
       #[allow(unused_mut)]
       let mut fd = File::create(&reserved_path)?;
       #[cfg(target_os = "linux")]
-      unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings().reserved_size as _)?;
+      unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings.reserved_size as _)?;
       if cfg!(not(target_os = "linux")) {
-        fd.write_all(vec![b'X'; settings().reserved_size as usize].as_slice())?;
-        ftruncate(fd.as_raw_fd(), settings().reserved_size as _)?;
+        fd.write_all(vec![b'X'; settings.reserved_size as usize].as_slice())?;
+        ftruncate(fd.as_raw_fd(), settings.reserved_size as _)?;
       }
     }
 
     let schema_path = db_dir.join("schema");
 
     let global_lock_path = db_dir.join("big-lock");
-    let lock = File::create(&global_lock_path)?;
+    let lock = File::create(&global_lock_path).with_context(|| {
+      format!(
+        "while trying to open global lock file {}",
+        global_lock_path.display()
+      )
+    })?;
     if !lock.try_lock(LockType::Write)? {
       info!("waiting for the big Nix store lock...");
       lock.lock(LockType::Write)?;
@@ -269,14 +271,10 @@ impl LocalStore {
     }
 
     let this = Self {
-      store_dir: root_dir.join("store"),
-      state_dir: root_dir.join("var").join("nix"),
-      temproots_dir: root_dir.join("var").join("nix").join("gcroots"),
-      links_dir: root_dir.join("store").join(".links"),
-      _db_dir: db_dir,
+      temproots_dir: settings.paths.nix_state_dir.join("gcroots"),
+      links_dir: settings.paths.nix_store.join(".links"),
       db: Mutex::new(sqlite),
     };
-    fs::create_dir_all(&this.store_dir)?;
     fs::create_dir_all(&this.temproots_dir)?;
     fs::create_dir_all(&this.links_dir)?;
     Ok(this)
@@ -316,18 +314,14 @@ impl LocalStore {
     Ok(())
   }
 
-  fn canonicalise_path_metadata<P: AsRef<Path>>(
-    &self,
-    path: P,
-    uid: Option<libc::uid_t>,
-  ) -> Result<()> {
+  fn canonicalise_path_metadata<P: AsRef<Path>>(&self, path: P, uid: Option<u32>) -> Result<()> {
     self.canonicalise_path_metadata_impl(path, uid, &mut HashSet::new())
   }
 
   fn canonicalise_path_metadata_impl<P: AsRef<Path>>(
     &self,
     path: P,
-    uid: Option<libc::uid_t>,
+    uid: Option<u32>,
     inodes: &mut HashSet<Inode>,
   ) -> Result<()> {
     use std::ffi::CString;
@@ -343,7 +337,7 @@ impl LocalStore {
       }
 
       if unsafe { lchflags(path_str.as_ptr(), 0) } != 0 {
-        if errno() != libc::ENOTSUP {
+        if Errno::last() != Errno::ENOTSUP {
           bail!(std::io::Error::last_os_error());
         }
       }
@@ -365,7 +359,7 @@ impl LocalStore {
       let attrsize = unsafe { llistxattr(path_str.as_ptr(), std::ptr::null_mut(), 0) };
       match attrsize.cmp(&0) {
         Ordering::Less => {
-          if errno() != libc::ENOTSUP && errno() != libc::ENODATA {
+          if Errno::last() != ENOTSUP && Errno::last() != Errno::ENODATA {
             bail!("querying extended attributes of `{}'", path.display());
           }
         }
@@ -411,7 +405,7 @@ impl LocalStore {
         bail!("invalid ownership on file `{}'", path.display());
       }
 
-      let mode = info.mode() & !(libc::S_IFMT as u32);
+      let mode = info.mode() & !SFlag::S_IFMT.bits();
       assert!(
         ty.is_symlink()
           || (info.uid() == getuid().as_raw()
@@ -453,11 +447,11 @@ impl LocalStore {
     info: &fs::Metadata,
   ) -> Result<()> {
     if !info.file_type().is_symlink() {
-      let mut mode = info.mode() & !(libc::S_IFMT as u32);
+      let mut mode = info.mode() & !SFlag::S_IFMT.bits();
       if mode != 0o444 && mode != 0o555 {
-        mode = (info.mode() & libc::S_IFMT as u32)
+        mode = (info.mode() & SFlag::S_IFMT.bits())
           | 0o444
-          | (if info.mode() & libc::S_IXUSR as u32 > 0 {
+          | (if info.mode() & Mode::S_IXUSR.bits() > 0 {
             0o111
           } else {
             0
@@ -498,7 +492,7 @@ impl LocalStore {
   fn optimise_path_impl(
     &self,
     path: &Path,
-    inodes: &mut HashSet<libc::ino_t>,
+    inodes: &mut HashSet<u64>,
     stats: &mut OptimiseStats,
   ) -> Result<()> {
     if cfg!(target_os = "macos") && path.to_string_lossy().contains(".app/Contents/") {
@@ -527,7 +521,7 @@ impl LocalStore {
       return Ok(());
     }
 
-    if ty.is_file() && info.mode() & libc::S_IWUSR as u32 != 0 {
+    if ty.is_file() && info.mode() & Mode::S_IWUSR.bits() != 0 {
       warn!("ignoring suspicious writable file `{}'", path.display());
       return Ok(());
     }
@@ -559,7 +553,8 @@ impl LocalStore {
             return Ok(());
           }
           Err(e) => {
-            if e.raw_os_error() == Some(libc::ENOSPC) {
+            let errno = e.raw_os_error().map(Errno::from_i32);
+            if errno == Some(Errno::ENOSPC) {
               info!(
                 "cannot link `{}' to `{}': {}",
                 link_path.display(),
@@ -567,7 +562,7 @@ impl LocalStore {
                 e
               );
               return Ok(());
-            } else if e.raw_os_error() != Some(libc::EEXIST) {
+            } else if errno != Some(Errno::EEXIST) {
               bail!(
                 "cannot link `{}' to `{}': {}",
                 link_path.display(),
@@ -597,7 +592,7 @@ impl LocalStore {
       info!("linking `{}' to `{}'", path.display(), link_path.display());
 
       let parent = path.parent().unwrap();
-      let need_temp_permissions = parent != self.store_dir;
+      let need_temp_permissions = parent != settings().paths.nix_store;
 
       if need_temp_permissions {
         let meta = fs::metadata(parent)?;
@@ -606,7 +601,7 @@ impl LocalStore {
         fs::set_permissions(parent, perms)?;
       }
 
-      let temp_link = self.store_dir.join(format!(
+      let temp_link = settings().paths.nix_store.join(format!(
         ".tmp-link-{}-{}",
         std::process::id(),
         rand::random::<u32>()

@@ -311,7 +311,7 @@ pub struct Settings {
     help = "Additional paths to make available inside the build sandbox.",
     alias = "build-extra-chroot-dirs,build-extra-sandbox-paths"
   )]
-  pub extra_sandbox_paths: HashSet<PathBuf>,
+  pub extra_sandbox_paths: HashSet<String>,
 
   #[setting(
     value = "0",
@@ -683,13 +683,22 @@ impl Settings {
   }
 }
 
-fn env_fallback(fallback: &str, vars: &[&str]) -> PathBuf {
+fn env_fallback_impl(fallback: &str, vars: &[&str]) -> PathBuf {
   for v in vars {
     if let Some(x) = env::var_os(v) {
       return PathBuf::from(x);
     }
   }
   PathBuf::from(fallback)
+}
+
+fn env_fallback(fallback: &str, vars: &[&str]) -> PathBuf {
+  let base_path = env_fallback_impl(fallback, vars);
+  if cfg!(test) || std::env::var("NIX_TEST").is_ok() {
+    PathBuf::from(env!("OUT_DIR")).join(base_path.strip_prefix("/").unwrap())
+  } else {
+    base_path
+  }
 }
 
 impl Default for Paths {
@@ -699,12 +708,12 @@ impl Default for Paths {
     let nix_libexec_dir = env_fallback("/usr/local/libexec", &["NIX_LIBEXEC_DIR"]);
     let nix_conf_dir = env_fallback("/etc/nix", &["NIX_CONF_DIR"]);
     Self {
-      nix_prefix: PathBuf::from("/nix"),
+      nix_prefix: env_fallback("/nix", &[]),
       nix_data_dir: env_fallback("/usr/local/share", &["NIX_DATA_DIR"]),
       nix_log_dir: env_fallback("/nix/var/nix/log", &["NIX_LOG_DIR"]),
       nix_user_conf_files: get_user_config_files(),
       nix_bin_dir: env_fallback("/usr/local/bin", &["NIX_BIN_DIR"]),
-      nix_man_dir: PathBuf::from("/usr/local/share/man"),
+      nix_man_dir: env_fallback("/usr/local/share/man", &[]),
       nix_daemon_socket_file: env::var_os("NIX_DAEMON_SOCKET_PATH").map_or_else(
         || nix_state_dir.join("daemon-socket").join("socket"),
         PathBuf::from,

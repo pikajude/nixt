@@ -67,7 +67,7 @@ pub fn settings(_: TokenStream, input: TokenStream) -> TokenStream {
     #(#item_attrs),*
     pub struct Settings {
       #(#field_toks,)*
-      paths: Paths
+      pub paths: Paths
     }
 
     impl Default for Settings {
