@@ -5,6 +5,8 @@ use std::{
   sync::Mutex,
 };
 
+mod parse;
+
 lazy_static! {
   pub static ref DRV_HASHES: Mutex<HashMap<StorePath, Hash>> = Mutex::new(HashMap::new());
 }

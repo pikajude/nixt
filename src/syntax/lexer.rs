@@ -111,8 +111,6 @@ impl<'a> Lexer<'a> {
 impl<'a> Iterator for Lexer<'a> {
   type Item = Result<(usize, Token<'a>, usize), (usize, LexError<'a>, usize)>;
 
-  // complex due to macros, but they capture local variables so fuck it
-  #[allow(clippy::cognitive_complexity)]
   fn next(&mut self) -> Option<Self::Item> {
     if self.input().is_empty() {
       return None;

@@ -1,11 +1,22 @@
 pub mod base32;
 pub use anyhow::{Context as _, *};
-use std::io::{self, Read, Write};
+use std::{
+  io::{self, Read, Write},
+  str::pattern::{Pattern, Searcher},
+};
 
-pub fn break_str(s: &str, pattern: char) -> Option<(&str, &str)> {
-  let indexof = s.find(pattern)?;
+pub fn break_str<'a, P: Pattern<'a>>(s: &'a str, pattern: P) -> Option<(&'a str, &'a str)> {
+  let mut search = pattern.into_searcher(s);
+  let (start, end) = search.next_match()?;
 
-  Some((&s[..indexof], &s[indexof + pattern.len_utf8()..]))
+  Some((&s[..start], &s[end..]))
+}
+
+#[test]
+fn break_str_test() {
+  assert_eq!(break_str("foobar", 'b'), Some(("foo", "ar")));
+  assert_eq!(break_str("foobar", "baz"), None);
+  assert_eq!(break_str("foobar", "bar"), Some(("foo", "")));
 }
 
 pub trait OptionalExt<T> {

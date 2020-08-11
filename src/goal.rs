@@ -109,11 +109,14 @@ impl<'a> DerivationGoal<'a> {
     env.insert(String::from("NIX_LOG_FD"), String::from("2"));
     env.insert(String::from("TERM"), String::from("xterm-256color"));
 
-    let sandbox_tmpdir = if cfg!(target_os = "linux") && use_chroot {
+    #[cfg(target_os = "linux")]
+    let sandbox_tmpdir = if use_chroot {
       &settings().sandbox_build_dir
     } else {
       &host_tmpdir
     };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_tmpdir = &host_tmpdir;
 
     let pass_as_file: HashSet<_> = self
       .derivation

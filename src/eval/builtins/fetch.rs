@@ -32,8 +32,7 @@ fn fetch(eval: &Eval, args: ThunkId, who: &'static str, unpack: bool, name: &str
         Some(v) => Some(eval.value_string_of(v)?),
         None => None,
       };
-      #[allow(clippy::never_loop)]
-      for k in a.keys() {
+      if let Some(k) = a.keys().next() {
         bail!("unsupported argument to {}: `{}'", who, k);
       }
       murl.ok_or_else(|| anyhow!("`url' argument is required"))?

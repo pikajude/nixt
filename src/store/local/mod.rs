@@ -3,7 +3,6 @@ use crate::{archive, prelude::*, sqlite::Sqlite};
 use archive::PathFilter;
 use fs::File;
 use lock::{FsExt2, LockType};
-#[cfg(unix)] use std::os::unix::io::AsRawFd;
 use std::{
   borrow::Cow,
   collections::HashSet,
@@ -11,7 +10,7 @@ use std::{
   fs,
   io::Write,
   iter,
-  os::unix::fs::*,
+  os::unix::{fs::*, io::AsRawFd},
   path::{Path, PathBuf},
   rc::Rc,
   sync::Mutex,
@@ -20,7 +19,7 @@ use tee_readwrite::TeeWriter;
 use unix::{
   errno::Errno,
   libc,
-  sys::{stat::*, time::TimeSpec},
+  sys::{stat::*, time::TimeVal},
   unistd::*,
 };
 
@@ -232,7 +231,6 @@ impl LocalStore {
       .map(|x| x.len() != settings.reserved_size)
       .unwrap_or(true)
     {
-      #[allow(unused_mut)]
       let mut fd = File::create(&reserved_path)?;
       #[cfg(target_os = "linux")]
       unix::fcntl::posix_fallocate(fd.as_raw_fd(), 0, settings.reserved_size as _)?;
@@ -405,7 +403,7 @@ impl LocalStore {
         bail!("invalid ownership on file `{}'", path.display());
       }
 
-      let mode = info.mode() & !SFlag::S_IFMT.bits();
+      let mode = info.mode() & !(SFlag::S_IFMT.bits() as u32);
       assert!(
         ty.is_symlink()
           || (info.uid() == getuid().as_raw()
@@ -447,11 +445,11 @@ impl LocalStore {
     info: &fs::Metadata,
   ) -> Result<()> {
     if !info.file_type().is_symlink() {
-      let mut mode = info.mode() & !SFlag::S_IFMT.bits();
+      let mut mode = info.mode() & !(SFlag::S_IFMT.bits() as u32);
       if mode != 0o444 && mode != 0o555 {
-        mode = (info.mode() & SFlag::S_IFMT.bits())
+        mode = (info.mode() & (SFlag::S_IFMT.bits() as u32))
           | 0o444
-          | (if info.mode() & Mode::S_IXUSR.bits() > 0 {
+          | (if info.mode() & (Mode::S_IXUSR.bits() as u32) > 0 {
             0o111
           } else {
             0
@@ -467,12 +465,10 @@ impl LocalStore {
 
     if info.mtime() != 1 {
       use unix::sys::time::TimeValLike;
-      utimensat(
-        None,
+      lutimes(
         path.as_ref(),
-        &TimeSpec::seconds(info.atime()),
-        &TimeSpec::seconds(1),
-        UtimensatFlags::NoFollowSymlink,
+        &TimeVal::seconds(info.atime()),
+        &TimeVal::seconds(1),
       )?;
     }
 
@@ -521,7 +517,7 @@ impl LocalStore {
       return Ok(());
     }
 
-    if ty.is_file() && info.mode() & Mode::S_IWUSR.bits() != 0 {
+    if ty.is_file() && info.mode() & (Mode::S_IWUSR.bits() as u32) != 0 {
       warn!("ignoring suspicious writable file `{}'", path.display());
       return Ok(());
     }

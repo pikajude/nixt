@@ -17,8 +17,7 @@ pub trait ParseSink {
   fn create_file(&mut self, path: Option<&Path>) -> Result<()>;
   fn create_symlink(&mut self, path: Option<&Path>, target: PathBuf) -> Result<()>;
   fn set_executable(&mut self) -> Result<()>;
-  #[allow(unused_variables)]
-  fn preallocate(&mut self, size: usize) -> Result<()> {
+  fn preallocate(&mut self, _size: usize) -> Result<()> {
     Ok(())
   }
   fn receive_contents<R: Read>(&mut self, contents: R) -> Result<()>;
@@ -271,8 +270,7 @@ impl ParseSink for RestoreSink {
     Ok(())
   }
 
-  #[allow(unused)]
-  fn create_symlink(&mut self, path: Option<&Path>, target: PathBuf) -> Result<()> {
+  fn create_symlink(&mut self, _path: Option<&Path>, _target: PathBuf) -> Result<()> {
     todo!()
   }
 

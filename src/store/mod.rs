@@ -78,6 +78,10 @@ pub trait Store: Send + Sync {
     })
   }
 
+  fn parse_derivation(&self, path: &Path, name: &str) -> Result<Derivation> {
+    Derivation::parse(self, &fs::read_to_string(path)?, name)
+  }
+
   fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
     Ok(self.print_store_path(path).into())
   }
@@ -90,8 +94,7 @@ pub trait Store: Send + Sync {
 
   fn register_valid_path(&self, path_info: ValidPathInfo) -> Result<()>;
 
-  #[allow(unused)]
-  fn add_temp_root(&self, path: &StorePath) -> Result<()> {
+  fn add_temp_root(&self, _path: &StorePath) -> Result<()> {
     bail!("not supported by this store backend")
   }
 
@@ -237,13 +240,12 @@ pub trait Store: Send + Sync {
     }
   }
 
-  #[allow(unused_variables)]
   fn add_text_to_store<'a>(
     &self,
-    name: &str,
-    contents: &str,
-    references: &mut dyn Iterator<Item = &'a StorePath>,
-    repair: RepairFlag,
+    _name: &str,
+    _contents: &str,
+    _references: &mut dyn Iterator<Item = &'a StorePath>,
+    _repair: RepairFlag,
   ) -> Result<StorePath> {
     bail!("add_text_to_store not supported by this backend.")
   }

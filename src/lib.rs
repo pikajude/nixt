@@ -1,9 +1,10 @@
-#![feature(unboxed_closures)]
-#![feature(fn_traits)]
-#![feature(untagged_unions)]
 #![feature(btree_drain_filter)]
-#![feature(duration_zero)]
 #![feature(doc_cfg)]
+#![feature(duration_zero)]
+#![feature(fn_traits)]
+#![feature(pattern)]
+#![feature(unboxed_closures)]
+#![feature(untagged_unions)]
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate derive_more;
