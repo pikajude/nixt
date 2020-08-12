@@ -1,5 +1,7 @@
-use super::lock::{FsExt2, LockType};
-use crate::util::*;
+use crate::{
+  sync::fs_lock::{FsExt2, LockType},
+  util::*,
+};
 use std::{fs::File, path::Path};
 
 pub fn open_gc_lock<P: AsRef<Path>>(state_dir: P, l: LockType) -> Result<File> {

@@ -1,8 +1,7 @@
 use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
-use crate::{archive, prelude::*, sqlite::Sqlite};
+use crate::{archive, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
 use archive::PathFilter;
 use fs::File;
-use lock::{FsExt2, LockType};
 use std::{
   borrow::Cow,
   collections::HashSet,
@@ -23,9 +22,8 @@ use unix::{
   unistd::*,
 };
 
-mod db;
-mod gc;
-mod lock;
+pub mod db;
+pub mod gc;
 
 #[derive(Eq, PartialEq, Hash)]
 struct Inode {
@@ -67,7 +65,7 @@ impl Store for LocalStore {
     if repair || !self.is_valid_path(&dest_path)? {
       let real_path = self.to_real_path(&dest_path)?;
 
-      let _ = lock::PathLocks::new().lock(iter::once(&real_path), true, None)?;
+      let _ = PathLocks::new().lock(iter::once(&real_path), true, None)?;
 
       if repair || !self.is_valid_path(&dest_path)? {
         self.delete_path(&real_path)?;
@@ -141,7 +139,7 @@ impl Store for LocalStore {
     if repair.repair() || !self.is_valid_path(path_info.store_path())? {
       let dest = self.to_real_path(path_info.store_path())?;
 
-      lock::PathLocks::new().lock(&mut iter::once(&dest), true, None)?;
+      PathLocks::new().lock(&mut iter::once(&dest), true, None)?;
 
       if repair.repair() || !self.is_valid_path(path_info.store_path())? {
         self.delete_path(&dest)?;
@@ -189,7 +187,7 @@ impl Store for LocalStore {
 
     if repair.repair() || !self.is_valid_path(&dest_path)? {
       let real_path = self.to_real_path(&dest_path)?;
-      lock::PathLocks::new().lock(iter::once(&real_path), false, None)?;
+      PathLocks::new().lock(iter::once(&real_path), false, None)?;
       if repair.repair() || !self.is_valid_path(&dest_path)? {
         self.delete_path(&real_path)?;
         fs::rename(&tmpdir, &real_path)?;

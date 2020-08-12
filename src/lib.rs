@@ -12,18 +12,19 @@
 #[macro_use] extern crate gen_settings;
 
 pub mod archive;
-mod arena;
+pub mod arena;
 pub mod derivation;
 pub mod eval;
-mod fetch;
+pub mod fetch;
 pub mod goal;
 pub mod hash;
 pub mod path;
 pub mod path_info;
 mod prelude;
 pub mod settings;
-mod sqlite;
+pub mod sqlite;
 pub mod store;
+pub mod sync;
 pub mod syntax;
 pub mod util;
 

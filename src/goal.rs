@@ -1,7 +1,12 @@
 use crate::prelude::*;
 use settings::SandboxMode;
-use std::collections::{HashMap, HashSet};
-use unix::sys::stat::Mode;
+use std::{
+  collections::{HashMap, HashSet},
+  io::ErrorKind::AlreadyExists,
+  os::unix::fs::PermissionsExt,
+  sync::atomic::{AtomicUsize, Ordering},
+};
+use unix::{sys::stat::Mode, unistd};
 
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub enum ExitCode {
@@ -22,12 +27,13 @@ pub struct DerivationGoal<'a> {
   store: &'a dyn Store,
   drv_path: &'a StorePath,
   #[cfg(any(target_os = "macos", doc))]
+  #[doc(cfg(target_os = "macos"))]
   extra_sandbox_profile: String,
 }
 
 impl<'a> DerivationGoal<'a> {
   pub fn local_build(&self) -> Result<()> {
-    if unix::unistd::getuid().is_root() {
+    if unistd::getuid().is_root() {
       if let Some(_group) = &settings().build_users_group {
         if cfg!(unix) {
         } else {
@@ -78,7 +84,7 @@ impl<'a> DerivationGoal<'a> {
     };
 
     let host_tmpdir = tmp_build_dir(
-      "",
+      None,
       format!("nix-build-{}", self.drv_path.name),
       false,
       false,
@@ -168,11 +174,75 @@ impl<'a> DerivationGoal<'a> {
 }
 
 fn tmp_build_dir(
-  _root: impl AsRef<Path>,
-  _prefix: impl AsRef<Path>,
-  _include_pid: bool,
-  _use_global_counter: bool,
-  _mode: Mode,
+  root: Option<&Path>,
+  prefix: impl AsRef<Path>,
+  include_pid: bool,
+  use_global_counter: bool,
+  mode: Mode,
 ) -> Result<PathBuf> {
-  todo!()
+  lazy_static! {
+    static ref GLOBAL_COUNTER: AtomicUsize = AtomicUsize::new(0);
+  }
+
+  let prefix = prefix.as_ref();
+  let cnt = AtomicUsize::new(0);
+
+  let counter = if use_global_counter {
+    &*GLOBAL_COUNTER
+  } else {
+    &cnt
+  };
+
+  loop {
+    let tmpdir = tempname(root, prefix, include_pid, counter)?;
+    match fs::create_dir(&tmpdir) {
+      Ok(()) => {
+        let mut perms = fs::metadata(&tmpdir)?.permissions();
+        perms.set_mode(mode.bits());
+        fs::set_permissions(&tmpdir, perms)?;
+        if cfg!(target_os = "freebsd") {
+          unistd::chown(&tmpdir, None, Some(unistd::getegid()))?;
+        }
+        return Ok(tmpdir);
+      }
+      Err(e) => {
+        if e.kind() != AlreadyExists {
+          return Err(e).with_context(|| {
+            format!(
+              "while creating temporary build directory {}",
+              tmpdir.display()
+            )
+          });
+        }
+      }
+    }
+  }
+}
+
+fn tempname(
+  root: Option<&Path>,
+  prefix: impl AsRef<Path>,
+  include_pid: bool,
+  counter: &AtomicUsize,
+) -> Result<PathBuf> {
+  let tmproot = root
+    .map_or_else(
+      || PathBuf::from(std::env::var("TMPDIR").unwrap_or_else(|_| String::from("/tmp"))),
+      |x| x.to_path_buf(),
+    )
+    .canonicalize()?;
+  Ok(if include_pid {
+    tmproot.join(format!(
+      "{}-{}-{}",
+      prefix.as_ref().display(),
+      std::process::id(),
+      counter.fetch_add(1, Ordering::Acquire)
+    ))
+  } else {
+    tmproot.join(format!(
+      "{}-{}",
+      prefix.as_ref().display(),
+      counter.fetch_add(1, Ordering::Acquire)
+    ))
+  })
 }
