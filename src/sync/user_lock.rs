@@ -4,7 +4,7 @@ use unix::unistd::{Gid, Uid};
 use users::os::unix::GroupExt;
 
 pub struct UserLock {
-  lockfile: File,
+  _lockfile: File,
   pub uid: Uid,
   pub gid: Gid,
   pub other_gids: Vec<Gid>,
@@ -64,7 +64,7 @@ impl UserLock {
         };
 
         return Ok(Self {
-          lockfile,
+          _lockfile: lockfile,
           uid: Uid::from_raw(user.uid()),
           gid,
           other_gids,
@@ -75,7 +75,7 @@ impl UserLock {
     bail!("unable to find a free build user")
   }
 
-  pub fn kill(self) -> Result<()> {
+  pub fn kill(&self) -> Result<()> {
     Ok(())
   }
 }

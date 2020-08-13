@@ -92,6 +92,10 @@ pub trait Store: Send + Sync {
     self.get_path_info(path).map(|x| x.is_some())
   }
 
+  fn is_in_store(&self, path: &Path) -> bool {
+    path.starts_with(self.store_path())
+  }
+
   fn register_valid_path(&self, path_info: ValidPathInfo) -> Result<()>;
 
   fn add_temp_root(&self, _path: &StorePath) -> Result<()> {
@@ -273,5 +277,10 @@ pub trait Store: Send + Sync {
       "store backend {} does not support building paths",
       self.store_path().to_string_lossy()
     )
+  }
+
+  fn compute_closure(&self, _path: &StorePath, _closure: &mut BTreeSet<StorePath>) -> Result<()> {
+    warn!("compute_closure() not implemented");
+    Ok(())
   }
 }
