@@ -1,5 +1,5 @@
 use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
-use crate::{archive, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
+use crate::{archive, goal::DerivationGoal, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
 use archive::PathFilter;
 use fs::File;
 use std::{
@@ -209,6 +209,14 @@ impl Store for LocalStore {
       if path.path.is_derivation() {}
     }
     Ok(())
+  }
+
+  fn goal_for(&self, path: &Path) -> Result<DerivationGoal> {
+    Ok(DerivationGoal {
+      derivation: self.parse_derivation(path, "some-derivation")?,
+      store: self,
+      drv_path: self.parse_store_path(path)?,
+    })
   }
 }
 

@@ -1,4 +1,4 @@
-use crate::{archive::PathFilter, prelude::*};
+use crate::{archive::PathFilter, goal::DerivationGoal, prelude::*};
 use std::{
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
@@ -283,4 +283,13 @@ pub trait Store: Send + Sync {
     warn!("compute_closure() not implemented");
     Ok(())
   }
+
+  fn goal_for(&self, path: &Path) -> Result<DerivationGoal>;
+  /* {
+    Ok(DerivationGoal {
+      derivation: self.parse_derivation(path, "some-derivation")?,
+      store: self,
+      drv_path: self.parse_store_path(path)?,
+    })
+  } */
 }

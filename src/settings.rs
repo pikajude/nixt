@@ -670,7 +670,7 @@ impl Settings {
 
   fn get_default_sandbox_paths() -> HashSet<String> {
     if cfg!(target_os = "linux") {
-      std::iter::once(format!("/bin/sh={}", "foobar")).collect()
+      std::iter::once(format!("/bin/sh={}", "/bin/sh")).collect()
     } else if cfg!(target_os = "macos") {
       "/System/Library/Frameworks /System/Library/PrivateFrameworks /bin/sh /bin/bash /private/tmp \
        /private/var/tmp /usr/lib"

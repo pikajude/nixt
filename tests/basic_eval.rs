@@ -12,10 +12,9 @@ fn test_basic_eval() -> Result<()> {
     Ok((_, context)) => {
       for c in context {
         let drv_path = c.strip_prefix("!out!").unwrap();
-        let derivation = eval
-          .store
-          .parse_derivation(std::path::Path::new(&drv_path), "hello-2.10.drv")?;
-        println!("must build: {:?}", derivation);
+        let goal = eval.store.goal_for(std::path::Path::new(&drv_path))?;
+        eprintln!("{:?}", goal.drv_path);
+        goal.local_build()?;
       }
     }
     Err(e) => {

@@ -1,20 +1,31 @@
 use crate::{prelude::*, sync::user_lock::UserLock};
+use linux_personality::Personality;
 use settings::SandboxMode;
 use std::{
   collections::{HashMap, HashSet},
   io::{BufRead, ErrorKind::AlreadyExists, Write},
   os::unix::{
-    fs::PermissionsExt,
+    fs::{symlink, PermissionsExt},
     io::{AsRawFd, FromRawFd},
+    prelude::RawFd,
+    process::CommandExt,
   },
   sync::atomic::{AtomicUsize, Ordering},
 };
 use unix::{
   fcntl::OFlag,
-  pty, sched,
-  sys::{mman, stat::Mode, termios, wait},
+  mount, pty, sched,
+  sys::{mman, socket, stat::Mode, termios, wait},
   unistd,
 };
+
+fn personality(p: Personality) -> Result<Personality> {
+  Ok(linux_personality::personality(p).map_err(|_| std::io::Error::last_os_error())?)
+}
+
+fn get_personality() -> Result<Personality> {
+  Ok(linux_personality::get_personality().map_err(|_| std::io::Error::last_os_error())?)
+}
 
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub enum ExitCode {
@@ -30,10 +41,16 @@ pub trait Goal {
   fn key(&self) -> String;
 }
 
+#[derive(Debug)]
+struct ChrootDir {
+  path: PathBuf,
+  is_optional: bool,
+}
+
 pub struct DerivationGoal<'a> {
-  derivation: Derivation,
-  store: &'a dyn Store,
-  drv_path: &'a StorePath,
+  pub derivation: Derivation,
+  pub store: &'a dyn Store,
+  pub drv_path: StorePath,
 }
 
 impl<'a> DerivationGoal<'a> {
@@ -63,7 +80,7 @@ impl<'a> DerivationGoal<'a> {
          {{{}}}",
         self.derivation.platform,
         self.derivation.required_system_features().iter().join(", "),
-        self.store.print_store_path(self.drv_path),
+        self.store.print_store_path(&self.drv_path),
         settings().this_system,
         settings().system_features.iter().join(", ")
       )
@@ -81,14 +98,14 @@ impl<'a> DerivationGoal<'a> {
         if no_chroot {
           bail!(
             "derivation '{}' has `__noChroot' set, but that's not allowed when sandbox = true.",
-            self.store.print_store_path(self.drv_path)
+            self.store.print_store_path(&self.drv_path)
           );
         }
         if cfg!(target_os = "macos") && sandbox_profile.is_some() {
           bail!(
             "derivation '{}' specifies a sandbox profile, but that's only allowed when sandbox = \
              relaxed.",
-            self.store.print_store_path(self.drv_path)
+            self.store.print_store_path(&self.drv_path)
           );
         }
         true
@@ -123,17 +140,12 @@ impl<'a> DerivationGoal<'a> {
     #[cfg(not(target_os = "linux"))]
     let sandbox_tmpdir = &host_tmpdir;
 
-    let env = self.init_env(&host_tmpdir, sandbox_tmpdir)?;
+    let _env = self.init_env(&host_tmpdir, sandbox_tmpdir)?;
+
+    let mut chroot_root: PathBuf = PathBuf::from("/no-such-path");
+    let mut dirs_in_chroot = HashMap::<String, ChrootDir>::new();
 
     if use_chroot {
-      #[derive(Debug)]
-      struct ChrootDir {
-        path: PathBuf,
-        is_optional: bool,
-      }
-
-      let mut dirs_in_chroot = HashMap::<String, ChrootDir>::new();
-
       for chroot_dir in settings()
         .sandbox_paths
         .union(&settings().extra_sandbox_paths)
@@ -222,9 +234,9 @@ impl<'a> DerivationGoal<'a> {
 
       #[cfg(target_os = "linux")]
       {
-        let chroot_root = self
+        chroot_root = self
           .store
-          .to_real_path(self.drv_path)?
+          .to_real_path(&self.drv_path)?
           .with_extension("chroot");
         let _ = fs::remove_dir(&chroot_root);
 
@@ -233,7 +245,7 @@ impl<'a> DerivationGoal<'a> {
           chroot_root.display()
         );
 
-        fs::create_dir(&chroot_root)?;
+        fs::create_dir_all(&chroot_root)?;
         fs::set_permissions(&chroot_root, fs::Permissions::from_mode(0o750))?;
 
         if let Some(u) = &build_user {
@@ -247,10 +259,10 @@ impl<'a> DerivationGoal<'a> {
         }
 
         let chroot_tmp = chroot_root.join("tmp");
-        fs::create_dir(&chroot_tmp)?;
+        fs::create_dir_all(&chroot_tmp)?;
         fs::set_permissions(&chroot_tmp, fs::Permissions::from_mode(0o1777))?;
 
-        fs::create_dir(chroot_root.join("etc"))?;
+        fs::create_dir_all(chroot_root.join("etc"))?;
         fs::write(
           chroot_root.join("etc").join("passwd"),
           format!(
@@ -275,7 +287,11 @@ impl<'a> DerivationGoal<'a> {
           "127.0.0.1 localhost\n::1 localhost\n",
         )?;
 
-        let chroot_store_dir = chroot_root.join(self.store.store_path());
+        let chroot_store_dir = chroot_root.join(
+          AsRef::<Path>::as_ref(&self.store.store_path())
+            .strip_prefix("/")
+            .expect("nix store path should be absolute"),
+        );
         fs::create_dir_all(&chroot_store_dir)?;
         fs::set_permissions(&chroot_store_dir, fs::Permissions::from_mode(0o1775))?;
 
@@ -332,6 +348,10 @@ impl<'a> DerivationGoal<'a> {
             let mut reader =
               std::io::BufReader::new(unsafe { fs::File::from_raw_fd(read_side.as_raw_fd()) })
                 .lines();
+
+            // the fd backing this PTY will be dropped when the File is closed
+            std::mem::forget(read_side);
+
             let child_pid = if let Some(line) = reader.next() {
               line?.parse::<libc::pid_t>()?
             } else {
@@ -358,23 +378,40 @@ impl<'a> DerivationGoal<'a> {
               .write(false)
               .open(format!("/proc/{}/ns/mnt", child_pid))?;
 
-            for builder_line in reader {
+            while let Some(builder_line) = reader.next() {
               let builder_line = builder_line?;
               match builder_line.strip_prefix('\x01') {
                 Some(y) => {
+                  fs::remove_dir_all(&chroot_root)?;
                   if y.is_empty() {
                     break;
                   } else {
                     bail!("{}", y)
                   }
                 }
-                None => debug!("{}", builder_line),
+                None => info!("{}", builder_line),
+              }
+            }
+
+            for builder_line in reader {
+              let builder_line = builder_line?;
+              if builder_line.starts_with('\x01') {
+                bail!("{}", &builder_line[1..]);
+              } else {
+                info!("{}", builder_line);
               }
             }
           }
           x => bail!("unexpected wait status from child: {:?}", x),
         },
         unistd::ForkResult::Child => {
+          #[cfg(target_os = "linux")]
+          {
+            if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } == -1 {
+              bail!(std::io::Error::last_os_error());
+            }
+          }
+
           if unistd::getuid().is_root() {
             unistd::setgroups(&[])?;
           }
@@ -395,11 +432,21 @@ impl<'a> DerivationGoal<'a> {
           };
           let stack = unsafe { std::slice::from_raw_parts_mut(stack, stack_size) };
           let child = sched::clone(
-            Box::new(move || match self.run_child() {
-              Ok(()) => 0,
-              Err(e) => {
-                eprintln!("{:?}", e);
-                1
+            Box::new(move || {
+              match self.run_child(
+                use_chroot,
+                chroot_root.clone(),
+                sandbox_tmpdir.to_path_buf(),
+                &dirs_in_chroot,
+                build_user.as_ref(),
+                write_side,
+              ) {
+                Ok(()) => 0,
+                Err(e) => {
+                  println!("{:?}", e);
+                  eprintln!("\x01while setting up the build environment: {}", e);
+                  1
+                }
               }
             }),
             stack,
@@ -421,9 +468,193 @@ impl<'a> DerivationGoal<'a> {
     Ok(())
   }
 
-  fn run_child(&self) -> Result<()> {
-    debug!("hello from the chilfd builder!");
-    Ok(())
+  fn run_child(
+    &self,
+    use_chroot: bool,
+    chroot_root: PathBuf,
+    sandbox_tmpdir: PathBuf,
+    dirs_in_chroot: &HashMap<String, ChrootDir>,
+    build_user: Option<&UserLock>,
+    write_side: RawFd,
+  ) -> Result<()> {
+    unistd::setsid()?;
+    unistd::dup2(write_side, std::io::stderr().as_raw_fd())?;
+    unistd::dup2(std::io::stderr().as_raw_fd(), std::io::stdout().as_raw_fd())?;
+    {
+      let fd = fs::File::open("/dev/null")?;
+      unistd::dup2(fd.as_raw_fd(), std::io::stdin().as_raw_fd())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    if use_chroot {
+      let sock = socket::socket(
+        socket::AddressFamily::Inet,
+        socket::SockType::Datagram,
+        socket::SockFlag::empty(),
+        None,
+      )?;
+
+      if false {
+        netdevice::set_flags(
+          sock,
+          "lo",
+          &(netdevice::IFF_UP | netdevice::IFF_LOOPBACK | netdevice::IFF_RUNNING),
+        )?;
+      }
+
+      unistd::sethostname("localhost")?;
+      if unsafe { libc::setdomainname(b"(none)".as_ptr().cast(), 4) } == -1 {
+        bail!(std::io::Error::last_os_error());
+      }
+
+      let null: Option<&str> = None;
+
+      mount::mount(
+        null,
+        "/",
+        null,
+        mount::MsFlags::MS_PRIVATE | mount::MsFlags::MS_REC,
+        null,
+      )?;
+
+      mount::mount(
+        Some(chroot_root.as_path()),
+        chroot_root.as_path(),
+        null,
+        mount::MsFlags::MS_BIND,
+        null,
+      )?;
+
+      let chroot_store = chroot_root.join(
+        AsRef::<Path>::as_ref(&self.store.store_path())
+          .strip_prefix("/")
+          .expect("nix store path should be absolute"),
+      );
+      mount::mount(
+        Some(chroot_store.as_path()),
+        chroot_store.as_path(),
+        null,
+        mount::MsFlags::MS_BIND,
+        null,
+      )?;
+
+      mount::mount(
+        null,
+        chroot_store.as_path(),
+        null,
+        mount::MsFlags::MS_SHARED,
+        null,
+      )?;
+
+      for (target, dir) in dirs_in_chroot {
+        let source = dir.path.as_path();
+        if source.to_str() == Some("/proc") {
+          continue;
+        }
+        bind(
+          source,
+          chroot_root.join(Path::new(&target).strip_prefix("/").unwrap()),
+          dir.is_optional,
+        )?;
+      }
+
+      fs::create_dir_all(chroot_root.join("dev").join("shm"))?;
+      fs::create_dir_all(chroot_root.join("dev").join("pts"))?;
+      if settings().system_features.contains("kvm") {
+        fs::create_dir_all(chroot_root.join("dev").join("kvm"))?;
+      }
+      symlink("/proc/self/fd", chroot_root.join("dev").join("fd"))?;
+      symlink("/proc/self/fd/0", chroot_root.join("dev").join("stdin"))?;
+      symlink("/proc/self/fd/1", chroot_root.join("dev").join("stdout"))?;
+      symlink("/proc/self/fd/2", chroot_root.join("dev").join("stderr"))?;
+
+      fs::create_dir_all(chroot_root.join("proc"))?;
+      mount::mount(
+        Some("none"),
+        &chroot_root.join("proc"),
+        Some("proc"),
+        mount::MsFlags::empty(),
+        null,
+      )?;
+
+      if fs::metadata("/dev/shm").is_ok() {
+        mount::mount(
+          Some("none"),
+          &chroot_root.join("dev").join("shm"),
+          Some("tmpfs"),
+          mount::MsFlags::empty(),
+          Some(format!("size={}", settings().sandbox_shm_size).as_str()),
+        )?;
+      }
+
+      if fs::metadata("/dev/pts/ptmx").is_ok() {
+        mount::mount(
+          Some("none"),
+          &chroot_root.join("dev").join("pts"),
+          Some("devpts"),
+          mount::MsFlags::empty(),
+          Some("newinstance,mode=0620"),
+        )?;
+        symlink("/dev/pts/ptmx", chroot_root.join("dev").join("ptmx"))?;
+        fs::set_permissions(
+          chroot_root.join("dev").join("pts").join("ptmx"),
+          fs::Permissions::from_mode(0o666),
+        )?;
+      }
+
+      sched::unshare(sched::CloneFlags::CLONE_NEWNS)?;
+      unistd::chdir(chroot_root.as_path())?;
+      fs::create_dir_all("real-root")?;
+      unistd::pivot_root(".", "real-root")?;
+      unistd::chroot(".")?;
+      mount::umount2("real-root", mount::MntFlags::MNT_DETACH)?;
+      fs::remove_dir("real-root")?;
+      unistd::setgid(unistd::Gid::from_raw(Self::SANDBOX_GID))?;
+      unistd::setuid(unistd::Uid::from_raw(Self::SANDBOX_UID))?;
+    }
+
+    unistd::chdir(&sandbox_tmpdir)
+      .with_context(|| format!("trying to move into tmpdir `{}'", sandbox_tmpdir.display()))?;
+
+    let uname = unix::sys::utsname::uname();
+    if self.derivation.platform == "i686-linux"
+      && (settings().this_system == "x86_64-linux"
+        || (uname.sysname() == "Linux" && uname.machine() == "x86_64"))
+    {
+      personality(linux_personality::PER_LINUX32)?;
+    }
+
+    if self.derivation.platform == "i686-linux"
+      || self.derivation.platform == "x86_64-linux" && settings().impersonate_linux_26
+    {
+      personality(get_personality()? | linux_personality::UNAME26)?;
+    }
+
+    personality(get_personality()? | linux_personality::ADDR_NO_RANDOMIZE)?;
+
+    rlimit::setrlimit(rlimit::Resource::CORE, 0, rlimit::RLIM_INFINITY)?;
+
+    if let Some(u) = build_user {
+      unistd::setgroups(&u.other_gids)?;
+      unistd::setgid(u.gid)?;
+      unistd::setuid(u.uid)?;
+    }
+
+    let mut cmd = std::process::Command::new(self.derivation.builder.as_os_str());
+
+    cmd.arg0(
+      self
+        .derivation
+        .builder
+        .file_name()
+        .expect("builder should always have a filename"),
+    );
+    cmd.args(self.derivation.args.iter());
+    println!("{:?}", &cmd);
+
+    eprintln!("\x01");
+
+    bail!(cmd.exec())
   }
 
   fn init_env(&self, host_tmpdir: &Path, sandbox_tmpdir: &Path) -> Result<HashMap<String, String>> {
@@ -495,9 +726,7 @@ fn tmp_build_dir(
     let tmpdir = tempname(root, prefix, include_pid, counter)?;
     match fs::create_dir(&tmpdir) {
       Ok(()) => {
-        let mut perms = fs::metadata(&tmpdir)?.permissions();
-        perms.set_mode(mode.bits());
-        fs::set_permissions(&tmpdir, perms)?;
+        fs::set_permissions(&tmpdir, fs::Permissions::from_mode(mode.bits()))?;
         if cfg!(target_os = "freebsd") {
           unistd::chown(&tmpdir, None, Some(unistd::getegid()))?;
         }
@@ -543,4 +772,35 @@ fn tempname(
       counter.fetch_add(1, Ordering::Acquire)
     ))
   })
+}
+
+fn bind(source: impl AsRef<Path>, target: impl AsRef<Path>, optional: bool) -> Result<()> {
+  let source = source.as_ref();
+  let target = target.as_ref();
+  println!(
+    "bind mounting '{}' to '{}'",
+    source.display(),
+    target.display()
+  );
+  let meta = match fs::metadata(source) {
+    Ok(m) => m,
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound && optional => {
+      return Ok(());
+    }
+    Err(e) => bail!(e),
+  };
+  if meta.is_dir() {
+    fs::create_dir_all(target)?;
+  } else {
+    fs::create_dir_all(target.parent().unwrap())?;
+    fs::write(target, "")?;
+  }
+  mount::mount(
+    Some(source),
+    target,
+    Some(""),
+    mount::MsFlags::MS_BIND | mount::MsFlags::MS_REC,
+    None::<&str>,
+  )?;
+  Ok(())
 }
