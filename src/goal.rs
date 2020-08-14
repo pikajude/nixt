@@ -2,6 +2,7 @@ use crate::{prelude::*, sync::user_lock::UserLock};
 use linux_personality::Personality;
 use settings::SandboxMode;
 use std::{
+  any::Any,
   collections::{HashMap, HashSet},
   io::{BufRead, ErrorKind::AlreadyExists, Write},
   os::unix::{
@@ -10,7 +11,11 @@ use std::{
     prelude::RawFd,
     process::CommandExt,
   },
-  sync::atomic::{AtomicUsize, Ordering},
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+  },
+  time::Instant,
 };
 use unix::{
   fcntl::OFlag,
@@ -36,28 +41,94 @@ pub enum ExitCode {
   IncompleteClosure,
 }
 
-pub trait Goal {
-  fn status(&self) -> ExitCode;
-  fn key(&self) -> String;
+pub struct Worker {
+  pub store: Arc<dyn Store>,
+  pub goals: Vec<Goal>,
+}
+
+impl Worker {
+  pub fn new(store: Arc<dyn Store>) -> Self {
+    Self {
+      store,
+      goals: vec![],
+    }
+  }
+
+  pub fn run(self) -> Result<()> {
+    let mut fds = vec![];
+    for goal in self.goals {
+      let next_store = Arc::clone(&self.store);
+      match goal {
+        Goal::Derivation(d) => {
+          let handle = std::thread::spawn::<_, Result<()>>(move || {
+            let child = d.local_build(next_store.as_ref())?;
+            debug!("starting child: {:?}", child.start_time);
+            for line in child.output {
+              let line = line?;
+              if line.starts_with('\x01') {
+                bail!("{}", &line[1..]);
+              } else {
+                info!("{}", line);
+              }
+            }
+            Ok(())
+          });
+          fds.push(handle);
+        }
+      }
+    }
+
+    for result in fds {
+      match result.join() {
+        Err(e) => bail!("child failure: {:?}", e.type_id()),
+        Ok(Err(e)) => return Err(e),
+        _ => {}
+      }
+    }
+
+    Ok(())
+  }
+}
+
+pub enum Goal {
+  Derivation(DerivationGoal),
+}
+
+type ChildOutput = io::Lines<io::BufReader<fs::File>>;
+
+#[derive(Debug)]
+pub struct Child {
+  output: ChildOutput,
+  pid: unistd::Pid,
+  start_time: Instant,
+}
+
+impl Child {
+  pub fn new(output: io::Lines<io::BufReader<fs::File>>, pid: unistd::Pid) -> Self {
+    Self {
+      output,
+      pid,
+      start_time: Instant::now(),
+    }
+  }
 }
 
 #[derive(Debug)]
 struct ChrootDir {
   path: PathBuf,
-  is_optional: bool,
+  optional: bool,
 }
 
-pub struct DerivationGoal<'a> {
+pub struct DerivationGoal {
   pub derivation: Derivation,
-  pub store: &'a dyn Store,
   pub drv_path: StorePath,
 }
 
-impl<'a> DerivationGoal<'a> {
-  const SANDBOX_GID: u32 = 100;
-  const SANDBOX_UID: u32 = 1000;
+const SANDBOX_GID: u32 = 100;
+const SANDBOX_UID: u32 = 1000;
 
-  pub fn local_build(&self) -> Result<()> {
+impl DerivationGoal {
+  pub fn local_build(&self, store: &dyn Store) -> Result<Child> {
     #[cfg(unix)]
     let mut build_user: Option<UserLock> = None;
 
@@ -80,7 +151,7 @@ impl<'a> DerivationGoal<'a> {
          {{{}}}",
         self.derivation.platform,
         self.derivation.required_system_features().iter().join(", "),
-        self.store.print_store_path(&self.drv_path),
+        store.print_store_path(&self.drv_path),
         settings().this_system,
         settings().system_features.iter().join(", ")
       )
@@ -98,14 +169,14 @@ impl<'a> DerivationGoal<'a> {
         if no_chroot {
           bail!(
             "derivation '{}' has `__noChroot' set, but that's not allowed when sandbox = true.",
-            self.store.print_store_path(&self.drv_path)
+            store.print_store_path(&self.drv_path)
           );
         }
         if cfg!(target_os = "macos") && sandbox_profile.is_some() {
           bail!(
             "derivation '{}' specifies a sandbox profile, but that's only allowed when sandbox = \
              relaxed.",
-            self.store.print_store_path(&self.drv_path)
+            store.print_store_path(&self.drv_path)
           );
         }
         true
@@ -127,7 +198,7 @@ impl<'a> DerivationGoal<'a> {
     for (key, output) in &self.derivation.outputs {
       input_rewrites.insert(
         crate::derivation::hash_placeholder(key),
-        self.store.print_store_path(&output.path),
+        store.print_store_path(&output.path),
       );
     }
 
@@ -140,7 +211,7 @@ impl<'a> DerivationGoal<'a> {
     #[cfg(not(target_os = "linux"))]
     let sandbox_tmpdir = &host_tmpdir;
 
-    let _env = self.init_env(&host_tmpdir, sandbox_tmpdir)?;
+    let _env = self.init_env(store, &host_tmpdir, sandbox_tmpdir)?;
 
     let mut chroot_root: PathBuf = PathBuf::from("/no-such-path");
     let mut dirs_in_chroot = HashMap::<String, ChrootDir>::new();
@@ -160,7 +231,7 @@ impl<'a> DerivationGoal<'a> {
             k.into(),
             ChrootDir {
               path: v.into(),
-              is_optional,
+              optional: is_optional,
             },
           );
         } else {
@@ -168,7 +239,7 @@ impl<'a> DerivationGoal<'a> {
             chroot_dir.into(),
             ChrootDir {
               path: chroot_dir.into(),
-              is_optional,
+              optional: is_optional,
             },
           );
         }
@@ -178,26 +249,24 @@ impl<'a> DerivationGoal<'a> {
         sandbox_tmpdir.display().to_string(),
         ChrootDir {
           path: host_tmpdir.clone(),
-          is_optional: false,
+          optional: false,
         },
       );
 
       let mut closure = Default::default();
       for dir in dirs_in_chroot.values() {
-        if self.store.is_in_store(&dir.path) {
-          self
-            .store
-            .compute_closure(&self.store.parse_store_path(&dir.path)?, &mut closure)?;
+        if store.is_in_store(&dir.path) {
+          store.compute_closure(&store.parse_store_path(&dir.path)?, &mut closure)?;
         }
       }
 
       for item in closure {
-        let p = self.store.print_store_path(&item);
+        let p = store.print_store_path(&item);
         dirs_in_chroot.insert(
           p.clone(),
           ChrootDir {
             path: p.into(),
-            is_optional: false,
+            optional: false,
           },
         );
       }
@@ -227,17 +296,14 @@ impl<'a> DerivationGoal<'a> {
           path.into(),
           ChrootDir {
             path: path.into(),
-            is_optional: false,
+            optional: false,
           },
         );
       }
 
       #[cfg(target_os = "linux")]
       {
-        chroot_root = self
-          .store
-          .to_real_path(&self.drv_path)?
-          .with_extension("chroot");
+        chroot_root = store.to_real_path(&self.drv_path)?.with_extension("chroot");
         let _ = fs::remove_dir(&chroot_root);
 
         debug!(
@@ -268,18 +334,15 @@ impl<'a> DerivationGoal<'a> {
           format!(
             "root:x:0:0:Nix build user:{2}:/noshell\nnixbld:x:{0}:{1}:Nix build \
              user:{2}:/noshell\nnobody:x:65534:65534:Nobody:/:/noshell\n",
-            Self::SANDBOX_UID,
-            Self::SANDBOX_GID,
+            SANDBOX_UID,
+            SANDBOX_GID,
             settings().sandbox_build_dir.display()
           ),
         )?;
 
         fs::write(
           chroot_root.join("etc").join("group"),
-          format!(
-            "root:x:0:\nnixbld:!:{}:\nnogroup:x:65534:\n",
-            Self::SANDBOX_GID
-          ),
+          format!("root:x:0:\nnixbld:!:{}:\nnogroup:x:65534:\n", SANDBOX_GID),
         )?;
 
         fs::write(
@@ -288,7 +351,7 @@ impl<'a> DerivationGoal<'a> {
         )?;
 
         let chroot_store_dir = chroot_root.join(
-          AsRef::<Path>::as_ref(&self.store.store_path())
+          AsRef::<Path>::as_ref(&store.store_path())
             .strip_prefix("/")
             .expect("nix store path should be absolute"),
         );
@@ -306,7 +369,7 @@ impl<'a> DerivationGoal<'a> {
         }
 
         for output in self.derivation.outputs.values() {
-          dirs_in_chroot.remove(&self.store.print_store_path(&output.path));
+          dirs_in_chroot.remove(&store.print_store_path(&output.path));
         }
       }
 
@@ -349,11 +412,8 @@ impl<'a> DerivationGoal<'a> {
               std::io::BufReader::new(unsafe { fs::File::from_raw_fd(read_side.as_raw_fd()) })
                 .lines();
 
-            // the fd backing this PTY will be dropped when the File is closed
-            std::mem::forget(read_side);
-
             let child_pid = if let Some(line) = reader.next() {
-              line?.parse::<libc::pid_t>()?
+              unistd::Pid::from_raw(line?.parse::<libc::pid_t>()?)
             } else {
               bail!("no output from child")
             };
@@ -363,14 +423,14 @@ impl<'a> DerivationGoal<'a> {
 
             fs::write(
               format!("/proc/{}/uid_map", child_pid),
-              format!("{} {} 1", Self::SANDBOX_UID, host_uid),
+              format!("{} {} 1", SANDBOX_UID, host_uid),
             )?;
 
             fs::write(format!("/proc/{}/setgroups", child_pid), "deny")?;
 
             fs::write(
               format!("/proc/{}/gid_map", child_pid),
-              format!("{} {} 1", Self::SANDBOX_GID, host_gid),
+              format!("{} {} 1", SANDBOX_GID, host_gid),
             )?;
 
             fs::OpenOptions::new()
@@ -393,14 +453,10 @@ impl<'a> DerivationGoal<'a> {
               }
             }
 
-            for builder_line in reader {
-              let builder_line = builder_line?;
-              if builder_line.starts_with('\x01') {
-                bail!("{}", &builder_line[1..]);
-              } else {
-                info!("{}", builder_line);
-              }
-            }
+            // fd will be closed by BufReader drop
+            std::mem::forget(read_side);
+
+            return Ok(Child::new(reader, child_pid));
           }
           x => bail!("unexpected wait status from child: {:?}", x),
         },
@@ -433,14 +489,16 @@ impl<'a> DerivationGoal<'a> {
           let stack = unsafe { std::slice::from_raw_parts_mut(stack, stack_size) };
           let child = sched::clone(
             Box::new(move || {
-              match self.run_child(
+              match (DerivationWorker {
                 use_chroot,
-                chroot_root.clone(),
-                sandbox_tmpdir.to_path_buf(),
-                &dirs_in_chroot,
-                build_user.as_ref(),
+                chroot_root: chroot_root.clone(),
+                sandbox_tmpdir: sandbox_tmpdir.to_path_buf(),
+                dirs_in_chroot: &dirs_in_chroot,
+                build_user: build_user.as_ref(),
                 write_side,
-              ) {
+              }
+              .run(store, &self.derivation))
+              {
                 Ok(()) => 0,
                 Err(e) => {
                   println!("{:?}", e);
@@ -465,18 +523,78 @@ impl<'a> DerivationGoal<'a> {
       }
     }
 
-    Ok(())
+    bail!("not implemented: building outside chroot")
   }
 
-  fn run_child(
+  fn init_env(
     &self,
-    use_chroot: bool,
-    chroot_root: PathBuf,
-    sandbox_tmpdir: PathBuf,
-    dirs_in_chroot: &HashMap<String, ChrootDir>,
-    build_user: Option<&UserLock>,
-    write_side: RawFd,
-  ) -> Result<()> {
+    store: &dyn Store,
+    host_tmpdir: &Path,
+    sandbox_tmpdir: &Path,
+  ) -> Result<HashMap<String, String>> {
+    let mut env = HashMap::<String, String>::new();
+
+    env.insert(String::from("PATH"), String::from("/path-not-set"));
+    env.insert(String::from("HOME"), String::from("/homeless-shelter"));
+    env.insert(
+      String::from("NIX_STORE"),
+      store.store_path().to_string_lossy().to_string(),
+    );
+    env.insert(
+      String::from("NIX_BUILD_CORES"),
+      format!("{}", settings().build_cores),
+    );
+    env.insert(String::from("NIX_LOG_FD"), String::from("2"));
+    env.insert(String::from("TERM"), String::from("xterm-256color"));
+
+    let pass_as_file: HashSet<_> = self
+      .derivation
+      .env
+      .get("passAsfile")
+      .map_or(Default::default(), |x| x.split_ascii_whitespace().collect());
+
+    for (k, v) in &self.derivation.env {
+      if pass_as_file.contains(k.as_str()) {
+        let attr_hash = Hash::hash_str(k, HashType::SHA256);
+        let filename = format!(".attr-{}", attr_hash.encode(Encoding::Base32));
+        let filepath = host_tmpdir.join(&filename);
+        std::fs::write(&filepath, v.as_bytes())?;
+        env.insert(
+          format!("{}Path", k),
+          sandbox_tmpdir.join(filename).to_string_lossy().to_string(),
+        );
+      } else {
+        env.insert(k.to_string(), v.to_string());
+      }
+    }
+
+    for alias in &["NIX_BUILD_TOP", "TMPDIR", "TEMPDIR", "TMP", "TEMP", "PWD"] {
+      env.insert(String::from(*alias), sandbox_tmpdir.display().to_string());
+    }
+
+    Ok(env)
+  }
+}
+
+struct DerivationWorker<'a> {
+  use_chroot: bool,
+  chroot_root: PathBuf,
+  sandbox_tmpdir: PathBuf,
+  dirs_in_chroot: &'a HashMap<String, ChrootDir>,
+  build_user: Option<&'a UserLock>,
+  write_side: RawFd,
+}
+
+impl<'a> DerivationWorker<'a> {
+  fn run(self, store: &dyn Store, derivation: &Derivation) -> Result<()> {
+    let DerivationWorker {
+      use_chroot,
+      chroot_root,
+      sandbox_tmpdir,
+      dirs_in_chroot,
+      build_user,
+      write_side,
+    } = self;
     unistd::setsid()?;
     unistd::dup2(write_side, std::io::stderr().as_raw_fd())?;
     unistd::dup2(std::io::stderr().as_raw_fd(), std::io::stdout().as_raw_fd())?;
@@ -526,7 +644,7 @@ impl<'a> DerivationGoal<'a> {
       )?;
 
       let chroot_store = chroot_root.join(
-        AsRef::<Path>::as_ref(&self.store.store_path())
+        AsRef::<Path>::as_ref(&store.store_path())
           .strip_prefix("/")
           .expect("nix store path should be absolute"),
       );
@@ -554,7 +672,7 @@ impl<'a> DerivationGoal<'a> {
         bind(
           source,
           chroot_root.join(Path::new(&target).strip_prefix("/").unwrap()),
-          dir.is_optional,
+          dir.optional,
         )?;
       }
 
@@ -609,23 +727,23 @@ impl<'a> DerivationGoal<'a> {
       unistd::chroot(".")?;
       mount::umount2("real-root", mount::MntFlags::MNT_DETACH)?;
       fs::remove_dir("real-root")?;
-      unistd::setgid(unistd::Gid::from_raw(Self::SANDBOX_GID))?;
-      unistd::setuid(unistd::Uid::from_raw(Self::SANDBOX_UID))?;
+      unistd::setgid(unistd::Gid::from_raw(SANDBOX_GID))?;
+      unistd::setuid(unistd::Uid::from_raw(SANDBOX_UID))?;
     }
 
     unistd::chdir(&sandbox_tmpdir)
       .with_context(|| format!("trying to move into tmpdir `{}'", sandbox_tmpdir.display()))?;
 
     let uname = unix::sys::utsname::uname();
-    if self.derivation.platform == "i686-linux"
+    if derivation.platform == "i686-linux"
       && (settings().this_system == "x86_64-linux"
         || (uname.sysname() == "Linux" && uname.machine() == "x86_64"))
     {
       personality(linux_personality::PER_LINUX32)?;
     }
 
-    if self.derivation.platform == "i686-linux"
-      || self.derivation.platform == "x86_64-linux" && settings().impersonate_linux_26
+    if derivation.platform == "i686-linux"
+      || derivation.platform == "x86_64-linux" && settings().impersonate_linux_26
     {
       personality(get_personality()? | linux_personality::UNAME26)?;
     }
@@ -640,65 +758,20 @@ impl<'a> DerivationGoal<'a> {
       unistd::setuid(u.uid)?;
     }
 
-    let mut cmd = std::process::Command::new(self.derivation.builder.as_os_str());
+    let mut cmd = std::process::Command::new(derivation.builder.as_os_str());
 
     cmd.arg0(
-      self
-        .derivation
+      derivation
         .builder
         .file_name()
         .expect("builder should always have a filename"),
     );
-    cmd.args(self.derivation.args.iter());
+    cmd.args(derivation.args.iter());
     println!("{:?}", &cmd);
 
     eprintln!("\x01");
 
     bail!(cmd.exec())
-  }
-
-  fn init_env(&self, host_tmpdir: &Path, sandbox_tmpdir: &Path) -> Result<HashMap<String, String>> {
-    let mut env = HashMap::<String, String>::new();
-
-    env.insert(String::from("PATH"), String::from("/path-not-set"));
-    env.insert(String::from("HOME"), String::from("/homeless-shelter"));
-    env.insert(
-      String::from("NIX_STORE"),
-      self.store.store_path().to_string_lossy().to_string(),
-    );
-    env.insert(
-      String::from("NIX_BUILD_CORES"),
-      format!("{}", settings().build_cores),
-    );
-    env.insert(String::from("NIX_LOG_FD"), String::from("2"));
-    env.insert(String::from("TERM"), String::from("xterm-256color"));
-
-    let pass_as_file: HashSet<_> = self
-      .derivation
-      .env
-      .get("passAsfile")
-      .map_or(Default::default(), |x| x.split_ascii_whitespace().collect());
-
-    for (k, v) in &self.derivation.env {
-      if pass_as_file.contains(k.as_str()) {
-        let attr_hash = Hash::hash_str(k, HashType::SHA256);
-        let filename = format!(".attr-{}", attr_hash.encode(Encoding::Base32));
-        let filepath = host_tmpdir.join(&filename);
-        std::fs::write(&filepath, v.as_bytes())?;
-        env.insert(
-          format!("{}Path", k),
-          sandbox_tmpdir.join(filename).to_string_lossy().to_string(),
-        );
-      } else {
-        env.insert(k.to_string(), v.to_string());
-      }
-    }
-
-    for alias in &["NIX_BUILD_TOP", "TMPDIR", "TEMPDIR", "TMP", "TEMP", "PWD"] {
-      env.insert(String::from(*alias), sandbox_tmpdir.display().to_string());
-    }
-
-    Ok(env)
   }
 }
 

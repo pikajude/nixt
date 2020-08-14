@@ -1,8 +1,9 @@
-use crate::{archive::PathFilter, goal::DerivationGoal, prelude::*};
+use crate::{archive::PathFilter, prelude::*};
 use std::{
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
   fmt::Display,
+  sync::Arc,
 };
 
 mod local;
@@ -272,7 +273,7 @@ pub trait Store: Send + Sync {
     repair: RepairFlag,
   ) -> Result<StorePath>;
 
-  fn build_paths(&self, _paths: Vec<StorePathWithOutputs>) -> Result<()> {
+  fn build_paths(self: Arc<Self>, _paths: Vec<StorePathWithOutputs>) -> Result<()> {
     bail!(
       "store backend {} does not support building paths",
       self.store_path().to_string_lossy()
@@ -283,13 +284,4 @@ pub trait Store: Send + Sync {
     warn!("compute_closure() not implemented");
     Ok(())
   }
-
-  fn goal_for(&self, path: &Path) -> Result<DerivationGoal>;
-  /* {
-    Ok(DerivationGoal {
-      derivation: self.parse_derivation(path, "some-derivation")?,
-      store: self,
-      drv_path: self.parse_store_path(path)?,
-    })
-  } */
 }

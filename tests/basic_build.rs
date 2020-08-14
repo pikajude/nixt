@@ -1,4 +1,4 @@
-use rnix::{eval::Eval, util::*};
+use rnix::{eval::Eval, path::PathWithOutputs, util::*};
 use std::path::Path;
 
 #[test]
@@ -9,10 +9,15 @@ fn test_basic_build() -> Result<()> {
 
   let store = Eval::new().unwrap().store;
 
-  store
-    .goal_for(Path::new(concat!(
+  let paths = vec![PathWithOutputs {
+    path: store.parse_store_path(Path::new(concat!(
       env!("OUT_DIR"),
       "/nix/store/ygmgkr3zwl2crvk7injy4njjfwc32cq6-hello-2.10.drv"
-    )))?
-    .local_build()
+    )))?,
+    outputs: std::iter::once("out".to_string()).collect(),
+  }];
+
+  store.build_paths(paths)?;
+
+  Ok(())
 }

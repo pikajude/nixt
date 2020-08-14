@@ -5,4 +5,5 @@ mkShell {
     (import ../../nix/nix).packages.${builtins.currentSystem}.nix
   ];
   RUST_LIB_BACKTRACE = true;
+  RUST_LOG = "rnix=debug";
 }

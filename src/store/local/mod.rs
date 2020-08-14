@@ -1,5 +1,11 @@
 use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
-use crate::{archive, goal::DerivationGoal, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
+use crate::{
+  archive,
+  goal::{DerivationGoal, Goal, Worker},
+  prelude::*,
+  sqlite::Sqlite,
+  sync::fs_lock::*,
+};
 use archive::PathFilter;
 use fs::File;
 use std::{
@@ -12,7 +18,7 @@ use std::{
   os::unix::{fs::*, io::AsRawFd},
   path::{Path, PathBuf},
   rc::Rc,
-  sync::Mutex,
+  sync::{Arc, Mutex},
 };
 use tee_readwrite::TeeWriter;
 use unix::{
@@ -204,19 +210,24 @@ impl Store for LocalStore {
     Ok(dest_path)
   }
 
-  fn build_paths(&self, paths: Vec<StorePathWithOutputs>) -> Result<()> {
+  fn build_paths(self: Arc<Self>, paths: Vec<StorePathWithOutputs>) -> Result<()> {
+    let other_self = Arc::clone(&self);
+    let mut worker = Worker::new(other_self);
     for path in paths {
-      if path.path.is_derivation() {}
+      if path.path.is_derivation() {
+        worker.goals.push(Goal::Derivation(DerivationGoal {
+          derivation: self.parse_derivation(
+            &self.to_real_path(&path.path)?,
+            path.path.name.to_string().as_str(),
+          )?,
+          drv_path: path.path,
+        }));
+      } else {
+        bail!("not yet able to run substituters");
+      }
     }
-    Ok(())
-  }
 
-  fn goal_for(&self, path: &Path) -> Result<DerivationGoal> {
-    Ok(DerivationGoal {
-      derivation: self.parse_derivation(path, "some-derivation")?,
-      store: self,
-      drv_path: self.parse_store_path(path)?,
-    })
+    worker.run()
   }
 }
 
