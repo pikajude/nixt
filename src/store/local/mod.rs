@@ -229,6 +229,14 @@ impl Store for LocalStore {
 
     worker.run()
   }
+
+  fn compute_closure(
+    &self,
+    _path: &StorePath,
+    _closure: &mut std::collections::BTreeSet<StorePath>,
+  ) -> Result<()> {
+    todo!()
+  }
 }
 
 impl LocalStore {

@@ -11,13 +11,8 @@ pub struct UserLock {
 }
 
 impl UserLock {
-  pub fn get_free_user() -> Result<Self> {
-    let groupname = settings()
-      .build_users_group
-      .as_deref()
-      .expect("error: calling UserLock() but build-users-group is not set!");
-
-    let group = users::get_group_by_name(&groupname)
+  pub fn get_free_user(groupname: &str) -> Result<Self> {
+    let group = users::get_group_by_name(groupname)
       .ok_or_else(|| anyhow!("the build users group '{}' does not exist", groupname))?;
 
     let gid = Gid::from_raw(group.gid());

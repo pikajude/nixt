@@ -280,8 +280,5 @@ pub trait Store: Send + Sync {
     )
   }
 
-  fn compute_closure(&self, _path: &StorePath, _closure: &mut BTreeSet<StorePath>) -> Result<()> {
-    warn!("compute_closure() not implemented");
-    Ok(())
-  }
+  fn compute_closure(&self, _path: &StorePath, _closure: &mut BTreeSet<StorePath>) -> Result<()>;
 }

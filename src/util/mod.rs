@@ -2,8 +2,10 @@ pub mod base32;
 pub use anyhow::{Context as _, *};
 use std::{
   io::{self, Read, Write},
+  path::PathBuf,
   str::pattern::{Pattern, Searcher},
 };
+use unix::NixPath;
 
 pub fn break_str<'a, P: Pattern<'a>>(s: &'a str, pattern: P) -> Option<(&'a str, &'a str)> {
   let mut search = pattern.into_searcher(s);
@@ -101,4 +103,43 @@ fn test_sink() -> io::Result<()> {
   std::io::copy(&mut ss, &mut output)?;
   assert_eq!(&output[..], b"hello world!");
   Ok(())
+}
+
+#[derive(Debug, AsRef, Deref, DerefMut, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[as_ref(forward)]
+pub struct AutoDelete(pub PathBuf);
+
+/*
+impl Drop for AutoDelete {
+  fn drop(&mut self) {
+    let status: Result<()> = try {
+      let meta = std::fs::metadata(&self.0)?;
+      if meta.is_dir() {
+        std::fs::remove_dir_all(&self.0)?;
+      } else {
+        std::fs::remove_file(&self.0)?;
+      }
+    };
+    if let Err(e) = status {
+      debug!("failed to auto-cleanup path '{}': {}", self.0.display(), e)
+    }
+  }
+}
+*/
+
+impl NixPath for AutoDelete {
+  fn is_empty(&self) -> bool {
+    self.0.is_empty()
+  }
+
+  fn len(&self) -> usize {
+    self.0.len()
+  }
+
+  fn with_nix_path<T, F>(&self, f: F) -> unix::Result<T>
+  where
+    F: FnOnce(&std::ffi::CStr) -> T,
+  {
+    self.0.with_nix_path(f)
+  }
 }

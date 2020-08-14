@@ -3,6 +3,7 @@
 #![feature(duration_zero)]
 #![feature(fn_traits)]
 #![feature(pattern)]
+#![feature(try_blocks)]
 #![feature(unboxed_closures)]
 #![feature(untagged_unions)]
 

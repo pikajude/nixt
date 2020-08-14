@@ -60,7 +60,7 @@ impl Worker {
       let next_store = Arc::clone(&self.store);
       match goal {
         Goal::Derivation(d) => {
-          let handle = std::thread::spawn::<_, Result<()>>(move || {
+          let handle = std::thread::spawn(move || {
             let child = d.local_build(next_store.as_ref())?;
             debug!("starting child: {:?}", child.start_time);
             for line in child.output {
@@ -78,15 +78,10 @@ impl Worker {
       }
     }
 
-    for result in fds {
-      match result.join() {
-        Err(e) => bail!("child failure: {:?}", e.type_id()),
-        Ok(Err(e)) => return Err(e),
-        _ => {}
-      }
-    }
-
-    Ok(())
+    fds.into_iter().try_for_each(|x| match x.join() {
+      Err(e) => bail!("unspecified child failure: {:?}", e.type_id()),
+      Ok(x) => x,
+    })
   }
 }
 
@@ -133,9 +128,9 @@ impl DerivationGoal {
     let mut build_user: Option<UserLock> = None;
 
     if unistd::getuid().is_root() {
-      if let Some(_group) = &settings().build_users_group {
+      if let Some(group) = &settings().build_users_group {
         if cfg!(unix) {
-          let u = UserLock::get_free_user()?;
+          let u = UserLock::get_free_user(group)?;
           u.kill()?;
           build_user = Some(u);
         } else {
@@ -213,7 +208,7 @@ impl DerivationGoal {
 
     let _env = self.init_env(store, &host_tmpdir, sandbox_tmpdir)?;
 
-    let mut chroot_root: PathBuf = PathBuf::from("/no-such-path");
+    let mut chroot_root = PathBuf::from("/no-such-path");
     let mut dirs_in_chroot = HashMap::<String, ChrootDir>::new();
 
     if use_chroot {
@@ -304,13 +299,17 @@ impl DerivationGoal {
       #[cfg(target_os = "linux")]
       {
         chroot_root = store.to_real_path(&self.drv_path)?.with_extension("chroot");
-        let _ = fs::remove_dir(&chroot_root);
 
         debug!(
           "setting up chroot environment in `{}'",
           chroot_root.display()
         );
 
+        if let Err(e) = fs::remove_dir_all(&chroot_root) {
+          if e.kind() != io::ErrorKind::NotFound {
+            bail!(e)
+          }
+        }
         fs::create_dir_all(&chroot_root)?;
         fs::set_permissions(&chroot_root, fs::Permissions::from_mode(0o750))?;
 
@@ -367,6 +366,33 @@ impl DerivationGoal {
             )
           })?;
         }
+
+        let mut input_paths = Default::default();
+
+        for (path, output_set) in &self.derivation.input_derivations {
+          ensure!(
+            store.is_valid_path(path)?,
+            "input derivation {} is not valid",
+            store.print_store_path(&path)
+          );
+
+          let drv =
+            store.parse_derivation(&store.to_real_path(path)?, path.name.to_string().as_str())?;
+
+          for output in output_set {
+            let path = drv
+              .outputs
+              .get(output)
+              .ok_or_else(|| anyhow!("derivation requires non-existent output name"))?;
+            store.compute_closure(&path.path, &mut input_paths)?;
+          }
+        }
+
+        for path in &self.derivation.input_sources {
+          store.compute_closure(path, &mut input_paths)?;
+        }
+
+        debug!("derivation requires input paths: {:?}", &input_paths);
 
         for output in self.derivation.outputs.values() {
           dirs_in_chroot.remove(&store.print_store_path(&output.path));
@@ -442,7 +468,6 @@ impl DerivationGoal {
               let builder_line = builder_line?;
               match builder_line.strip_prefix('\x01') {
                 Some(y) => {
-                  fs::remove_dir_all(&chroot_root)?;
                   if y.is_empty() {
                     break;
                   } else {
@@ -781,7 +806,7 @@ fn tmp_build_dir(
   include_pid: bool,
   use_global_counter: bool,
   mode: Mode,
-) -> Result<PathBuf> {
+) -> Result<AutoDelete> {
   lazy_static! {
     static ref GLOBAL_COUNTER: AtomicUsize = AtomicUsize::new(0);
   }
@@ -803,7 +828,7 @@ fn tmp_build_dir(
         if cfg!(target_os = "freebsd") {
           unistd::chown(&tmpdir, None, Some(unistd::getegid()))?;
         }
-        return Ok(tmpdir);
+        return Ok(AutoDelete(tmpdir));
       }
       Err(e) => {
         if e.kind() != AlreadyExists {
