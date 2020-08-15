@@ -1,0 +1,120 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in library 'rnix'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--lib",
+          "--package=rnix"
+        ],
+        "filter": {
+          "name": "rnix",
+          "kind": "lib"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'repl'",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=repl",
+          "--package=rnix"
+        ],
+        "filter": {
+          "name": "repl",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'repl'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--bin=repl",
+          "--package=rnix"
+        ],
+        "filter": {
+          "name": "repl",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'basic_eval'",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=basic_eval",
+          "--package=rnix"
+        ],
+        "filter": {
+          "name": "basic_eval",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'basic_eval'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--bin=basic_eval",
+          "--package=rnix"
+        ],
+        "filter": {
+          "name": "basic_eval",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug integration test 'basic_build'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--test=basic_build",
+          "--package=rnix"
+        ],
+        "filter": {
+          "name": "basic_build",
+          "kind": "test"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

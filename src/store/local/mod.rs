@@ -10,7 +10,7 @@ use archive::PathFilter;
 use fs::File;
 use std::{
   borrow::Cow,
-  collections::HashSet,
+  collections::{BTreeSet, HashSet},
   ffi::OsStr,
   fs,
   io::Write,
@@ -232,10 +232,13 @@ impl Store for LocalStore {
 
   fn compute_closure(
     &self,
-    _path: &StorePath,
-    _closure: &mut std::collections::BTreeSet<StorePath>,
+    path: &StorePath,
+    _closure: &mut BTreeSet<StorePath>,
+    _backwards: bool,
+    _include_outputs: bool,
+    _include_derivers: bool,
   ) -> Result<()> {
-    todo!()
+    todo!("{}", path)
   }
 }
 

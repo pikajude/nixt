@@ -115,7 +115,41 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   }
 
   for path in &context {
-    debug!("input source: {}", path);
+    if path.starts_with('=') {
+      let mut refs = Default::default();
+      eval.store.compute_closure(
+        &eval.store.parse_store_path(Path::new(&path[1..]))?,
+        &mut refs,
+        false,
+        false,
+        false,
+      )?;
+      for r in refs {
+        if r.is_derivation() {
+          drv.input_derivations.insert(
+            r.clone(),
+            eval
+              .store
+              .read_derivation(&r)?
+              .outputs
+              .into_iter()
+              .map(|x| x.0)
+              .collect(),
+          );
+        }
+        drv.input_sources.insert(r);
+      }
+    } else if path.starts_with('!') {
+      let (path, name) = decode_context(path);
+      drv.input_derivations.insert(
+        eval.store.parse_store_path(path)?,
+        std::iter::once(name.to_string()).collect(),
+      );
+    } else {
+      drv
+        .input_sources
+        .insert(eval.store.parse_store_path(&Path::new(path))?);
+    }
   }
 
   if let Some(h) = output_hash {

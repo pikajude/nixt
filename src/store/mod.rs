@@ -83,6 +83,13 @@ pub trait Store: Send + Sync {
     Derivation::parse(self, &fs::read_to_string(path)?, name)
   }
 
+  fn read_derivation(&self, path: &StorePath) -> Result<Derivation> {
+    self.parse_derivation(
+      &self.to_real_path(path)?,
+      &Derivation::name_from_path(path)?,
+    )
+  }
+
   fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
     Ok(self.print_store_path(path).into())
   }
@@ -209,13 +216,12 @@ pub trait Store: Send + Sync {
     let mut inputs2: BTreeMap<String, &BTreeSet<String>> = Default::default();
 
     for (k, v) in &derivation.input_derivations {
-      let mut hashes = super::derivation::DRV_HASHES.lock().unwrap();
-      if let Some(known) = hashes.get(k) {
+      if let Some(known) = super::derivation::DRV_HASHES.lookup(k) {
         inputs2.insert(known.encode(Encoding::Base16), v);
       } else {
-        let sub_hash = self.hash_derivation_modulo(derivation, false)?;
+        let sub_hash = self.hash_derivation_modulo(&self.read_derivation(k)?, false)?;
         inputs2.insert(sub_hash.encode(Encoding::Base16), v);
-        hashes.insert(k.clone(), sub_hash);
+        super::derivation::DRV_HASHES.add(k.clone(), sub_hash);
       }
     }
 
@@ -280,5 +286,12 @@ pub trait Store: Send + Sync {
     )
   }
 
-  fn compute_closure(&self, _path: &StorePath, _closure: &mut BTreeSet<StorePath>) -> Result<()>;
+  fn compute_closure(
+    &self,
+    path: &StorePath,
+    closure: &mut BTreeSet<StorePath>,
+    backwards: bool,
+    include_outputs: bool,
+    include_derivers: bool,
+  ) -> Result<()>;
 }

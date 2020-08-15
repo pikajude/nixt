@@ -1,22 +1,20 @@
 use crate::{prelude::*, sync::user_lock::UserLock};
 use linux_personality::Personality;
 use settings::SandboxMode;
-use std::{
-  any::Any,
-  collections::{HashMap, HashSet},
-  io::{BufRead, ErrorKind::AlreadyExists, Write},
-  os::unix::{
-    fs::{symlink, PermissionsExt},
-    io::{AsRawFd, FromRawFd},
-    prelude::RawFd,
-    process::CommandExt,
-  },
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-  },
-  time::Instant,
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, ErrorKind::AlreadyExists, Write};
+use std::os::unix::{
+  fs::{symlink, PermissionsExt},
+  io::{AsRawFd, FromRawFd},
+  prelude::RawFd,
+  process::CommandExt,
 };
+use std::sync::{
+  atomic::{AtomicUsize, Ordering},
+  Arc,
+};
+use std::time::Instant;
+
 use unix::{
   fcntl::OFlag,
   mount, pty, sched,
@@ -79,7 +77,13 @@ impl Worker {
     }
 
     fds.into_iter().try_for_each(|x| match x.join() {
-      Err(e) => bail!("unspecified child failure: {:?}", e.type_id()),
+      Err(e) => {
+        if let Some(msg) = e.downcast_ref::<String>() {
+          bail!("child failed: {}", msg)
+        } else {
+          bail!("child panicked with an unprintable message")
+        }
+      }
       Ok(x) => x,
     })
   }
@@ -251,12 +255,18 @@ impl DerivationGoal {
       let mut closure = Default::default();
       for dir in dirs_in_chroot.values() {
         if store.is_in_store(&dir.path) {
-          store.compute_closure(&store.parse_store_path(&dir.path)?, &mut closure)?;
+          store.compute_closure(
+            &store.parse_store_path(&dir.path)?,
+            &mut closure,
+            false,
+            false,
+            false,
+          )?;
         }
       }
 
-      for item in closure {
-        let p = store.print_store_path(&item);
+      for item in &closure {
+        let p = store.print_store_path(item);
         dirs_in_chroot.insert(
           p.clone(),
           ChrootDir {
@@ -367,8 +377,6 @@ impl DerivationGoal {
           })?;
         }
 
-        let mut input_paths = Default::default();
-
         for (path, output_set) in &self.derivation.input_derivations {
           ensure!(
             store.is_valid_path(path)?,
@@ -384,15 +392,15 @@ impl DerivationGoal {
               .outputs
               .get(output)
               .ok_or_else(|| anyhow!("derivation requires non-existent output name"))?;
-            store.compute_closure(&path.path, &mut input_paths)?;
+            store.compute_closure(&path.path, &mut closure, false, false, false)?;
           }
         }
 
         for path in &self.derivation.input_sources {
-          store.compute_closure(path, &mut input_paths)?;
+          store.compute_closure(path, &mut closure, false, false, false)?;
         }
 
-        debug!("derivation requires input paths: {:?}", &input_paths);
+        debug!("derivation requires input paths: {:?}", &closure);
 
         for output in self.derivation.outputs.values() {
           dirs_in_chroot.remove(&store.print_store_path(&output.path));

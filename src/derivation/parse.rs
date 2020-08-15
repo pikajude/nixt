@@ -27,7 +27,16 @@ fn parse_derivation(store: &(impl Store + ?Sized), input: &str, name: &str) -> R
       Output {
         path,
         hash: if !hash_algo.is_empty() && !hash.is_empty() {
-          todo!("fixed output derivation")
+          Some(match hash_algo.strip_prefix("r:") {
+            Some(algo) => FixedOutputHash {
+              hash: Hash::decode_with_type(&hash, algo.parse()?, false)?,
+              recursive: true,
+            },
+            None => FixedOutputHash {
+              hash: Hash::decode_with_type(&hash, hash_algo.parse()?, false)?,
+              recursive: false,
+            },
+          })
         } else {
           None
         },

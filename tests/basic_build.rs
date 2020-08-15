@@ -2,7 +2,6 @@ use rnix::{eval::Eval, path::PathWithOutputs, util::*};
 use std::path::Path;
 
 #[test]
-#[ntest::timeout(10000)]
 fn test_basic_build() -> Result<()> {
   std::env::set_var("NIX_TEST", "1");
   pretty_env_logger::init();

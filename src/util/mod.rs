@@ -2,7 +2,7 @@ pub mod base32;
 pub use anyhow::{Context as _, *};
 use std::{
   io::{self, Read, Write},
-  path::PathBuf,
+  path::{Path, PathBuf},
   str::pattern::{Pattern, Searcher},
 };
 use unix::NixPath;
@@ -141,5 +141,13 @@ impl NixPath for AutoDelete {
     F: FnOnce(&std::ffi::CStr) -> T,
   {
     self.0.with_nix_path(f)
+  }
+}
+
+pub fn decode_context(string: &str) -> (&Path, &str) {
+  if string.starts_with('!') {
+    break_str(&string[1..], '!').map_or((Path::new(&string[1..]), ""), |(a, b)| (Path::new(b), a))
+  } else {
+    (Path::new(string.strip_prefix('/').unwrap_or(string)), "")
   }
 }
