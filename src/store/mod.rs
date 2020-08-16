@@ -38,6 +38,7 @@ pub enum FileIngestionMethod {
   Recursive,
 }
 
+#[async_trait]
 pub trait Store: Send + Sync {
   fn store_path(&self) -> Cow<OsStr>;
 
@@ -79,15 +80,17 @@ pub trait Store: Send + Sync {
     })
   }
 
-  fn parse_derivation(&self, path: &Path, name: &str) -> Result<Derivation> {
-    Derivation::parse(self, &fs::read_to_string(path)?, name)
+  async fn parse_derivation(&self, path: &Path, name: &str) -> Result<Derivation> {
+    Derivation::parse(self, &async_std::fs::read_to_string(path).await?, name)
   }
 
-  fn read_derivation(&self, path: &StorePath) -> Result<Derivation> {
-    self.parse_derivation(
-      &self.to_real_path(path)?,
-      &Derivation::name_from_path(path)?,
-    )
+  async fn read_derivation(&self, path: &StorePath) -> Result<Derivation> {
+    self
+      .parse_derivation(
+        &self.to_real_path(path)?,
+        &Derivation::name_from_path(path)?,
+      )
+      .await
   }
 
   fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
@@ -198,7 +201,11 @@ pub trait Store: Send + Sync {
     )
   }
 
-  fn hash_derivation_modulo(&self, derivation: &Derivation, mask_outputs: bool) -> Result<Hash> {
+  async fn hash_derivation_modulo(
+    &self,
+    derivation: &Derivation,
+    mask_outputs: bool,
+  ) -> Result<Hash> {
     if derivation.is_fixed_output() {
       let out = &derivation.outputs["out"];
       let hash = out.hash.as_ref().unwrap();
@@ -216,12 +223,14 @@ pub trait Store: Send + Sync {
     let mut inputs2: BTreeMap<String, &BTreeSet<String>> = Default::default();
 
     for (k, v) in &derivation.input_derivations {
-      if let Some(known) = super::derivation::DRV_HASHES.lookup(k) {
+      if let Some(known) = super::derivation::DRV_HASHES.lookup(k).await {
         inputs2.insert(known.encode(Encoding::Base16), v);
       } else {
-        let sub_hash = self.hash_derivation_modulo(&self.read_derivation(k)?, false)?;
+        let sub_hash = self
+          .hash_derivation_modulo(&self.read_derivation(k).await?, false)
+          .await?;
         inputs2.insert(sub_hash.encode(Encoding::Base16), v);
-        super::derivation::DRV_HASHES.add(k.clone(), sub_hash);
+        super::derivation::DRV_HASHES.add(k.clone(), sub_hash).await;
       }
     }
 
@@ -269,7 +278,7 @@ pub trait Store: Send + Sync {
     check_signatures: CheckSigsFlag,
   ) -> Result<()>;
 
-  fn add_to_store_from_path(
+  async fn add_to_store_from_path(
     &self,
     name: &str,
     path: &Path,

@@ -68,7 +68,7 @@ pub fn download_file(
   })
 }
 
-pub fn download_tarball(
+pub async fn download_tarball(
   store: &dyn Store,
   url: &str,
   name: &str,
@@ -104,14 +104,16 @@ pub fn download_tarball(
     bail!("tarball `{}' contains more than 1 top-level file", url);
   }
 
-  let new_path = store.add_to_store_from_path(
-    name,
-    &first_item.path(),
-    FileIngestionMethod::Recursive,
-    HashType::SHA256,
-    &PathFilter::none(),
-    RepairFlag::NoRepair,
-  )?;
+  let new_path = store
+    .add_to_store_from_path(
+      name,
+      &first_item.path(),
+      FileIngestionMethod::Recursive,
+      HashType::SHA256,
+      &PathFilter::none(),
+      RepairFlag::NoRepair,
+    )
+    .await?;
 
   let info =
     serde_json::json!({ "lastModified": first_item.metadata()?.modified()?, "etag": file.etag });

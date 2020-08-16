@@ -44,6 +44,7 @@ pub struct LocalStore {
   db: Mutex<Sqlite>,
 }
 
+#[async_trait]
 impl Store for LocalStore {
   fn store_path(&self) -> Cow<OsStr> {
     Cow::Borrowed(settings().paths.nix_store.as_os_str())
@@ -153,7 +154,7 @@ impl Store for LocalStore {
     Ok(())
   }
 
-  fn add_to_store_from_path(
+  async fn add_to_store_from_path(
     &self,
     name: &str,
     path: &Path,
@@ -204,32 +205,8 @@ impl Store for LocalStore {
     Ok(dest_path)
   }
 
-  fn build_paths(self: Arc<Self>, paths: Vec<StorePathWithOutputs>) -> Result<()> {
-    loop {}
-    /*
-    let other_self = Arc::clone(&self);
-    let mut worker = Arc::new(Worker::new(other_self));
-    for path in paths {
-      if path.path.is_derivation() {
-        let weak = Arc::downgrade(&worker);
-        Arc::get_mut(&mut worker)
-          .unwrap()
-          .goals
-          .push(Goal::Derivation(DerivationGoal::new(
-            weak,
-            self.parse_derivation(
-              &self.to_real_path(&path.path)?,
-              path.path.name.to_string().as_str(),
-            )?,
-            path.path,
-          )));
-      } else {
-        bail!("not yet able to run substituters");
-      }
-    }
-
-    Arc::try_unwrap(worker).expect("no ref").run()
-    */
+  fn build_paths(self: Arc<Self>, _: Vec<StorePathWithOutputs>) -> Result<()> {
+    unimplemented!()
   }
 
   fn compute_closure(

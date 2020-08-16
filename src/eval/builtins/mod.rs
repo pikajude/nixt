@@ -1,7 +1,7 @@
 use super::AssertFailure;
 use crate::{
   eval::{context::StaticScope, primop::Primop, thunk::ThunkId, value::Value, Eval},
-  primop, primop2, primop3, primop_inline,
+  primop, primop2, primop3, primop_async, primop_inline,
   syntax::expr::Ident,
   util::*,
 };
@@ -64,7 +64,10 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
   );
   eval.toplevel.insert(
     "derivationStrict".into(),
-    eval.new_value(primop!("derivationStrict", derivation::derivation_strict)),
+    eval.new_value(primop_async!(
+      "derivationStrict",
+      derivation::derivation_strict,
+    )),
   );
   eval.toplevel.insert(
     "builtins".into(),

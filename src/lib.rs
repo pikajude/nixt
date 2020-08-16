@@ -8,10 +8,12 @@
 #![feature(unboxed_closures)]
 #![feature(untagged_unions)]
 
-#[macro_use] extern crate log;
+#[macro_use] extern crate async_recursion;
+#[macro_use] extern crate async_trait;
 #[macro_use] extern crate derive_more;
-#[macro_use] extern crate lazy_static;
 #[macro_use] extern crate gen_settings;
+#[macro_use] extern crate lazy_static;
+#[macro_use] extern crate log;
 
 pub mod archive;
 pub mod arena;

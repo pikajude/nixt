@@ -6,7 +6,7 @@ use unix::sys::stat::Mode;
 
 mod sink;
 
-pub struct PathFilter(Option<Box<dyn Fn(&Path) -> bool>>);
+pub struct PathFilter(Option<Box<dyn Fn(&Path) -> bool + Sync>>);
 
 impl PathFilter {
   pub fn none() -> Self {

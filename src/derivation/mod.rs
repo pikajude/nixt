@@ -1,8 +1,8 @@
 use crate::prelude::*;
+use async_std::sync::Mutex;
 use std::{
   collections::{BTreeMap, BTreeSet, HashMap},
   fmt::{Display, Write},
-  sync::Mutex,
 };
 
 mod parse;
@@ -13,12 +13,12 @@ lazy_static! {
 }
 
 impl DRV_HASHES {
-  pub fn lookup(&self, path: &StorePath) -> Option<Hash> {
-    self.lock().unwrap().get(path).cloned()
+  pub async fn lookup(&self, path: &StorePath) -> Option<Hash> {
+    self.lock().await.get(path).cloned()
   }
 
-  pub fn add(&self, path: StorePath, hash: Hash) -> Option<Hash> {
-    self.lock().unwrap().insert(path, hash)
+  pub async fn add(&self, path: StorePath, hash: Hash) -> Option<Hash> {
+    self.lock().await.insert(path, hash)
   }
 }
 

@@ -14,7 +14,7 @@ use crate::{
 };
 use std::{collections::BTreeSet, path::Path};
 
-pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
+pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(args)?;
 
   let mut context = PathSet::new();
@@ -130,7 +130,8 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
             r.clone(),
             eval
               .store
-              .read_derivation(&r)?
+              .read_derivation(&r)
+              .await?
               .outputs
               .into_iter()
               .map(|x| x.0)
@@ -199,7 +200,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       );
     }
 
-    let drv_hash = eval.store.hash_derivation_modulo(&drv, true)?;
+    let drv_hash = eval.store.hash_derivation_modulo(&drv, true).await?;
 
     for out in &outputs_set {
       let output_path = eval.store.make_fixed_output_path(

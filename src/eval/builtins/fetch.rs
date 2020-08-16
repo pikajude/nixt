@@ -58,7 +58,12 @@ fn fetch(eval: &Eval, args: ThunkId, who: &'static str, unpack: bool, name: &str
   let url = pretend_resolve(url);
 
   let out_path = if unpack {
-    let output = crate::fetch::download_tarball(eval.store.as_ref(), &url, name, hash.is_some())?;
+    let output = async_std::task::block_on(crate::fetch::download_tarball(
+      eval.store.as_ref(),
+      &url,
+      name,
+      hash.is_some(),
+    ))?;
     eval.store.print_store_path(&output)
   } else {
     let output = crate::fetch::download_file(eval.store.as_ref(), &url, name, hash.is_some())?;

@@ -55,6 +55,9 @@ pub struct Eval {
   pub store: Arc<dyn Store>,
 }
 
+unsafe impl Send for Eval {}
+unsafe impl Sync for Eval {}
+
 impl Eval {
   pub fn new() -> Result<Self> {
     Self::with_config(Config {
@@ -252,7 +255,7 @@ impl Eval {
       ThunkCell::Expr(e, c) => self.step_eval(e, c),
       ThunkCell::Apply(loc, lhs, rhs) => {
         self.trace.borrow_mut().push_front(loc);
-        let res = self.step_fn(lhs, rhs)?;
+        let res = async_std::task::block_on(self.step_fn(lhs, rhs))?;
         self.trace.borrow_mut().pop_front();
         Ok(res)
       }
@@ -451,7 +454,8 @@ impl Eval {
     }
   }
 
-  fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  #[async_recursion]
+  async fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
     match self.value_of(lhs)? {
       Value::Lambda { lambda, captures } => {
         trace!(target: "eval::fn", "lambda");
@@ -469,12 +473,18 @@ impl Eval {
         trace!(target: "eval::fn", "primop");
         f(self, rhs)
       }
+      Value::Primop(Primop {
+        op: Op::Async(f), ..
+      }) => {
+        trace!(target: "eval::fn", "primop");
+        async_std::task::block_on(f(self, rhs))
+      }
       Value::AttrSet(a) => {
         if let Some(ftor) = a.get(&Ident::from("__functor")) {
           trace!(target: "eval::fn", "__functor {:?}", *ftor);
-          let inter_1 = self.step_fn(*ftor, lhs)?;
+          let inter_1 = self.step_fn(*ftor, lhs).await?;
           let inter_id = self.new_value(inter_1);
-          self.step_fn(inter_id, rhs)
+          self.step_fn(inter_id, rhs).await
         } else {
           bail!("an attrset cannot be called unless it has a `__functor' attribute")
         }

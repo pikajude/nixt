@@ -4,7 +4,7 @@ use crate::{
     value::Value,
     Eval,
   },
-  prelude::FileSpan,
+  prelude::{block_on, FileSpan},
   util::*,
 };
 
@@ -76,7 +76,7 @@ pub fn filter(eval: &Eval, filter: ThunkId, list: ThunkId) -> Result<Value> {
   let items = eval.value_list_of(list)?;
   let mut out = vec![];
   for item in items {
-    match eval.step_fn(filter, *item)? {
+    match block_on(eval.step_fn(filter, *item))? {
       Value::Bool(b) => {
         if b {
           out.push(*item);
@@ -112,9 +112,9 @@ pub fn foldl_strict(eval: &Eval, oper: ThunkId, seed: ThunkId, list: ThunkId) ->
   } else {
     let mut cur_item = seed;
     for (i, thunk) in items.iter().enumerate() {
-      let acc_fn = eval.step_fn(oper, cur_item)?;
+      let acc_fn = block_on(eval.step_fn(oper, cur_item))?;
       let acc_thunk = eval.new_value(acc_fn);
-      let next_item = eval.step_fn(acc_thunk, *thunk)?;
+      let next_item = block_on(eval.step_fn(acc_thunk, *thunk))?;
       if i + 1 == items.len() {
         return Ok(next_item);
       } else {
