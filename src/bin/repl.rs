@@ -19,10 +19,10 @@ async fn main() -> rnix::util::Result<()> {
   }
 
   while let Ok(line) = rl.readline("> ") {
-    match eval.load_inline(line) {
+    match eval.load_inline(line).await {
       Ok(expr) => match eval.value_of(expr).await {
         Ok(e) => eprintln!("{:?}", e),
-        Err(x) => eval.print_error(x)?,
+        Err(x) => eval.print_error(x).await?,
       },
       Err(e) => eprintln!("{}", e),
     }

@@ -9,7 +9,6 @@ pub use crate::{
   syntax::{expr::Ident, span::*},
   util::*,
 };
-pub use async_std::task::block_on;
 pub use std::{
   borrow::Cow,
   convert::TryInto as _,

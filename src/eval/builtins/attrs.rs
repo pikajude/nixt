@@ -5,7 +5,6 @@ use crate::{
     value::Value,
     Eval,
   },
-  prelude::block_on,
   syntax::expr::Ident,
   util::*,
 };
@@ -99,7 +98,7 @@ pub async fn generic_closure(eval: &Eval, input: ThunkId) -> Result<Value> {
     }
     res.push(next_item);
 
-    let mut value_lhs = &block_on(eval.step_fn(operator, next_item))?;
+    let mut value_lhs = &eval.step_fn(operator, next_item).await?;
 
     // TODO make a convenience function here
     while let Value::Ref(r) = value_lhs {

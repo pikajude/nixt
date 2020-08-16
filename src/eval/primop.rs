@@ -4,7 +4,6 @@ use futures::{future::BoxFuture, Future};
 use std::fmt::{self, Debug};
 
 pub enum Op {
-  Dynamic(Box<dyn Fn(&Eval, ThunkId) -> Result<Value> + Send + Sync>),
   Static(fn(&Eval, ThunkId) -> Result<Value>),
   Async(Box<dyn Fn(&Eval, ThunkId) -> BoxFuture<Result<Value>> + Send + Sync>),
 }
@@ -23,13 +22,6 @@ impl Debug for Primop {
 }
 
 impl Primop {
-  pub fn single(name: &'static str, f: fn(&Eval, ThunkId) -> Result<Value>) -> Value {
-    Value::Primop(Self {
-      name,
-      op: Op::Static(f),
-    })
-  }
-
   pub fn single_async<F: Future<Output = Result<Value>> + Send + 'static>(
     name: &'static str,
     f: fn(&Eval, ThunkId) -> F,
@@ -44,19 +36,12 @@ impl Primop {
 #[macro_export]
 macro_rules! primop_inline {
   ($name:expr, |$($p:pat),*| $t:tt) => {
-    primop_async!($name, |$($p),*| async move $t)
+    primop!($name, |$($p),*| async move $t)
   };
 }
 
 #[macro_export]
 macro_rules! primop {
-  ($name:literal, $op:expr) => {
-    primop_async!($name, $op)
-  };
-}
-
-#[macro_export]
-macro_rules! primop_async {
   ($name:literal, $op:expr$(,)?) => {
     $crate::eval::value::Value::Primop($crate::eval::primop::Primop {
       name: $name,
@@ -93,15 +78,17 @@ macro_rules! primop3 {
         Ok($crate::eval::value::Value::Primop(
           $crate::eval::primop::Primop {
             name: concat!($name, "-app"),
-            op: $crate::eval::primop::Op::Dynamic(Box::new(move |_, t2| {
-              Ok($crate::eval::value::Value::Primop(
-                $crate::eval::primop::Primop {
-                  name: concat!($name, "-app"),
-                  op: $crate::eval::primop::Op::Async(Box::new(move |eval, t3| {
-                    Box::pin($op(eval, t1, t2, t3))
-                  })),
-                },
-              ))
+            op: $crate::eval::primop::Op::Async(Box::new(move |_, t2| {
+              Box::pin(async move {
+                Ok($crate::eval::value::Value::Primop(
+                  $crate::eval::primop::Primop {
+                    name: concat!($name, "-app"),
+                    op: $crate::eval::primop::Op::Async(Box::new(move |eval, t3| {
+                      Box::pin($op(eval, t1, t2, t3))
+                    })),
+                  },
+                ))
+              })
             })),
           },
         ))

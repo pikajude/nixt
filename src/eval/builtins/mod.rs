@@ -1,7 +1,7 @@
 use super::AssertFailure;
 use crate::{
   eval::{context::StaticScope, thunk::ThunkId, value::Value, Eval},
-  primop, primop2, primop3, primop_async, primop_inline,
+  primop, primop2, primop3, primop_inline,
   syntax::expr::Ident,
   util::*,
 };
@@ -21,10 +21,10 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
     "import".into(),
     eval.new_value(primop!("import", sys::import)),
   );
-  let corepkg = eval.load_file(concat!(
+  let corepkg = async_std::task::block_on(eval.load_file(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/corepkgs/derivation.nix"
-  ))?;
+  )))?;
   eval.toplevel.insert("derivation".into(), corepkg);
   eval
     .toplevel
@@ -64,10 +64,7 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
   );
   eval.toplevel.insert(
     "derivationStrict".into(),
-    eval.new_value(primop_async!(
-      "derivationStrict",
-      derivation::derivation_strict,
-    )),
+    eval.new_value(primop!("derivationStrict", derivation::derivation_strict)),
   );
   eval.toplevel.insert(
     "builtins".into(),
@@ -113,7 +110,7 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
       );
       builtins.insert(
         "fetchTarball".into(),
-        eval.new_value(primop_async!("fetchTarball", fetch::fetch_tarball)),
+        eval.new_value(primop!("fetchTarball", fetch::fetch_tarball)),
       );
       builtins.insert(
         "fromJSON".into(),

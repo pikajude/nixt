@@ -4,7 +4,7 @@ use crate::{
     value::Value,
     Eval,
   },
-  prelude::{block_on, FileSpan},
+  prelude::FileSpan,
   util::*,
 };
 
@@ -77,7 +77,7 @@ pub async fn filter(eval: &Eval, filter: ThunkId, list: ThunkId) -> Result<Value
   let items = eval.value_list_of(list).await?;
   let mut out = vec![];
   for item in items {
-    match block_on(eval.step_fn(filter, *item))? {
+    match eval.step_fn(filter, *item).await? {
       Value::Bool(b) => {
         if b {
           out.push(*item);

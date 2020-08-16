@@ -31,9 +31,9 @@ pub async fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
   let path = eval.value_path_of(path).await?;
   let meta = path.metadata()?;
   let r = if meta.is_dir() {
-    eval.load_file(path.join("default.nix"))?
+    eval.load_file(path.join("default.nix")).await?
   } else {
-    eval.load_file(path)?
+    eval.load_file(path).await?
   };
   Ok(Value::Ref(r))
 }

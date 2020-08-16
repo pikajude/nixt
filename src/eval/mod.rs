@@ -4,6 +4,7 @@ use crate::{
   store::LocalStore,
   syntax::expr::{self, *},
 };
+use async_std::sync::Mutex;
 use builtins::strings::coerce_to_string;
 use codespan::Files;
 use codespan_reporting::{
@@ -16,12 +17,11 @@ use itertools::{Either, Itertools};
 use log::Level;
 use primop::{Op, Primop};
 use std::{
-  cell::RefCell,
   collections::{HashMap, HashSet, VecDeque},
   fs,
   sync::{
     atomic::{AtomicU16, Ordering},
-    Arc, Mutex,
+    Arc,
   },
 };
 use termcolor::{ColorChoice, StandardStream};
@@ -49,14 +49,13 @@ pub struct Eval {
   inline_counter: AtomicU16,
   files: Mutex<Files<String>>,
   file_ids: Mutex<HashMap<PathBuf, ThunkId>>,
-  trace: RefCell<VecDeque<FileSpan>>,
+  trace: Mutex<VecDeque<FileSpan>>,
   writer: StandardStream,
   config: Config,
   pub store: Arc<dyn Store>,
 }
 
-unsafe impl Send for Eval {}
-unsafe impl Sync for Eval {}
+static_assertions::assert_impl_all!(Eval: Send, Sync);
 
 impl Eval {
   pub fn new() -> Result<Self> {
@@ -82,9 +81,9 @@ impl Eval {
     Ok(this)
   }
 
-  pub fn print_error(&self, e: Error) -> Result<()> {
-    let files = self.files.lock().unwrap();
-    let trace = self.trace.borrow();
+  pub async fn print_error(&self, e: Error) -> Result<()> {
+    let files = self.files.lock().await;
+    let trace = self.trace.lock().await;
     let trace_limit = if self.config.trace { trace.len() } else { 1 };
     let diagnostic = Diagnostic::error()
       .with_message(format!("{:?}", e))
@@ -116,16 +115,16 @@ impl Eval {
     Ok(())
   }
 
-  pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
+  pub async fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
     let path = path.as_ref().canonicalize()?;
-    let mut ids = self.file_ids.lock().unwrap();
+    let mut ids = self.file_ids.lock().await;
     if let Some(x) = ids.get(&path) {
       return Ok(*x);
     }
     let eid = {
       trace!("loading file: {}", path.display());
       let contents = fs::read_to_string(&path)?;
-      let mut f = self.files.lock().unwrap();
+      let mut f = self.files.lock().await;
       let id = f.add(&path, contents);
       crate::syntax::parse(id, &self.expr, f.source(id))?
     };
@@ -136,9 +135,9 @@ impl Eval {
     Ok(thunk_id)
   }
 
-  pub fn load_inline<S: Into<String>>(&self, src: S) -> Result<ThunkId> {
+  pub async fn load_inline<S: Into<String>>(&self, src: S) -> Result<ThunkId> {
     let eid = {
-      let mut f = self.files.lock().unwrap();
+      let mut f = self.files.lock().await;
       let id = f.add(
         format!(
           "<inline-{}>",
@@ -255,9 +254,9 @@ impl Eval {
     match thunk {
       ThunkCell::Expr(e, c) => self.step_eval(e, c).await,
       ThunkCell::Apply(loc, lhs, rhs) => {
-        self.trace.borrow_mut().push_front(loc);
+        self.trace.lock().await.push_front(loc);
         let res = self.step_fn(lhs, rhs).await?;
-        self.trace.borrow_mut().pop_front();
+        self.trace.lock().await.pop_front();
         Ok(res)
       }
       ThunkCell::Blackhole => bail!("infinite loop"),
@@ -265,16 +264,16 @@ impl Eval {
   }
 
   async fn step_eval(&self, e: ExprRef, context: Context) -> Result<Value> {
-    self.trace.borrow_mut().push_front(e.span);
+    self.trace.lock().await.push_front(e.span);
     let result = self.step_eval_impl(e, context).await?;
-    self.trace.borrow_mut().pop_front();
+    self.trace.lock().await.pop_front();
     Ok(result)
   }
 
   #[async_recursion]
   async fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
     if log_enabled!(target: "eval::entry", Level::Trace) {
-      let fs = self.files.lock().unwrap();
+      let fs = self.files.lock().await;
       trace!(
         target: "eval::entry",
         "{}:{}\n  {}",
@@ -312,7 +311,7 @@ impl Eval {
           if pb.is_absolute() {
             Ok(Value::Path(pb.into()))
           } else {
-            let files = self.files.lock().unwrap();
+            let files = self.files.lock().await;
             let filename = files.name(e.span.file_id);
             let dest = PathBuf::from(filename).parent().unwrap().join(pb);
             let thing = path_abs::PathAbs::new(dest)?;
@@ -472,12 +471,6 @@ impl Eval {
         f(self, rhs)
       }
       Value::Primop(Primop {
-        op: Op::Dynamic(f), ..
-      }) => {
-        trace!(target: "eval::fn", "primop");
-        f(self, rhs)
-      }
-      Value::Primop(Primop {
         op: Op::Async(f), ..
       }) => {
         trace!(target: "eval::fn", "primop");
@@ -507,7 +500,7 @@ impl Eval {
     let mut fn_body_scope = StaticScope::new();
 
     if log_enabled!(target: "eval::lambda", Level::Trace) {
-      let fs = self.files.lock().unwrap();
+      let fs = self.files.lock().await;
       trace!(
         target: "eval::lambda",
         "{}:{}\n  {}",
@@ -774,7 +767,7 @@ mod tests {
   macro_rules! assert_eval {
     ($l:literal, $p:pat) => {
       let eval = Eval::new().unwrap();
-      assert_matches::assert_matches!(eval.value_of(eval.load_inline($l)?).await, $p);
+      assert_matches::assert_matches!(eval.value_of(eval.load_inline($l).await?).await, $p);
     };
   }
 
@@ -793,7 +786,9 @@ mod tests {
   #[async_std::test]
   async fn test_foldl() -> Result<()> {
     let e = Eval::new().unwrap();
-    let expr = e.load_inline(r#"builtins.foldl' (x: y: "${x}-${y}") "foo" ["bar" "baz" "qux"]"#)?;
+    let expr = e
+      .load_inline(r#"builtins.foldl' (x: y: "${x}-${y}") "foo" ["bar" "baz" "qux"]"#)
+      .await?;
     assert_eq!(e.value_string_of(expr).await?, "foo-bar-baz-qux");
     Ok(())
   }
