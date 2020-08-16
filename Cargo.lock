@@ -302,6 +302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derivative"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb582b60359da160a9477ee80f15c8d784c477e69c217ef2cdd4169c24ea380f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "derive_more"
 version = "0.99.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1154,6 +1165,7 @@ dependencies = [
  "binascii",
  "codespan",
  "codespan-reporting",
+ "derivative",
  "derive_more",
  "dirs-next",
  "gen-settings",
@@ -1175,6 +1187,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "path_abs",
+ "petgraph",
  "pretty_env_logger",
  "proptest",
  "rand 0.7.3",
