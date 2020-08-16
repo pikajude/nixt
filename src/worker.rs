@@ -23,13 +23,6 @@ impl Worker {
   pub fn step(&self) -> Result<bool> {
     let mut this = self.0.lock().unwrap();
     let store = Arc::clone(&this.store);
-    let scc_layers = petgraph::algo::tarjan_scc(&this.goals).into_iter();
-    if let Some(n) = scc_layers.next() {
-      todo!()
-    } else {
-      Ok(false)
-    }
-    /*
     if let Some(topo_head) = petgraph::algo::toposort(&this.goals, None)
       .map_err(|e| anyhow!("cycle detected at node {:?}", e))?
       .into_iter()
@@ -51,7 +44,6 @@ impl Worker {
     } else {
       Ok(false)
     }
-    */
   }
 
   pub fn iter(&self) -> Iter {
