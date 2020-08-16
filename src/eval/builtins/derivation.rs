@@ -15,16 +15,18 @@ use crate::{
 use std::{collections::BTreeSet, path::Path};
 
 pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
-  let attrs = eval.value_attrs_of(args)?;
+  let attrs = eval.value_attrs_of(args).await?;
 
   let mut context = PathSet::new();
 
-  let name = eval.value_string_of(
-    attrs
-      .get(&Ident::from("name"))
-      .copied()
-      .ok_or_else(|| anyhow::anyhow!("required attribute `name' missing"))?,
-  )?;
+  let name = eval
+    .value_string_of(
+      attrs
+        .get(&Ident::from("name"))
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("required attribute `name' missing"))?,
+    )
+    .await?;
 
   if attrs.contains_key(&Ident::from("__structuredAttrs")) {
     bail!("not implemented: structuredAttrs");
@@ -36,7 +38,7 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   };
 
   let ignore_nulls = match attrs.get(&Ident::from("__ignoreNulls")) {
-    Some(n) => eval.value_bool_of(*n)?,
+    Some(n) => eval.value_bool_of(*n).await?,
     None => false,
   };
 
@@ -53,18 +55,18 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
 
     if k == "args" {
-      for arg in eval.value_list_of(*v)? {
+      for arg in eval.value_list_of(*v).await? {
         drv
           .args
-          .push(coerce_to_string(eval, *arg, &mut context, true, false)?);
+          .push(coerce_to_string(eval, *arg, &mut context, true, false).await?);
       }
       continue;
     }
 
-    let string_value = coerce_to_string(eval, *v, &mut context, true, false)?;
+    let string_value = coerce_to_string(eval, *v, &mut context, true, false).await?;
 
     if ignore_nulls {
-      if let Value::Null = eval.value_of(*v)? {
+      if let Value::Null = eval.value_of(*v).await? {
         continue;
       }
     }
@@ -110,7 +112,7 @@ pub async fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
         .unwrap();
     }
     if k == "system" {
-      drv.platform = eval.value_with_context_of(*v)?.0.to_string();
+      drv.platform = eval.value_with_context_of(*v).await?.0.to_string();
     }
   }
 

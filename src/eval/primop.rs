@@ -43,15 +43,15 @@ impl Primop {
 
 #[macro_export]
 macro_rules! primop_inline {
-  ($name:expr, $e:expr) => {
-    $crate::eval::primop::Primop::single($name, $e)
+  ($name:expr, |$($p:pat),*| $t:tt) => {
+    primop_async!($name, |$($p),*| async move $t)
   };
 }
 
 #[macro_export]
 macro_rules! primop {
   ($name:literal, $op:expr) => {
-    $crate::eval::primop::Primop::single($name, $op)
+    primop_async!($name, $op)
   };
 }
 
@@ -74,7 +74,9 @@ macro_rules! primop2 {
         Ok($crate::eval::value::Value::Primop(
           $crate::eval::primop::Primop {
             name: concat!($name, "-app"),
-            op: $crate::eval::primop::Op::Dynamic(Box::new(move |eval, t2| $op(eval, t1, t2))),
+            op: $crate::eval::primop::Op::Async(Box::new(move |eval, t2| {
+              Box::pin($op(eval, t1, t2))
+            })),
           },
         ))
       }),
@@ -95,8 +97,8 @@ macro_rules! primop3 {
               Ok($crate::eval::value::Value::Primop(
                 $crate::eval::primop::Primop {
                   name: concat!($name, "-app"),
-                  op: $crate::eval::primop::Op::Dynamic(Box::new(move |eval, t3| {
-                    $op(eval, t1, t2, t3)
+                  op: $crate::eval::primop::Op::Async(Box::new(move |eval, t3| {
+                    Box::pin($op(eval, t1, t2, t3))
                   })),
                 },
               ))

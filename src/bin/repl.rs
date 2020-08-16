@@ -2,7 +2,8 @@
 
 use rnix::eval::Eval;
 
-fn main() -> rnix::util::Result<()> {
+#[async_std::main]
+async fn main() -> rnix::util::Result<()> {
   pretty_env_logger::init();
 
   let eval = Eval::new()?;
@@ -19,7 +20,7 @@ fn main() -> rnix::util::Result<()> {
 
   while let Ok(line) = rl.readline("> ") {
     match eval.load_inline(line) {
-      Ok(expr) => match eval.value_of(expr) {
+      Ok(expr) => match eval.value_of(expr).await {
         Ok(e) => eprintln!("{:?}", e),
         Err(x) => eval.print_error(x)?,
       },

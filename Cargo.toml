@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0.32"
 async-recursion = "0.3.1"
-async-std = "1.6.2"
+async-std = { version = "1.6.2", features = ["attributes"] }
 async-trait = "0.1.36"
 binascii = "0.1.4"
 codespan = "0.9.5"

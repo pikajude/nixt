@@ -11,24 +11,24 @@ use std::{
   path::{Path, PathBuf},
 };
 
-pub fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
-  let varname = eval.value_string_of(varname)?;
+pub async fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
+  let varname = eval.value_string_of(varname).await?;
   match std::env::var(String::from(varname)) {
     Ok(s) => Ok(Value::string_bare(s)),
     Err(_) => Ok(Value::string_bare("")),
   }
 }
 
-pub fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
-  Ok(Value::Bool(match eval.value_of(path)? {
+pub async fn path_exists(eval: &Eval, path: ThunkId) -> Result<Value> {
+  Ok(Value::Bool(match eval.value_of(path).await? {
     Value::String { string, .. } => fs::metadata(string).is_ok(),
     Value::Path(p) => p.exists(),
     _ => false,
   }))
 }
 
-pub fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
-  let path = eval.value_path_of(path)?;
+pub async fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path).await?;
   let meta = path.metadata()?;
   let r = if meta.is_dir() {
     eval.load_file(path.join("default.nix"))?
@@ -38,8 +38,8 @@ pub fn import(eval: &Eval, path: ThunkId) -> Result<Value> {
   Ok(Value::Ref(r))
 }
 
-pub fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
-  let path = eval.value_path_of(path)?;
+pub async fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path).await?;
   Ok(Value::string_bare(
     path
       .iter()
@@ -49,13 +49,13 @@ pub fn base_name_of(eval: &Eval, path: ThunkId) -> Result<Value> {
   ))
 }
 
-pub fn read_file(eval: &Eval, path: ThunkId) -> Result<Value> {
-  let path = eval.value_path_of(path)?;
+pub async fn read_file(eval: &Eval, path: ThunkId) -> Result<Value> {
+  let path = eval.value_path_of(path).await?;
   Ok(Value::string_bare(fs::read_to_string(path)?))
 }
 
-pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> {
-  let entries = eval.value_list_of(path)?;
+pub async fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> {
+  let entries = eval.value_list_of(path).await?;
   let target = Path::new(filename);
   let mut path_parts = target.components();
   let search_key = path_parts
@@ -71,11 +71,13 @@ pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> 
     }
   };
   for entry in entries {
-    let kv = eval.value_attrs_of(*entry)?;
-    let path = eval.value_string_of(*kv.get(&Ident::from("path")).unwrap())?;
+    let kv = eval.value_attrs_of(*entry).await?;
+    let path = eval
+      .value_string_of(*kv.get(&Ident::from("path")).unwrap())
+      .await?;
 
     let (_context, prefix) =
-      coerce_new_string(eval, *kv.get(&Ident::from("prefix")).unwrap(), false, false)?;
+      coerce_new_string(eval, *kv.get(&Ident::from("prefix")).unwrap(), false, false).await?;
 
     if !_context.is_empty() {
       warn!("try to realise context {:?}", _context);

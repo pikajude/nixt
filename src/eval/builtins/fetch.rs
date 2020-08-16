@@ -6,30 +6,36 @@ use crate::{
 };
 use std::borrow::Cow;
 
-pub fn fetch_tarball(eval: &Eval, args: ThunkId) -> Result<Value> {
-  fetch(eval, args, "fetchTarball", true, "source")
+pub async fn fetch_tarball(eval: &Eval, args: ThunkId) -> Result<Value> {
+  fetch(eval, args, "fetchTarball", true, "source").await
 }
 
-fn fetch(eval: &Eval, args: ThunkId, who: &'static str, unpack: bool, name: &str) -> Result<Value> {
+async fn fetch(
+  eval: &Eval,
+  args: ThunkId,
+  who: &'static str,
+  unpack: bool,
+  name: &'static str,
+) -> Result<Value> {
   let mut name: Option<&str> = Some(name);
   let mut hash: Option<Hash> = None;
 
-  let url = match eval.value_of(args)? {
+  let url = match eval.value_of(args).await? {
     Value::AttrSet(a) => {
       let mut a = a.clone();
       let murl = match a.remove(&Ident::from("url")) {
-        Some(x) => Some(eval.value_string_of(x)?),
+        Some(x) => Some(eval.value_string_of(x).await?),
         None => None,
       };
       hash = match a.remove(&Ident::from("sha256")) {
         Some(x) => Some(Hash::new_allow_empty(
-          eval.value_string_of(x)?,
+          eval.value_string_of(x).await?,
           Some(HashType::SHA256),
         )?),
         None => None,
       };
       name = match a.remove(&Ident::from("name")) {
-        Some(v) => Some(eval.value_string_of(v)?),
+        Some(v) => Some(eval.value_string_of(v).await?),
         None => None,
       };
       if let Some(k) = a.keys().next() {
@@ -58,12 +64,8 @@ fn fetch(eval: &Eval, args: ThunkId, who: &'static str, unpack: bool, name: &str
   let url = pretend_resolve(url);
 
   let out_path = if unpack {
-    let output = async_std::task::block_on(crate::fetch::download_tarball(
-      eval.store.as_ref(),
-      &url,
-      name,
-      hash.is_some(),
-    ))?;
+    let output =
+      crate::fetch::download_tarball(eval.store.as_ref(), &url, name, hash.is_some()).await?;
     eval.store.print_store_path(&output)
   } else {
     let output = crate::fetch::download_file(eval.store.as_ref(), &url, name, hash.is_some())?;

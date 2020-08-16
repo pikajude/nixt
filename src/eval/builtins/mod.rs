@@ -1,6 +1,6 @@
 use super::AssertFailure;
 use crate::{
-  eval::{context::StaticScope, primop::Primop, thunk::ThunkId, value::Value, Eval},
+  eval::{context::StaticScope, thunk::ThunkId, value::Value, Eval},
   primop, primop2, primop3, primop_async, primop_inline,
   syntax::expr::Ident,
   util::*,
@@ -19,7 +19,7 @@ pub mod versions;
 pub fn init_primops(eval: &mut Eval) -> Result<()> {
   eval.toplevel.insert(
     "import".into(),
-    eval.new_value(Primop::single("import", sys::import)),
+    eval.new_value(primop!("import", sys::import)),
   );
   let corepkg = eval.load_file(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -113,7 +113,7 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
       );
       builtins.insert(
         "fetchTarball".into(),
-        eval.new_value(primop!("fetchTarball", fetch::fetch_tarball)),
+        eval.new_value(primop_async!("fetchTarball", fetch::fetch_tarball)),
       );
       builtins.insert(
         "fromJSON".into(),
@@ -152,39 +152,49 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
       builtins.insert(
         "isString".into(),
         eval.new_value(primop_inline!("isString", |e, i| {
-          Ok(Value::Bool(matches!(e.value_of(i)?, Value::String { .. })))
+          let _: &Eval = e;
+          Ok(Value::Bool(
+            matches!(e.value_of(i).await?, Value::String { .. }),
+          ))
         })),
       );
       builtins.insert(
         "isAttrs".into(),
         eval.new_value(primop_inline!("isAttrs", |e, i| {
-          Ok(Value::Bool(matches!(e.value_of(i)?, Value::AttrSet { .. })))
+          let _: &Eval = e;
+          Ok(Value::Bool(
+            matches!(e.value_of(i).await?, Value::AttrSet { .. }),
+          ))
         })),
       );
       builtins.insert(
         "isBool".into(),
         eval.new_value(primop_inline!("isBool", |e, i| {
-          Ok(Value::Bool(matches!(e.value_of(i)?, Value::Bool(_))))
+          let _: &Eval = e;
+          Ok(Value::Bool(matches!(e.value_of(i).await?, Value::Bool(_))))
         })),
       );
       builtins.insert(
         "isFunction".into(),
         eval.new_value(primop_inline!("isFunction", |e, i| {
+          let _: &Eval = e;
           Ok(Value::Bool(
-            matches!(e.value_of(i)?, Value::Primop{..} | Value::Lambda{..}),
+            matches!(e.value_of(i).await?, Value::Primop{..} | Value::Lambda{..}),
           ))
         })),
       );
       builtins.insert(
         "isList".into(),
         eval.new_value(primop_inline!("isList", |e, i| {
-          Ok(Value::Bool(matches!(e.value_of(i)?, Value::List(_))))
+          let _: &Eval = e;
+          Ok(Value::Bool(matches!(e.value_of(i).await?, Value::List(_))))
         })),
       );
       builtins.insert(
         "isNull".into(),
         eval.new_value(primop_inline!("isNull", |e, i| {
-          Ok(Value::Bool(matches!(e.value_of(i)?, Value::Null)))
+          let _: &Eval = e;
+          Ok(Value::Bool(matches!(e.value_of(i).await?, Value::Null)))
         })),
       );
       builtins.insert(
@@ -236,13 +246,15 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
       builtins.insert(
         "length".into(),
         eval.new_value(primop_inline!("length", |e, i| {
-          Ok(Value::Int(e.value_list_of(i)?.len() as _))
+          let _: &Eval = e;
+          Ok(Value::Int(e.value_list_of(i).await?.len() as _))
         })),
       );
       builtins.insert(
         "stringLength".into(),
         eval.new_value(primop_inline!("stringLength", |e, i| {
-          Ok(Value::Int(e.value_with_context_of(i)?.0.len() as _))
+          let _: &Eval = e;
+          Ok(Value::Int(e.value_with_context_of(i).await?.0.len() as _))
         })),
       );
       builtins.insert(
@@ -274,14 +286,14 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
   Ok(())
 }
 
-fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
-  let (msg, _) = eval.value_with_context_of(msg)?;
+async fn nix_abort(eval: &Eval, msg: ThunkId) -> Result<Value> {
+  let (msg, _) = eval.value_with_context_of(msg).await?;
   bail!("evaluation aborted with the message: {}", msg)
 }
 
-fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value> {
-  if let Err(mut e) = eval.value_of(value) {
-    let (ctx, _) = eval.value_with_context_of(ctx)?;
+async fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value> {
+  if let Err(mut e) = eval.value_of(value).await {
+    let (ctx, _) = eval.value_with_context_of(ctx).await?;
     e = e.context(ctx.to_string());
     Err(e)
   } else {
@@ -289,9 +301,9 @@ fn add_error_context(eval: &Eval, ctx: ThunkId, value: ThunkId) -> Result<Value>
   }
 }
 
-fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
+async fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
   let mut attrs = StaticScope::new();
-  if let Err(e) = eval.value_of(thing) {
+  if let Err(e) = eval.value_of(thing).await {
     if let Some(AssertFailure { .. }) = e.downcast_ref() {
       attrs.insert(Ident::from("success"), eval.new_value(Value::Bool(false)));
       attrs.insert(Ident::from("value"), eval.new_value(Value::Bool(false)));
@@ -306,8 +318,8 @@ fn try_eval(eval: &Eval, thing: ThunkId) -> Result<Value> {
   }
 }
 
-fn prim_less_than(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
-  let lhs = eval.value_of(lhs)?;
-  let rhs = eval.value_of(rhs)?;
+async fn prim_less_than(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
+  let lhs = eval.value_of(lhs).await?;
+  let rhs = eval.value_of(rhs).await?;
   Ok(Value::Bool(crate::eval::operators::less_than(lhs, rhs)?))
 }

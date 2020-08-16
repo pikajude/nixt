@@ -1,3 +1,4 @@
+#![feature(async_closure)]
 #![feature(btree_drain_filter)]
 #![feature(doc_cfg)]
 #![feature(duration_zero)]

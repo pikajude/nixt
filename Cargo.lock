@@ -52,6 +52,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7deb0a829ca7bcfaf5da70b073a8d128619259a7be8216a355e23f00763059e5"
 
 [[package]]
+name = "async-attributes"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efd3d156917d94862e779f356c5acae312b08fd3121e792c857d7928c8088423"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "async-channel"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,6 +131,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c8da367da62b8ff2313c406c9ac091c1b31d67a165becdd2de380d846260f7"
 dependencies = [
+ "async-attributes",
  "async-executor",
  "async-io",
  "async-mutex",
