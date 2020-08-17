@@ -11,10 +11,7 @@ use std::{
     prelude::RawFd,
     process::CommandExt,
   },
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-  },
+  sync::atomic::{AtomicUsize, Ordering},
   time::Instant,
 };
 use unix::{
@@ -43,13 +40,13 @@ pub enum ExitCode {
   IncompleteClosure,
 }
 
-pub struct Worker {
-  pub store: Arc<dyn Store>,
+pub struct Worker<'a> {
+  pub store: &'a dyn Store,
   pub goals: Vec<Goal>,
 }
 
-impl Worker {
-  pub fn new(store: Arc<dyn Store>) -> Self {
+impl<'a> Worker<'a> {
+  pub fn new(store: &'a dyn Store) -> Self {
     Self {
       store,
       goals: vec![],
@@ -57,39 +54,45 @@ impl Worker {
   }
 
   pub fn run(self) -> Result<()> {
-    let mut fds = vec![];
-    for goal in self.goals {
-      let next_store = Arc::clone(&self.store);
-      match goal {
-        Goal::Derivation(d) => {
-          let handle = std::thread::spawn(move || {
-            let child = d.local_build(next_store.as_ref())?;
-            debug!("starting child: {:?}", child.start_time);
-            for line in child.output {
-              let line = line?;
-              if line.starts_with('\x01') {
-                bail!("{}", &line[1..]);
-              } else {
-                info!("{}", line);
+    let completion = crossbeam::scope(|s| {
+      let mut fds = vec![];
+      for goal in self.goals {
+        let s_ref = self.store;
+        match goal {
+          Goal::Derivation(d) => {
+            let handle = s.spawn(move |_| {
+              let child = d.local_build(s_ref)?;
+              debug!("starting child: {:?}", child.start_time);
+              for line in child.output {
+                let line = line?;
+                if line.starts_with('\x01') {
+                  bail!("{}", &line[1..]);
+                } else {
+                  info!("{}", line);
+                }
               }
-            }
-            Ok(())
-          });
-          fds.push(handle);
+              Ok(())
+            });
+            fds.push(handle);
+          }
+        }
+      }
+      fds.into_iter().try_for_each(|x| {
+        // scope() returns Result<..., Panic>, but handle.join() also returns
+        // Result<..., Panic> although having both is redundant
+        x.join().unwrap_or_else(|e| panic!(e))
+      })
+    });
+    match completion {
+      Ok(x) => x,
+      Err(e) => {
+        if let Some(x) = e.downcast_ref::<String>() {
+          bail!("{}", x)
+        } else {
+          bail!("unspecified error from child")
         }
       }
     }
-
-    fds.into_iter().try_for_each(|x| match x.join() {
-      Err(e) => {
-        if let Some(msg) = e.downcast_ref::<String>() {
-          bail!("child failed: {}", msg)
-        } else {
-          bail!("child panicked with an unprintable message")
-        }
-      }
-      Ok(x) => x,
-    })
   }
 }
 

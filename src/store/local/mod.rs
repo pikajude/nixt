@@ -1,5 +1,11 @@
 use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
-use crate::{archive, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
+use crate::{
+  archive,
+  goal::{derivation::DerivationGoal, Goal, Worker},
+  prelude::*,
+  sqlite::Sqlite,
+  sync::fs_lock::*,
+};
 use archive::PathFilter;
 use fs::File;
 use std::{
@@ -12,7 +18,7 @@ use std::{
   os::unix::{fs::*, io::AsRawFd},
   path::{Path, PathBuf},
   rc::Rc,
-  sync::{Arc, Mutex},
+  sync::Mutex,
 };
 use tee_readwrite::TeeWriter;
 use unix::{
@@ -204,32 +210,23 @@ impl Store for LocalStore {
     Ok(dest_path)
   }
 
-  fn build_paths(self: Arc<Self>, paths: Vec<StorePathWithOutputs>) -> Result<()> {
-    loop {}
-    /*
-    let other_self = Arc::clone(&self);
-    let mut worker = Arc::new(Worker::new(other_self));
+  fn build_paths(&self, paths: Vec<StorePathWithOutputs>) -> Result<()> {
+    let mut worker = Worker::new(self);
     for path in paths {
       if path.path.is_derivation() {
-        let weak = Arc::downgrade(&worker);
-        Arc::get_mut(&mut worker)
-          .unwrap()
-          .goals
-          .push(Goal::Derivation(DerivationGoal::new(
-            weak,
-            self.parse_derivation(
-              &self.to_real_path(&path.path)?,
-              path.path.name.to_string().as_str(),
-            )?,
-            path.path,
-          )));
+        worker.goals.push(Goal::Derivation(DerivationGoal::new(
+          self.parse_derivation(
+            &self.to_real_path(&path.path)?,
+            path.path.name.to_string().as_str(),
+          )?,
+          path.path,
+        )));
       } else {
         bail!("not yet able to run substituters");
       }
     }
 
-    Arc::try_unwrap(worker).expect("no ref").run()
-    */
+    worker.run()
   }
 
   fn compute_closure(

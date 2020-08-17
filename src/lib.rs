@@ -18,6 +18,7 @@ pub mod arena;
 pub mod derivation;
 pub mod eval;
 pub mod fetch;
+pub mod goal;
 pub mod hash;
 pub mod path;
 pub mod path_info;

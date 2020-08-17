@@ -11,7 +11,7 @@ fn test_basic_build() -> Result<()> {
   let paths = vec![PathWithOutputs {
     path: store.parse_store_path(Path::new(concat!(
       env!("OUT_DIR"),
-      "/nix/store/ygmgkr3zwl2crvk7injy4njjfwc32cq6-hello-2.10.drv"
+      "/nix/store/nsc5c32g4k35k3ii5wq0xrzaiyrimxzk-hello-2.10.drv"
     )))?,
     outputs: std::iter::once("out".to_string()).collect(),
   }];

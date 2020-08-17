@@ -1,33 +1,24 @@
 use super::*;
-use std::sync::Weak;
 
 pub struct DerivationGoal {
-  worker: Weak<Worker>,
   derivation: Derivation,
   drv_path: StorePath,
-  state: State,
-}
-
-#[derive(Debug)]
-enum State {
-  Init,
 }
 
 const SANDBOX_GID: u32 = 100;
 const SANDBOX_UID: u32 = 1000;
 
 impl DerivationGoal {
-  pub fn new(worker: Weak<Worker>, derivation: Derivation, drv_path: StorePath) -> Self {
-    trace!("init");
+  pub fn new(derivation: Derivation, drv_path: StorePath) -> Self {
     Self {
-      worker,
       derivation,
       drv_path,
-      state: State::Init,
     }
   }
 
   pub fn local_build(&self, store: &dyn Store) -> Result<Child> {
+    store.add_temp_root(&self.drv_path)?;
+
     #[cfg(unix)]
     let mut build_user: Option<UserLock> = None;
 
