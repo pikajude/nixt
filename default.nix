@@ -14,9 +14,7 @@ in
 
     src = builtins.fetchGit ./.;
 
-    cargoSha256 = "1v1279zxl42w5n0fj6fr3bi7j1b7x00lgvdybjza01v5yja5flxl";
-
-    doCheck = false;
+    cargoSha256 = "10qnxg8fbpn8a1a138zy68qabfqpvqcqvd0cm5j162fjg86a1505";
 
     buildInputs = [ sqlite ];
 
