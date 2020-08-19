@@ -1,35 +1,21 @@
 use crate::{prelude::*, sync::user_lock::UserLock};
 use derivation::DerivationGoal;
-use linux_personality::Personality;
 use settings::SandboxMode;
 use std::{
   collections::{HashMap, HashSet},
-  io::{BufRead, ErrorKind::AlreadyExists, Write},
-  os::unix::{
-    fs::{symlink, PermissionsExt},
-    io::{AsRawFd, FromRawFd},
-    prelude::RawFd,
-    process::CommandExt,
-  },
+  io::ErrorKind::AlreadyExists,
+  os::unix::{fs::PermissionsExt, io::AsRawFd, prelude::RawFd, process::CommandExt},
   sync::atomic::{AtomicUsize, Ordering},
   time::Instant,
 };
 use unix::{
   fcntl::OFlag,
-  mount, pty, sched,
-  sys::{mman, socket, stat::Mode, termios, wait},
+  pty,
+  sys::{stat::Mode, termios},
   unistd,
 };
 
 pub mod derivation;
-
-fn personality(p: Personality) -> Result<Personality> {
-  Ok(linux_personality::personality(p).map_err(|_| std::io::Error::last_os_error())?)
-}
-
-fn get_personality() -> Result<Personality> {
-  Ok(linux_personality::get_personality().map_err(|_| std::io::Error::last_os_error())?)
-}
 
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub enum ExitCode {
@@ -59,7 +45,7 @@ impl<'a> Worker<'a> {
       for goal in self.goals {
         let s_ref = self.store;
         match goal {
-          Goal::Derivation(d) => {
+          Goal::Derivation(mut d) => {
             let handle = s.spawn(move |_| {
               let child = d.local_build(s_ref)?;
               debug!("starting child: {:?}", child.start_time);
