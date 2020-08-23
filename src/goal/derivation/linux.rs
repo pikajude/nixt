@@ -378,7 +378,7 @@ impl super::WorkerImpl for DerivationWorker<'_> {
 
     sched::unshare(CloneFlags::CLONE_NEWNS)?;
     unistd::chdir(self.chroot_root.as_path())?;
-    fs::create_dir_all("real-root")?;
+    fs::create_dir("real-root")?;
     unistd::pivot_root(".", "real-root")?;
     unistd::chroot(".")?;
     mount::umount2("real-root", MntFlags::MNT_DETACH)?;

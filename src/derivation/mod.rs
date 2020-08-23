@@ -75,7 +75,7 @@ impl Derivation {
   }
 
   pub fn is_builtin(&self) -> bool {
-    self.builder.starts_with("builtin:")
+    self.builder.to_string_lossy().starts_with("builtin:")
   }
 
   pub fn can_build_locally(&self) -> bool {
