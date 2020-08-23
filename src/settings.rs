@@ -561,10 +561,43 @@ pub struct Settings {
   pub flake_registry: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MaxBuildJobs {
   N(usize),
   Auto,
+}
+
+impl PartialEq<usize> for MaxBuildJobs {
+  fn eq(&self, other: &usize) -> bool {
+    match self {
+      Self::N(u) => u.eq(other),
+      Self::Auto => false,
+    }
+  }
+}
+
+impl PartialOrd<usize> for MaxBuildJobs {
+  fn partial_cmp(&self, other: &usize) -> Option<cmp::Ordering> {
+    match self {
+      Self::N(u) => u.partial_cmp(other),
+      Self::Auto => None,
+    }
+  }
+}
+
+impl PartialEq<MaxBuildJobs> for usize {
+  fn eq(&self, other: &MaxBuildJobs) -> bool {
+    other.eq(self)
+  }
+}
+
+impl PartialOrd<MaxBuildJobs> for usize {
+  fn partial_cmp(&self, other: &MaxBuildJobs) -> Option<cmp::Ordering> {
+    match other {
+      MaxBuildJobs::N(u) => self.partial_cmp(u),
+      MaxBuildJobs::Auto => None,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -70,6 +70,10 @@ impl Derivation {
       .map(|x| x.to_string())
   }
 
+  pub fn out_paths(&self) -> impl Iterator<Item = &StorePath> {
+    self.outputs.values().map(|v| &v.path)
+  }
+
   pub fn is_builtin(&self) -> bool {
     self.builder.starts_with("builtin:")
   }

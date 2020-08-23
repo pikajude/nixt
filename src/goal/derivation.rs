@@ -1,14 +1,26 @@
-use super::*;
-use pty::PtyMaster;
-use std::collections::BTreeSet;
-
-#[cfg(target_os = "linux")]
-#[path = "derivation/linux.rs"]
-mod sys;
-
-#[cfg(target_os = "macos")]
-#[path = "derivation/macos.rs"]
-mod sys;
+use super::{Action, BuildMode, Child, GoalLike, GoalPtr, WeakGoal, Worker};
+use crate::{
+  prelude::*,
+  sync::{fs_lock::PathLocks, user_lock::UserLock},
+};
+use settings::SandboxMode;
+use std::{
+  collections::{BTreeSet, HashMap, HashSet},
+  io::ErrorKind::AlreadyExists,
+  os::unix::{fs::PermissionsExt, io::AsRawFd, prelude::*, process::CommandExt},
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+  },
+};
+use unix::{
+  fcntl::OFlag,
+  pty::{self, PtyMaster},
+  sys::{stat::Mode, termios},
+  unistd,
+};
+#[cfg(target_os = "linux")] mod linux;
+#[cfg(target_os = "macos")] mod macos;
 
 trait GoalImpl {
   fn setup_chroot(&mut self, store: &dyn Store) -> Result<()>;
@@ -25,29 +37,191 @@ trait WorkerImpl {
   fn init_chroot(&self, store: &dyn Store, derivation: &Derivation) -> Result<()>;
 }
 
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
+enum State {
+  GetDerivation,
+  LoadDerivation,
+  HaveDerivation,
+  OutputsSubstituted,
+  ClosureRepaired,
+  InputsRealised,
+  TryToBuild,
+  TryLocalBuild,
+  BuildDone,
+}
+
+#[derive(Debug)]
+struct ChrootDir {
+  path: PathBuf,
+  optional: bool,
+}
+
+#[derive(Debug)]
 pub struct DerivationGoal {
+  state: State,
   derivation: Derivation,
   drv_path: StorePath,
   build_user: Option<UserLock>,
   closure: BTreeSet<StorePath>,
+  wanted_outputs: BTreeSet<String>,
+  build_mode: BuildMode,
+  waitees: Vec<GoalPtr>,
+  waiters: Vec<WeakGoal>,
 
   chroot_root: PathBuf,
   dirs_in_chroot: HashMap<String, ChrootDir>,
 }
 
+impl GoalLike for DerivationGoal {
+  fn work(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    match self.state {
+      State::GetDerivation => self.get_derivation(worker),
+      State::LoadDerivation => self.load_derivation(worker),
+      State::TryToBuild => self.try_to_build(worker),
+      State::TryLocalBuild => self.try_local_build(worker),
+      x => unimplemented!("{:?}", x),
+    }
+  }
+
+  fn add_waiter(&mut self, ptr: &GoalPtr) {
+    self.waiters.push(Arc::downgrade(ptr))
+  }
+
+  fn key(&self) -> String {
+    format!("b${}${}", self.drv_path.name, self.drv_path.to_string())
+  }
+}
+
 impl DerivationGoal {
-  pub fn new(derivation: Derivation, drv_path: StorePath) -> Self {
+  pub fn new(path: StorePath, wanted_outputs: BTreeSet<String>, build_mode: BuildMode) -> Self {
     Self {
-      derivation,
-      drv_path,
+      state: State::GetDerivation,
+      derivation: Derivation::default(),
+      drv_path: path,
       chroot_root: PathBuf::from("/no-such-path"),
       build_user: None,
       closure: BTreeSet::default(),
       dirs_in_chroot: HashMap::new(),
+      wanted_outputs,
+      build_mode,
+      waitees: vec![],
+      waiters: vec![],
     }
   }
 
-  pub fn local_build(&mut self, store: &dyn Store) -> Result<Child> {
+  pub fn add_wanted_outputs<I: IntoIterator<Item = String>>(&mut self, outputs: I) {
+    self.wanted_outputs.extend(outputs)
+  }
+
+  fn get_derivation(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    debug!("init");
+
+    if self.build_mode == BuildMode::Normal && worker.store.is_valid_path(&self.drv_path)? {
+      self.load_derivation(worker)
+    } else {
+      let waitee = worker.make_substitution_goal(self.drv_path.clone(), false)?;
+      self.waitees.push(Arc::clone(&waitee));
+      self.state = State::LoadDerivation;
+      Ok(vec![Action::AddToWaiters(waitee)])
+    }
+  }
+
+  fn load_derivation(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    debug!("loading derivation");
+    worker.store.add_temp_root(&self.drv_path)?;
+
+    assert!(worker.store.is_valid_path(&self.drv_path)?);
+
+    self.derivation = worker.store.read_derivation(&self.drv_path)?;
+
+    self.have_derivation(worker)
+  }
+
+  fn have_derivation(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    debug!("have derivation");
+    for path in self.derivation.outputs.values() {
+      worker.store.add_temp_root(&path.path)?;
+    }
+
+    if self.waitees.is_empty() {
+      self.outputs_substituted(worker)
+    } else {
+      self.state = State::OutputsSubstituted;
+      Ok(vec![])
+    }
+  }
+
+  fn outputs_substituted(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    debug!("finished attempting to substitute all outputs");
+
+    self.wanted_outputs.clear();
+
+    let mut needed = vec![];
+
+    for (path, wanted_outputs) in &self.derivation.input_derivations {
+      let goal =
+        worker.make_derivation_goal(path.clone(), wanted_outputs.clone(), self.build_mode)?;
+      self.waitees.push(Arc::clone(&goal));
+      needed.push(Action::AddToWaiters(goal));
+    }
+
+    for item in &self.derivation.input_sources {
+      if worker.store.is_valid_path(item)? {
+        continue;
+      }
+      if !settings().use_substitutes {
+        bail!(
+          "dependency '{}' of '{}' does not exist, and substitution is disabled",
+          worker.store.print_store_path(item),
+          worker.store.print_store_path(&self.drv_path)
+        );
+      }
+      let goal = worker.make_substitution_goal(item.clone(), false)?;
+      self.waitees.push(Arc::clone(&goal));
+      needed.push(Action::AddToWaiters(goal));
+    }
+
+    if self.waitees.is_empty() {
+      self.inputs_realised(worker)
+    } else {
+      self.state = State::InputsRealised;
+      Ok(needed)
+    }
+  }
+
+  fn inputs_realised(&mut self, _: &mut Worker) -> Result<Vec<Action>> {
+    self.state = State::TryToBuild;
+    Ok(vec![Action::Wakeup])
+  }
+
+  fn try_to_build(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    info!("trying to build");
+
+    let lock_files = self
+      .derivation
+      .out_paths()
+      .map(|p| worker.store.to_real_path(p))
+      .collect::<Result<Vec<_>>>()?;
+
+    let mut locks = PathLocks::new();
+
+    if !locks.lock(lock_files.iter(), false, None)? {
+      info!("waiting for lock on {:?}", lock_files);
+      return Ok(vec![Action::WaitForAwhile]);
+    }
+
+    let cur_builds = worker.local_builds;
+    if cur_builds >= settings().max_build_jobs {
+      locks.unlock();
+      return Ok(vec![Action::WaitForBuildSlot]);
+    }
+
+    self.state = State::TryLocalBuild;
+    Ok(vec![Action::Wakeup])
+  }
+
+  fn try_local_build(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    let store = &*worker.store;
     store.add_temp_root(&self.drv_path)?;
 
     if unistd::getuid().is_root() {
@@ -257,7 +431,7 @@ impl DerivationGoal {
     termios::tcsetattr(write_side, termios::SetArg::TCSANOW, &term)?;
 
     if use_chroot {
-      return self.exec_child(store, read_side, write_side, sandbox_tmpdir);
+      self.exec_child(store, read_side, write_side, sandbox_tmpdir)?;
     }
 
     bail!("not implemented: building outside chroot")

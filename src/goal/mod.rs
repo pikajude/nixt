@@ -1,112 +1,240 @@
-use crate::{prelude::*, sync::user_lock::UserLock};
+use crate::{prelude::*, store::LocalStore};
 use derivation::DerivationGoal;
-use settings::SandboxMode;
+use downcast_rs::Downcast;
 use std::{
-  collections::{HashMap, HashSet},
-  io::ErrorKind::AlreadyExists,
-  os::unix::{fs::PermissionsExt, io::AsRawFd, prelude::RawFd, process::CommandExt},
-  sync::atomic::{AtomicUsize, Ordering},
+  collections::HashMap,
+  fmt::Debug,
+  sync::{Arc, RwLock, Weak},
   time::Instant,
 };
-use unix::{
-  fcntl::OFlag,
-  pty,
-  sys::{stat::Mode, termios},
-  unistd,
-};
+mod derivation;
 
-pub mod derivation;
-
-#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-pub enum ExitCode {
-  Busy,
-  Success,
-  Failure,
-  NoSubstituters,
-  IncompleteClosure,
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub enum BuildMode {
+  Normal,
+  Repair,
+  Check,
 }
 
-pub struct Worker<'a> {
-  pub store: &'a dyn Store,
-  pub goals: Vec<Goal>,
+pub trait GoalLike: Downcast + Debug {
+  fn work(&mut self, worker: &mut Worker) -> Result<Vec<Action>>;
+  fn add_waiter(&mut self, ptr: &GoalPtr);
+  fn key(&self) -> String;
+}
+impl_downcast!(GoalLike);
+
+impl GoalLike for SubstitutionGoal {
+  fn work(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    todo!()
+  }
+
+  fn add_waiter(&mut self, ptr: &GoalPtr) {
+    self.waiters.push(Arc::downgrade(ptr))
+  }
+
+  fn key(&self) -> String {
+    todo!()
+  }
 }
 
-impl<'a> Worker<'a> {
-  pub fn new(store: &'a dyn Store) -> Self {
+#[derive(Debug)]
+pub struct SubstitutionGoal {
+  pub path: StorePath,
+  pub repair: bool,
+  pub waitees: Vec<GoalPtr>,
+  pub waiters: Vec<WeakGoal>,
+}
+
+type Shared<T> = Arc<RwLock<T>>;
+
+type GoalPtr = Shared<dyn GoalLike>;
+type WeakGoal = Weak<RwLock<dyn GoalLike>>;
+type WeakGoalMap = HashMap<StorePath, WeakGoal>;
+
+pub enum Action {
+  AddToWaiters(GoalPtr),
+  Wakeup,
+  WaitForAwhile,
+  WaitForBuildSlot,
+}
+
+pub struct Worker {
+  store: Arc<LocalStore>,
+
+  top_goals: Vec<GoalPtr>,
+  awake: Vec<WeakGoal>,
+  wanting_to_build: Vec<WeakGoal>,
+  children: Vec<Child>,
+
+  local_builds: usize,
+
+  derivation_goals: WeakGoalMap,
+  substitution_goals: WeakGoalMap,
+  waiting_for_any_goals: Vec<WeakGoal>,
+  waiting_for_awhile: Vec<WeakGoal>,
+
+  last_woken_up: Instant,
+  path_contents_good_cache: HashMap<StorePath, bool>,
+}
+
+impl Worker {
+  pub fn new(store: Arc<LocalStore>) -> Self {
     Self {
       store,
-      goals: vec![],
+      top_goals: Default::default(),
+      awake: Default::default(),
+      wanting_to_build: Default::default(),
+      children: Default::default(),
+      local_builds: 0,
+      derivation_goals: Default::default(),
+      substitution_goals: Default::default(),
+      waiting_for_any_goals: Default::default(),
+      waiting_for_awhile: Default::default(),
+      last_woken_up: Instant::now(),
+      path_contents_good_cache: Default::default(),
     }
   }
 
-  pub fn run(self) -> Result<()> {
-    let completion = crossbeam::scope(|s| {
-      let mut fds = vec![];
-      for goal in self.goals {
-        let s_ref = self.store;
-        match goal {
-          Goal::Derivation(mut d) => {
-            let handle = s.spawn(move |_| {
-              let child = d.local_build(s_ref)?;
-              debug!("starting child: {:?}", child.start_time);
-              for line in child.output {
-                let line = line?;
-                if line.starts_with('\x01') {
-                  bail!("{}", &line[1..]);
+  fn wake_up(&mut self, goal: WeakGoal) {
+    debug!("waking up {:?}", goal);
+    self.awake.push(goal);
+  }
+
+  pub fn make_derivation_goal<I: IntoIterator<Item = String>>(
+    &mut self,
+    path: StorePath,
+    wanted_outputs: I,
+    build_mode: BuildMode,
+  ) -> Result<GoalPtr> {
+    if let Some(ptr) = self.derivation_goals.get(&path) {
+      let upgraded = ptr.upgrade().ok_or_else(|| {
+        anyhow!(
+          "unexpected dead weak pointer in goal map for path {:?}",
+          &path
+        )
+      })?;
+      match upgraded
+        .write()
+        .expect("unable to write")
+        .downcast_mut::<DerivationGoal>()
+      {
+        Some(d) => d.add_wanted_outputs(wanted_outputs),
+        _ => bail!("incompatible goal type"),
+      }
+      Ok(upgraded)
+    } else {
+      let mk_goal: Shared<dyn GoalLike> = Arc::new(RwLock::new(DerivationGoal::new(
+        path.clone(),
+        wanted_outputs.into_iter().collect(),
+        build_mode,
+      )));
+      self.derivation_goals.insert(path, Arc::downgrade(&mk_goal));
+      self.wake_up(Arc::downgrade(&mk_goal));
+      Ok(mk_goal)
+    }
+  }
+
+  pub fn make_substitution_goal(&mut self, path: StorePath, repair: bool) -> Result<GoalPtr> {
+    if let Some(x) = self.substitution_goals.get(&path) {
+      x.upgrade().ok_or_else(|| {
+        anyhow!(
+          "unexpected dead weak pointer in goal map for path {:?}",
+          &path
+        )
+      })
+    } else {
+      let mk_goal: Shared<dyn GoalLike> = Arc::new(RwLock::new(SubstitutionGoal {
+        path: path.clone(),
+        repair,
+        waitees: vec![],
+        waiters: vec![],
+      }));
+      self
+        .substitution_goals
+        .insert(path, Arc::downgrade(&mk_goal));
+      self.wake_up(Arc::downgrade(&mk_goal));
+      Ok(mk_goal)
+    }
+  }
+
+  pub fn run<I: IntoIterator<Item = GoalPtr>>(mut self, goals: I) -> Result<()> {
+    self.top_goals.extend(goals.into_iter());
+
+    loop {
+      while !self.awake.is_empty() && !self.top_goals.is_empty() {
+        let mut awake2 = vec![];
+        for ptr in self.awake.drain(..) {
+          if let Some(x) = ptr.upgrade() {
+            awake2.push(x);
+          }
+        }
+        awake2.sort_unstable_by_key(|g| g.read().unwrap().key());
+        for goal in awake2 {
+          let mut g_lock = goal.write().expect("unable to lock for writing");
+          info!("working on: {}", g_lock.key());
+          for req in g_lock.work(&mut self)? {
+            match req {
+              Action::AddToWaiters(w) => {
+                w.write().unwrap().add_waiter(&goal);
+              }
+              Action::Wakeup => {
+                self.awake.push(Arc::downgrade(&goal));
+              }
+              Action::WaitForAwhile => {
+                self.waiting_for_awhile.push(Arc::downgrade(&goal));
+              }
+              Action::WaitForBuildSlot => {
+                if self.local_builds < settings().max_build_jobs {
+                  self.awake.push(Arc::downgrade(&goal));
                 } else {
-                  info!("{}", line);
+                  self.wanting_to_build.push(Arc::downgrade(&goal));
                 }
               }
-              Ok(())
-            });
-            fds.push(handle);
+            }
+          }
+          if self.top_goals.is_empty() {
+            break;
           }
         }
       }
-      fds.into_iter().try_for_each(|x| {
-        // scope() returns Result<..., Panic>, but handle.join() also returns
-        // Result<..., Panic> although having both is redundant
-        x.join().unwrap_or_else(|e| panic!(e))
-      })
-    });
-    match completion {
-      Ok(x) => x,
-      Err(e) => {
-        if let Some(x) = e.downcast_ref::<String>() {
-          bail!("{}", x)
-        } else {
-          bail!("unspecified error from child")
+
+      if self.top_goals.is_empty() {
+        break;
+      }
+
+      if !self.children.is_empty() || !self.waiting_for_awhile.is_empty() {
+        todo!("wait for input");
+      } else {
+        if self.awake.is_empty() && settings().max_build_jobs == 0 {
+          todo!("check machines");
         }
+        assert!(!self.awake.is_empty());
+      }
+    }
+
+    let keep_going = settings().keep_going;
+    assert!(!keep_going || self.awake.is_empty());
+    assert!(!keep_going || self.wanting_to_build.is_empty());
+    assert!(!keep_going || self.children.is_empty());
+
+    Ok(())
+  }
+}
+
+impl Drop for Worker {
+  fn drop(&mut self) {
+    for g in self.top_goals.drain(..) {
+      if Arc::strong_count(&g) > 1 {
+        debug!("remaining goal with strong reference: {:?}", g);
       }
     }
   }
 }
 
-pub enum Goal {
-  Derivation(DerivationGoal),
-}
-
-type ChildOutput = io::Lines<io::BufReader<fs::File>>;
-
-#[derive(Debug)]
 pub struct Child {
-  output: ChildOutput,
-  pid: unistd::Pid,
-  start_time: Instant,
-}
-
-impl Child {
-  pub fn new(output: io::Lines<io::BufReader<fs::File>>, pid: unistd::Pid) -> Self {
-    Self {
-      output,
-      pid,
-      start_time: Instant::now(),
-    }
-  }
-}
-
-#[derive(Debug)]
-struct ChrootDir {
-  path: PathBuf,
-  optional: bool,
+  goal: WeakGoal,
+  respect_timeouts: bool,
+  in_build_slot: bool,
+  last_output: Instant,
+  started_at: Instant,
 }

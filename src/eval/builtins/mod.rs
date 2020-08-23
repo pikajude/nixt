@@ -201,6 +201,10 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
         eval.new_value(primop2!("match", strings::matches)),
       );
       builtins.insert(
+        "seq".into(),
+        eval.new_value(primop2!("seq", |_, _, v| Ok(Value::Ref(v)))),
+      );
+      builtins.insert(
         "storeDir".into(),
         eval.new_value(Value::string_bare(
           eval.store.store_path().to_string_lossy(),

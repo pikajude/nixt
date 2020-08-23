@@ -14,7 +14,7 @@ pub struct Primop {
 
 impl Debug for Primop {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    write!(f, "<<primop {}>", &self.name)
+    write!(f, "<primop {}>", &self.name)
   }
 }
 

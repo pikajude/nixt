@@ -175,7 +175,7 @@ impl super::GoalImpl for DerivationGoal {
             .write(false)
             .open(format!("/proc/{}/ns/mnt", child_pid))?;
 
-          while let Some(builder_line) = reader.next() {
+          for builder_line in reader {
             let builder_line = builder_line?;
             match builder_line.strip_prefix('\x01') {
               Some(y) => {
@@ -192,7 +192,7 @@ impl super::GoalImpl for DerivationGoal {
           // fd will be closed by BufReader drop
           std::mem::forget(read_side);
 
-          Ok(Child::new(reader, child_pid))
+          todo!("init the child");
         }
         x => bail!("unexpected wait status from child: {:?}", x),
       },

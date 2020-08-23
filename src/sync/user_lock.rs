@@ -3,6 +3,7 @@ use fs::File;
 use unix::unistd::{Gid, Uid};
 use users::os::unix::GroupExt;
 
+#[derive(Debug)]
 pub struct UserLock {
   _lockfile: File,
   pub uid: Uid,
