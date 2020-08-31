@@ -1,11 +1,14 @@
 use super::{DerivationGoal, DerivationWorker};
-use crate::{goal::Child, prelude::*};
+use crate::{
+  goal::{Action, Child},
+  prelude::*,
+};
 use linux_personality::{get_personality as get, personality as put, Personality};
 use std::{
   io::{BufRead, Error, Write},
   os::unix::{
     fs::{symlink, PermissionsExt},
-    io::{AsRawFd, FromRawFd},
+    io::*,
   },
 };
 use unix::{
@@ -30,8 +33,8 @@ fn get_personality() -> Result<Personality> {
   Ok(get().map_err(|_| Error::last_os_error())?)
 }
 
-impl super::GoalImpl for DerivationGoal {
-  fn setup_chroot(&mut self, store: &dyn Store) -> Result<()> {
+impl DerivationGoal {
+  pub fn setup_chroot(&mut self, store: &dyn Store) -> Result<()> {
     self.chroot_root = store.to_real_path(&self.drv_path)?.with_extension("chroot");
 
     debug!(
@@ -135,13 +138,13 @@ impl super::GoalImpl for DerivationGoal {
     Ok(())
   }
 
-  fn exec_child(
-    &self,
+  pub fn exec_child(
+    &mut self,
     store: &dyn Store,
     read_side: PtyMaster,
     write_side: i32,
     sandbox_tmpdir: &PathBuf,
-  ) -> Result<Child> {
+  ) -> Result<Vec<Action>> {
     match unistd::fork()? {
       unistd::ForkResult::Parent { child } => match wait::waitpid(child, None)? {
         wait::WaitStatus::Exited(_, 0) => {
@@ -149,33 +152,37 @@ impl super::GoalImpl for DerivationGoal {
             std::io::BufReader::new(unsafe { fs::File::from_raw_fd(read_side.as_raw_fd()) })
               .lines();
 
-          let child_pid = if let Some(line) = reader.next() {
-            unistd::Pid::from_raw(line?.parse::<libc::pid_t>()?)
+          let mut child_pid = if let Some(line) = reader.next() {
+            Pid::new(line?.parse()?)
           } else {
             bail!("no output from child")
           };
+
+          child_pid.set_separate_pg(true);
 
           let host_uid = self.build_user.as_ref().map_or(unistd::getuid(), |x| x.uid);
           let host_gid = self.build_user.as_ref().map_or(unistd::getgid(), |x| x.gid);
 
           fs::write(
-            format!("/proc/{}/uid_map", child_pid),
+            format!("/proc/{}/uid_map", child_pid.pid),
             format!("{} {} 1", SANDBOX_UID, host_uid),
           )?;
 
-          fs::write(format!("/proc/{}/setgroups", child_pid), "deny")?;
+          fs::write(format!("/proc/{}/setgroups", child_pid.pid), "deny")?;
 
           fs::write(
-            format!("/proc/{}/gid_map", child_pid),
+            format!("/proc/{}/gid_map", child_pid.pid),
             format!("{} {} 1", SANDBOX_GID, host_gid),
           )?;
 
           fs::OpenOptions::new()
             .read(true)
             .write(false)
-            .open(format!("/proc/{}/ns/mnt", child_pid))?;
+            .open(format!("/proc/{}/ns/mnt", child_pid.pid))?;
 
-          for builder_line in reader {
+          self.pid = Some(child_pid);
+
+          while let Some(builder_line) = reader.next() {
             let builder_line = builder_line?;
             match builder_line.strip_prefix('\x01') {
               Some(y) => {
@@ -185,14 +192,18 @@ impl super::GoalImpl for DerivationGoal {
                   bail!("{}", y)
                 }
               }
-              None => info!("{}", builder_line),
+              None => debug!("{}", builder_line),
             }
           }
 
-          // fd will be closed by BufReader drop
-          std::mem::forget(read_side);
+          // we have to return the fd to the parent, but File will close it on drop
+          std::mem::forget(reader);
 
-          todo!("init the child");
+          Ok(vec![Action::RegisterChild(Child {
+            respect_timeouts: true,
+            in_build_slot: true,
+            fds: vec![read_side.into_raw_fd()],
+          })])
         }
         x => bail!("unexpected wait status from child: {:?}", x),
       },
@@ -235,7 +246,6 @@ impl super::GoalImpl for DerivationGoal {
             {
               Ok(()) => 0,
               Err(e) => {
-                println!("{:?}", e);
                 eprintln!("\x01while setting up the build environment: {}", e);
                 1
               }
@@ -309,6 +319,20 @@ impl super::WorkerImpl for DerivationWorker<'_> {
 
     mount::mount(null, chroot_store.as_path(), null, MsFlags::MS_SHARED, null)?;
 
+    let mut extra_dirs = vec![];
+    if derivation.is_fixed_output() {
+      extra_dirs.push("/etc/resolv.conf");
+      fs::write(
+        self.chroot_root.join("etc").join("nsswitch.conf"),
+        "hosts: files dns\nservices: files\n",
+      )?;
+      extra_dirs.push("/etc/services");
+      extra_dirs.push("/etc/hosts");
+      if fs::metadata("/var/run/nscd/socket").is_ok() {
+        extra_dirs.push("/var/run/nscd/socket");
+      }
+    }
+
     for (target, dir) in self.dirs_in_chroot {
       let source = dir.path.as_path();
       if source.to_str() == Some("/proc") {
@@ -320,6 +344,16 @@ impl super::WorkerImpl for DerivationWorker<'_> {
           .chroot_root
           .join(Path::new(&target).strip_prefix("/").unwrap()),
         dir.optional,
+      )?;
+    }
+
+    for path in extra_dirs {
+      bind(
+        path,
+        self
+          .chroot_root
+          .join(Path::new(path).strip_prefix("/").unwrap()),
+        false,
       )?;
     }
 

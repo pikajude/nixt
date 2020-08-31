@@ -4,6 +4,7 @@ use crate::{
   prelude::*,
   store::{CheckSigsFlag, FileIngestionMethod, RepairFlag},
 };
+use std::sync::Once;
 
 mod cache;
 mod tar;
@@ -119,4 +120,45 @@ pub fn download_tarball(
   cache::CACHE.add(cache_key, info, &new_path, immutable)?;
 
   Ok(new_path)
+}
+
+pub fn fetchurl(derivation: &Derivation) -> Result<()> {
+  let store_path = derivation.get_env("out")?;
+  let main_url = derivation.get_env("url")?;
+  let unpack = derivation.env.get("unpack").map_or(false, |x| x == "1");
+
+  let response = ureq::get(main_url).call();
+
+  if !response.ok() {
+    bail!("fetchurl failed: {}", response.status_text());
+  }
+
+  if unpack {
+    crate::archive::restore_path(store_path, response.into_reader())?;
+  } else {
+    let mut f = fs::File::create(store_path)?;
+    std::io::copy(&mut response.into_reader(), &mut f)?;
+  }
+
+  if derivation.env.get("executable").map_or(false, |x| x == "1") {
+    fs::set_permissions(store_path, fs::Permissions::from_mode(0o755))?;
+  }
+
+  Ok(())
+}
+
+static PRELOAD_NSS: Once = Once::new();
+
+pub fn preload_nss() {
+  PRELOAD_NSS.call_once(|| {
+    if dns_lookup::getaddrinfo(
+      Some("invalid.domain.name.used.for.resolvers"),
+      Some("http"),
+      None,
+    )
+    .is_ok()
+    {
+      panic!("huh? this should have failed")
+    }
+  })
 }

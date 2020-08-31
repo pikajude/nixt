@@ -4,8 +4,13 @@ use downcast_rs::Downcast;
 use std::{
   collections::HashMap,
   fmt::Debug,
+  os::unix::io::RawFd,
   sync::{Arc, RwLock, Weak},
-  time::Instant,
+  time::{Duration, Instant},
+};
+use unix::{
+  poll::{poll, PollFd, PollFlags},
+  unistd::read,
 };
 mod derivation;
 
@@ -20,11 +25,17 @@ pub trait GoalLike: Downcast + Debug {
   fn work(&mut self, worker: &mut Worker) -> Result<Vec<Action>>;
   fn add_waiter(&mut self, ptr: &GoalPtr);
   fn key(&self) -> String;
+  fn handle_eof(&mut self) -> Result<Vec<Action>> {
+    todo!()
+  }
+  fn handle_output(&mut self, _: &[u8]) -> Result<Vec<Action>> {
+    todo!()
+  }
 }
 impl_downcast!(GoalLike);
 
 impl GoalLike for SubstitutionGoal {
-  fn work(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+  fn work(&mut self, _: &mut Worker) -> Result<Vec<Action>> {
     todo!()
   }
 
@@ -56,6 +67,9 @@ pub enum Action {
   Wakeup,
   WaitForAwhile,
   WaitForBuildSlot,
+  RegisterChild(Child),
+  ChildTerminated { wake_sleepers: bool },
+  BuildFailure(Error),
 }
 
 pub struct Worker {
@@ -64,7 +78,7 @@ pub struct Worker {
   top_goals: Vec<GoalPtr>,
   awake: Vec<WeakGoal>,
   wanting_to_build: Vec<WeakGoal>,
-  children: Vec<Child>,
+  children: Vec<ChildGoal>,
 
   local_builds: usize,
 
@@ -73,7 +87,7 @@ pub struct Worker {
   waiting_for_any_goals: Vec<WeakGoal>,
   waiting_for_awhile: Vec<WeakGoal>,
 
-  last_woken_up: Instant,
+  last_woken_up: Option<Instant>,
   path_contents_good_cache: HashMap<StorePath, bool>,
 }
 
@@ -90,7 +104,7 @@ impl Worker {
       substitution_goals: Default::default(),
       waiting_for_any_goals: Default::default(),
       waiting_for_awhile: Default::default(),
-      last_woken_up: Instant::now(),
+      last_woken_up: None,
       path_contents_good_cache: Default::default(),
     }
   }
@@ -173,24 +187,7 @@ impl Worker {
           let mut g_lock = goal.write().expect("unable to lock for writing");
           info!("working on: {}", g_lock.key());
           for req in g_lock.work(&mut self)? {
-            match req {
-              Action::AddToWaiters(w) => {
-                w.write().unwrap().add_waiter(&goal);
-              }
-              Action::Wakeup => {
-                self.awake.push(Arc::downgrade(&goal));
-              }
-              Action::WaitForAwhile => {
-                self.waiting_for_awhile.push(Arc::downgrade(&goal));
-              }
-              Action::WaitForBuildSlot => {
-                if self.local_builds < settings().max_build_jobs {
-                  self.awake.push(Arc::downgrade(&goal));
-                } else {
-                  self.wanting_to_build.push(Arc::downgrade(&goal));
-                }
-              }
-            }
+            self.act(&goal, req)?;
           }
           if self.top_goals.is_empty() {
             break;
@@ -203,7 +200,7 @@ impl Worker {
       }
 
       if !self.children.is_empty() || !self.waiting_for_awhile.is_empty() {
-        todo!("wait for input");
+        self.wait_for_input()?;
       } else {
         if self.awake.is_empty() && settings().max_build_jobs == 0 {
           todo!("check machines");
@@ -219,6 +216,174 @@ impl Worker {
 
     Ok(())
   }
+
+  fn wait_for_input(&mut self) -> Result<()> {
+    trace!("waiting for children");
+
+    let mut timeout = None;
+    let before = Instant::now();
+    let mut deadline = None;
+    if settings().min_free != 0 {
+      deadline = Some(before + Duration::from_secs(10));
+    }
+
+    for c in &self.children {
+      if !c.child.respect_timeouts {
+        continue;
+      }
+      if let Some(m) = settings().max_silent_time {
+        deadline = Some(try_min(deadline, c.last_output + m));
+      }
+      if let Some(b) = settings().timeout {
+        deadline = Some(try_min(deadline, c.started_at + b));
+      }
+    }
+
+    if let Some(d) = deadline {
+      timeout = Some(std::cmp::max(Duration::from_secs(1), d - before));
+    }
+
+    if !self.waiting_for_awhile.is_empty() {
+      if self.last_woken_up.map_or(true, |x| x > before) {
+        self.last_woken_up = Some(before);
+      }
+      timeout = Some(std::cmp::max(
+        Duration::from_secs(1),
+        self.last_woken_up.unwrap() + settings().poll_interval - before,
+      ));
+    } else {
+      self.last_woken_up = None;
+    }
+
+    if let Some(t) = timeout {
+      trace!("sleeping {:?}", t);
+    }
+
+    let mut poll_status = vec![];
+    let mut poll_ix = vec![];
+
+    for (i, c) in self.children.iter().enumerate() {
+      for (j, fd) in c.child.fds.iter().enumerate() {
+        poll_status.push(PollFd::new(*fd, PollFlags::POLLIN));
+        poll_ix.push((i, j));
+      }
+    }
+
+    poll(
+      &mut poll_status,
+      timeout.map_or(-1, |d| d.as_millis() as i32),
+    )?;
+
+    let after = Instant::now();
+
+    for (i, _) in poll_status
+      .into_iter()
+      .enumerate()
+      .filter(|(_, x)| x.revents().is_some())
+    {
+      let child_ix = poll_ix[i];
+      let child = &mut self.children[child_ix.0];
+      let child_fd = child.child.fds[child_ix.1];
+
+      let goal_ptr = child.goal.upgrade().unwrap();
+      let mut goal = goal_ptr.write().unwrap();
+
+      let mut buffer = vec![0u8; 4096];
+      let rd = read(child_fd, &mut buffer).or_else(|e| {
+        if e.as_errno() == Some(Errno::EIO) {
+          Ok(0)
+        } else {
+          Err(e)
+        }
+      })?;
+
+      let actions = if rd == 0 {
+        child.child.fds.retain(|x| *x != child_fd);
+        goal.handle_eof()?
+      } else {
+        trace!("{} read {} bytes", goal.key(), rd);
+        child.last_output = after;
+        goal.handle_output(&buffer[..rd])?
+      };
+
+      for act in actions {
+        self.act(&goal_ptr, act)?;
+      }
+    }
+
+    if !self.waiting_for_awhile.is_empty()
+      && self
+        .last_woken_up
+        .map_or(false, |l| l + settings().poll_interval <= after)
+    {
+      self.last_woken_up = Some(after);
+      for g in self.waiting_for_awhile.drain(..) {
+        if g.upgrade().is_some() {
+          self.awake.push(g);
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  fn act(&mut self, goal: &GoalPtr, act: Action) -> Result<()> {
+    match act {
+      Action::AddToWaiters(w) => {
+        w.write().unwrap().add_waiter(&goal);
+      }
+      Action::Wakeup => {
+        self.awake.push(Arc::downgrade(&goal));
+      }
+      Action::WaitForAwhile => {
+        self.waiting_for_awhile.push(Arc::downgrade(&goal));
+      }
+      Action::WaitForBuildSlot => {
+        if self.local_builds < settings().max_build_jobs {
+          self.awake.push(Arc::downgrade(&goal));
+        } else {
+          self.wanting_to_build.push(Arc::downgrade(&goal));
+        }
+      }
+      Action::RegisterChild(child) => {
+        let c = ChildGoal {
+          goal: Arc::downgrade(&goal),
+          goal2: Arc::as_ptr(&goal),
+          child,
+          last_output: Instant::now(),
+          started_at: Instant::now(),
+        };
+        if c.child.in_build_slot {
+          self.local_builds += 1;
+        }
+        self.children.push(c)
+      }
+      Action::ChildTerminated { wake_sleepers } => {
+        let goal_raw = Arc::as_ptr(&goal);
+        if let Some(i) = self.children.iter().position(|x| x.goal2 == goal_raw) {
+          let child = &self.children[i];
+          if child.child.in_build_slot {
+            assert!(self.local_builds > 0);
+            self.local_builds -= 1;
+          }
+          self.children.remove(i);
+          if wake_sleepers {
+            for ptr in self.wanting_to_build.drain(..) {
+              if ptr.upgrade().is_some() {
+                self.awake.push(ptr);
+              }
+            }
+          }
+        }
+      }
+      Action::BuildFailure(e) => bail!(e),
+    }
+    Ok(())
+  }
+}
+
+fn try_min<A: Ord + Copy>(lhs: Option<A>, rhs: A) -> A {
+  lhs.map_or(rhs, |x| std::cmp::min(x, rhs))
 }
 
 impl Drop for Worker {
@@ -232,9 +397,16 @@ impl Drop for Worker {
 }
 
 pub struct Child {
-  goal: WeakGoal,
   respect_timeouts: bool,
   in_build_slot: bool,
+  fds: Vec<RawFd>,
+}
+
+struct ChildGoal {
+  child: Child,
+  goal: WeakGoal,
+  // original nix has this, but idk what it does
+  goal2: *const RwLock<dyn GoalLike>,
   last_output: Instant,
   started_at: Instant,
 }

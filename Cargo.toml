@@ -11,6 +11,7 @@ codespan = "0.9.5"
 codespan-reporting = "0.9.5"
 derive_more = "0.99.9"
 dirs-next = "1.0.1"
+dns-lookup = "1.0.3"
 downcast-rs = "1.2.0"
 enum-as-inner = "0.3.3"
 gen-settings = { path = "gen-settings" }

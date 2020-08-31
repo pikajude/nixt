@@ -13,7 +13,8 @@ pub use std::{
   borrow::Cow,
   convert::TryInto as _,
   fs, io,
-  os::unix::fs::MetadataExt as _,
+  os::unix::fs::{MetadataExt as _, PermissionsExt as _},
   path::{Path, PathBuf},
   rc::Rc,
 };
+pub use unix::errno::Errno;

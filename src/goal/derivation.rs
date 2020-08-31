@@ -1,4 +1,4 @@
-use super::{Action, BuildMode, Child, GoalLike, GoalPtr, WeakGoal, Worker};
+use super::{Action, BuildMode, GoalLike, GoalPtr, WeakGoal, Worker};
 use crate::{
   prelude::*,
   sync::{fs_lock::PathLocks, user_lock::UserLock},
@@ -15,23 +15,12 @@ use std::{
 };
 use unix::{
   fcntl::OFlag,
-  pty::{self, PtyMaster},
+  pty,
   sys::{stat::Mode, termios},
   unistd,
 };
 #[cfg(target_os = "linux")] mod linux;
 #[cfg(target_os = "macos")] mod macos;
-
-trait GoalImpl {
-  fn setup_chroot(&mut self, store: &dyn Store) -> Result<()>;
-  fn exec_child(
-    &self,
-    store: &dyn Store,
-    read_side: PtyMaster,
-    write_side: i32,
-    sandbox_tmpdir: &PathBuf,
-  ) -> Result<Child>;
-}
 
 trait WorkerImpl {
   fn init_chroot(&self, store: &dyn Store, derivation: &Derivation) -> Result<()>;
@@ -41,9 +30,9 @@ trait WorkerImpl {
 enum State {
   GetDerivation,
   LoadDerivation,
-  HaveDerivation,
+  // HaveDerivation,
   OutputsSubstituted,
-  ClosureRepaired,
+  // ClosureRepaired,
   InputsRealised,
   TryToBuild,
   TryLocalBuild,
@@ -68,8 +57,12 @@ pub struct DerivationGoal {
   waitees: Vec<GoalPtr>,
   waiters: Vec<WeakGoal>,
 
+  log_size: usize,
+
   chroot_root: PathBuf,
   dirs_in_chroot: HashMap<String, ChrootDir>,
+
+  pid: Option<Pid>,
 }
 
 impl GoalLike for DerivationGoal {
@@ -79,6 +72,7 @@ impl GoalLike for DerivationGoal {
       State::LoadDerivation => self.load_derivation(worker),
       State::TryToBuild => self.try_to_build(worker),
       State::TryLocalBuild => self.try_local_build(worker),
+      State::BuildDone => self.build_done(worker),
       x => unimplemented!("{:?}", x),
     }
   }
@@ -89,6 +83,23 @@ impl GoalLike for DerivationGoal {
 
   fn key(&self) -> String {
     format!("b${}${}", self.drv_path.name, self.drv_path.to_string())
+  }
+
+  fn handle_output(&mut self, data: &[u8]) -> Result<Vec<Action>> {
+    self.log_size += data.len();
+    if settings().max_log_size.map_or(false, |x| self.log_size > x) {
+      bail!("{} killed after writing too much output", self.key());
+    }
+
+    for line in data.split(|x| *x == b'\n').filter(|x| !x.is_empty()) {
+      println!("{}: {}", self.key(), String::from_utf8_lossy(line));
+    }
+
+    Ok(vec![])
+  }
+
+  fn handle_eof(&mut self) -> Result<Vec<Action>> {
+    Ok(vec![Action::Wakeup])
   }
 }
 
@@ -106,6 +117,8 @@ impl DerivationGoal {
       build_mode,
       waitees: vec![],
       waiters: vec![],
+      log_size: 0,
+      pid: None,
     }
   }
 
@@ -247,6 +260,10 @@ impl DerivationGoal {
         settings().this_system,
         settings().system_features.iter().join(", ")
       )
+    }
+
+    if self.derivation.is_builtin() {
+      crate::fetch::preload_nss();
     }
 
     let sandbox_profile = if cfg!(target_os = "macos") {
@@ -430,11 +447,45 @@ impl DerivationGoal {
     termios::cfmakeraw(&mut term);
     termios::tcsetattr(write_side, termios::SetArg::TCSANOW, &term)?;
 
-    if use_chroot {
-      self.exec_child(store, read_side, write_side, sandbox_tmpdir)?;
+    let actions = if use_chroot {
+      self.exec_child(store, read_side, write_side, sandbox_tmpdir)?
+    } else {
+      bail!("not implemented: building outside chroot")
+    };
+
+    // this is important, because otherwise the worker loop will not get EOF
+    unistd::close(write_side)?;
+    self.state = State::BuildDone;
+    Ok(actions)
+  }
+
+  fn build_done(&mut self, worker: &mut Worker) -> Result<Vec<Action>> {
+    let mut acts = vec![Action::ChildTerminated {
+      wake_sleepers: false,
+    }];
+    trace!("build done");
+
+    let status = self
+      .pid
+      .take()
+      .expect("pid not set in build_done()")
+      .kill()?;
+
+    debug!(
+      "builder process for `{}' finished",
+      worker.store.print_store_path(&self.drv_path)
+    );
+
+    if let Some(ref u) = self.build_user {
+      u.kill()?;
     }
 
-    bail!("not implemented: building outside chroot")
+    if status != 0 {
+      acts.push(Action::BuildFailure(anyhow!("something went wrong")));
+      return Ok(acts);
+    }
+
+    Ok(acts)
   }
 
   fn init_env(
@@ -528,6 +579,22 @@ impl<'a> DerivationWorker<'a> {
     unistd::chdir(sandbox_tmpdir)
       .with_context(|| format!("trying to move into tmpdir `{}'", sandbox_tmpdir.display()))?;
 
+    // see comment below
+    eprintln!("\x01");
+
+    if derivation.is_builtin() {
+      if derivation.builder.to_str() == Some("builtin:fetchurl") {
+        if let Err(e) = crate::fetch::fetchurl(&derivation) {
+          // bail!() after the println above will be reported as an "error setting up the
+          // build environment"
+          eprintln!("error: {}", e.to_string());
+          std::process::exit(1);
+        }
+      } else {
+        bail!("unknown builtin: {}", derivation.builder.display());
+      }
+    }
+
     let mut cmd = std::process::Command::new(derivation.builder.as_os_str());
 
     cmd.arg0(
@@ -537,9 +604,6 @@ impl<'a> DerivationWorker<'a> {
         .expect("builder should always have a filename"),
     );
     cmd.args(derivation.args.iter());
-    println!("{:?}", &cmd);
-
-    eprintln!("\x01");
 
     bail!(cmd.exec())
   }

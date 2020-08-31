@@ -61,6 +61,14 @@ impl Derivation {
     self.outputs.len() == 1 && self.outputs.get("out").map_or(false, |x| x.hash.is_some())
   }
 
+  pub fn get_env(&self, key: &str) -> Result<&str> {
+    self
+      .env
+      .get(key)
+      .ok_or_else(|| anyhow!("attribute `{}' missing", key))
+      .map(|x| &**x)
+  }
+
   pub fn name_from_path(path: &StorePath) -> Result<String> {
     path
       .name

@@ -15,7 +15,7 @@ use std::{
   fs,
   io::Write,
   iter,
-  os::unix::{fs::*, io::AsRawFd},
+  os::unix::io::AsRawFd,
   path::{Path, PathBuf},
   rc::Rc,
   sync::{Arc, Mutex},
@@ -240,6 +240,8 @@ impl LocalStore {
     if cfg!(test) {
       let _ = pretty_env_logger::try_init();
     }
+
+    crate::globals::init()?;
 
     let settings = settings();
 
