@@ -4,7 +4,8 @@ use crate::{
   prelude::*,
   store::{CheckSigsFlag, FileIngestionMethod, RepairFlag},
 };
-use std::sync::Once;
+use rustls::{ClientConfig, ServerCertVerifier};
+use std::sync::{Arc, Once};
 
 mod cache;
 mod tar;
@@ -127,18 +128,31 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
   let main_url = derivation.get_env("url")?;
   let unpack = derivation.env.get("unpack").map_or(false, |x| x == "1");
 
-  let response = ureq::get(main_url).call();
+  eprintln!("fetching URL `{}'", main_url);
+
+  let response = ureq::get(main_url)
+    .set_tls_config(Arc::clone(&*NOVERIFY_CONFIG))
+    .call();
 
   if !response.ok() {
     bail!("fetchurl failed: {}", response.status_text());
   }
 
+  eprintln!(
+    "response size: {}",
+    response.header("content-length").unwrap_or("unknown")
+  );
+
   if unpack {
     crate::archive::restore_path(store_path, response.into_reader())?;
   } else {
-    let mut f = fs::File::create(store_path)?;
-    std::io::copy(&mut response.into_reader(), &mut f)?;
+    std::io::copy(
+      &mut response.into_reader(),
+      &mut fs::File::create(store_path)?,
+    )?;
   }
+
+  eprintln!("finished fetching file");
 
   if derivation.env.get("executable").map_or(false, |x| x == "1") {
     fs::set_permissions(store_path, fs::Permissions::from_mode(0o755))?;
@@ -161,4 +175,27 @@ pub fn preload_nss() {
       panic!("huh? this should have failed")
     }
   })
+}
+
+lazy_static! {
+  static ref NOVERIFY_CONFIG: Arc<ClientConfig> = {
+    struct NoVerify;
+
+    // cert verification is irrelevant for fixed-output derivations, because we already know the expected hash of the contents.
+    impl ServerCertVerifier for NoVerify {
+      fn verify_server_cert(
+        &self,
+        _: &rustls::RootCertStore,
+        _: &[rustls::Certificate],
+        _: webpki::DNSNameRef,
+        _: &[u8],
+      ) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
+        Ok(rustls::ServerCertVerified::assertion())
+      }
+    }
+
+    let mut cfg = ClientConfig::new();
+    cfg.dangerous().set_certificate_verifier(Arc::new(NoVerify));
+    Arc::new(cfg)
+  };
 }

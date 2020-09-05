@@ -234,7 +234,7 @@ impl DerivationGoal {
         let stack = unsafe { std::slice::from_raw_parts_mut(stack, stack_size) };
         let child = sched::clone(
           Box::new(move || {
-            match (DerivationWorker {
+            if let Err(e) = (DerivationWorker {
               use_chroot: true,
               chroot_root: self.chroot_root.clone(),
               sandbox_tmpdir: sandbox_tmpdir.to_path_buf(),
@@ -244,12 +244,9 @@ impl DerivationGoal {
             }
             .run(store, &self.derivation))
             {
-              Ok(()) => 0,
-              Err(e) => {
-                eprintln!("\x01while setting up the build environment: {}", e);
-                1
-              }
+              eprintln!("\x01while setting up the build environment: {}", e);
             }
+            1
           }),
           stack,
           CloneFlags::CLONE_NEWUSER

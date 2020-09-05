@@ -14,7 +14,7 @@ fn test_basic_build() -> Result<()> {
   let paths = vec![PathWithOutputs {
     path: eval.store.parse_store_path(Path::new(
       "/home/jude/.code/rust/rnix/target/debug/build/rnix-9da108a7a9a129ee/out/nix/store/\
-       l10kwqwyin8d008l710rmiprxp2dgvq9-hello-2.10.drv",
+       iw2rqkkhgx814w3nwbb02ss5dgxnimyd-hello-2.10.drv",
     ))?,
     outputs: std::iter::once("out".to_string()).collect(),
   }];

@@ -472,8 +472,9 @@ impl DerivationGoal {
       .kill()?;
 
     debug!(
-      "builder process for `{}' finished",
-      worker.store.print_store_path(&self.drv_path)
+      "builder process for `{}' finished: {}",
+      worker.store.print_store_path(&self.drv_path),
+      status
     );
 
     if let Some(ref u) = self.build_user {
@@ -583,15 +584,17 @@ impl<'a> DerivationWorker<'a> {
     eprintln!("\x01");
 
     if derivation.is_builtin() {
-      if derivation.builder.to_str() == Some("builtin:fetchurl") {
-        if let Err(e) = crate::fetch::fetchurl(&derivation) {
-          // bail!() after the println above will be reported as an "error setting up the
-          // build environment"
-          eprintln!("error: {}", e.to_string());
-          std::process::exit(1);
+      let maybe_failure: Result<()> = try {
+        if derivation.builder.to_str() == Some("builtin:fetchurl") {
+          crate::fetch::fetchurl(&derivation)?;
+        } else {
+          bail!("unknown builtin: {}", derivation.builder.display());
         }
-      } else {
-        bail!("unknown builtin: {}", derivation.builder.display());
+        std::process::exit(0);
+      };
+      if let Err(e) = maybe_failure {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
       }
     }
 
