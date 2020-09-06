@@ -22,10 +22,6 @@ use unix::{
 #[cfg(target_os = "linux")] mod linux;
 #[cfg(target_os = "macos")] mod macos;
 
-trait WorkerImpl {
-  fn init_chroot(&self, store: &dyn Store, derivation: &Derivation) -> Result<()>;
-}
-
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
 enum State {
   GetDerivation,
@@ -541,6 +537,8 @@ impl DerivationGoal {
 
 struct DerivationWorker<'a> {
   use_chroot: bool,
+  private_network: bool,
+  user_namespace_sync: (RawFd, RawFd),
   chroot_root: PathBuf,
   sandbox_tmpdir: PathBuf,
   dirs_in_chroot: &'a HashMap<String, ChrootDir>,

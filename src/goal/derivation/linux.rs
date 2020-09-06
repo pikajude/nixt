@@ -12,6 +12,7 @@ use std::{
   },
 };
 use unix::{
+  fcntl::OFlag,
   mount::{self, MntFlags, MsFlags},
   pty::PtyMaster,
   sched::{self, CloneFlags},
@@ -145,6 +146,7 @@ impl DerivationGoal {
     write_side: i32,
     sandbox_tmpdir: &PathBuf,
   ) -> Result<Vec<Action>> {
+    let (user_ns_read, user_ns_write) = unistd::pipe2(OFlag::O_CLOEXEC)?;
     match unistd::fork()? {
       unistd::ForkResult::Parent { child } => match wait::waitpid(child, None)? {
         wait::WaitStatus::Exited(_, 0) => {
@@ -159,6 +161,8 @@ impl DerivationGoal {
           };
 
           child_pid.set_separate_pg(true);
+
+          unistd::close(user_ns_read)?;
 
           let host_uid = self.build_user.as_ref().map_or(unistd::getuid(), |x| x.uid);
           let host_gid = self.build_user.as_ref().map_or(unistd::getgid(), |x| x.gid);
@@ -179,6 +183,9 @@ impl DerivationGoal {
             .read(true)
             .write(false)
             .open(format!("/proc/{}/ns/mnt", child_pid.pid))?;
+
+          unistd::write(user_ns_write, b"1")?;
+          unistd::close(user_ns_write)?;
 
           self.pid = Some(child_pid);
 
@@ -232,10 +239,21 @@ impl DerivationGoal {
           .cast::<u8>()
         };
         let stack = unsafe { std::slice::from_raw_parts_mut(stack, stack_size) };
+        let mut flags = CloneFlags::CLONE_NEWUSER
+          | CloneFlags::CLONE_NEWPID
+          | CloneFlags::CLONE_NEWNS
+          | CloneFlags::CLONE_NEWIPC
+          | CloneFlags::CLONE_NEWUTS
+          | CloneFlags::CLONE_PARENT;
+        if false {
+          flags |= CloneFlags::CLONE_NEWNET;
+        }
         let child = sched::clone(
           Box::new(move || {
             if let Err(e) = (DerivationWorker {
               use_chroot: true,
+              private_network: false,
+              user_namespace_sync: (user_ns_read, user_ns_write),
               chroot_root: self.chroot_root.clone(),
               sandbox_tmpdir: sandbox_tmpdir.to_path_buf(),
               dirs_in_chroot: &self.dirs_in_chroot,
@@ -249,12 +267,7 @@ impl DerivationGoal {
             1
           }),
           stack,
-          CloneFlags::CLONE_NEWUSER
-            | CloneFlags::CLONE_NEWPID
-            | CloneFlags::CLONE_NEWNS
-            | CloneFlags::CLONE_NEWIPC
-            | CloneFlags::CLONE_NEWUTS
-            | CloneFlags::CLONE_PARENT,
+          flags,
           Some(libc::SIGCHLD),
         )?;
 
@@ -267,16 +280,26 @@ impl DerivationGoal {
   }
 }
 
-impl super::WorkerImpl for DerivationWorker<'_> {
-  fn init_chroot(&self, store: &dyn Store, derivation: &Derivation) -> Result<()> {
-    let sock = socket::socket(
-      socket::AddressFamily::Inet,
-      socket::SockType::Datagram,
-      socket::SockFlag::empty(),
-      None,
-    )?;
+impl DerivationWorker<'_> {
+  pub fn init_chroot(&self, store: &dyn Store, derivation: &Derivation) -> Result<()> {
+    unistd::close(self.user_namespace_sync.1)?;
 
-    if false {
+    let mut buf = [0u8; 1];
+
+    if unistd::read(self.user_namespace_sync.0, &mut buf)? != 1 || &buf != b"1" {
+      bail!("user namespace initialization failed");
+    }
+
+    unistd::close(self.user_namespace_sync.0)?;
+
+    if self.private_network {
+      let sock = socket::socket(
+        socket::AddressFamily::Inet,
+        socket::SockType::Datagram,
+        socket::SockFlag::empty(),
+        None,
+      )?;
+
       netdevice::set_flags(
         sock,
         "lo",
