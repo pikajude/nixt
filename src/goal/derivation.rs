@@ -3,6 +3,7 @@ use crate::{
   prelude::*,
   sync::{fs_lock::PathLocks, user_lock::UserLock},
 };
+use ipc_channel::ipc::IpcReceiver;
 use settings::SandboxMode;
 use std::{
   collections::{BTreeSet, HashMap, HashSet},
@@ -538,7 +539,7 @@ impl DerivationGoal {
 struct DerivationWorker<'a> {
   use_chroot: bool,
   private_network: bool,
-  user_namespace_sync: (RawFd, RawFd),
+  user_ns_sync: IpcReceiver<()>,
   chroot_root: PathBuf,
   sandbox_tmpdir: PathBuf,
   dirs_in_chroot: &'a HashMap<String, ChrootDir>,

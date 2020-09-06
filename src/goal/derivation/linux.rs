@@ -12,7 +12,6 @@ use std::{
   },
 };
 use unix::{
-  fcntl::OFlag,
   mount::{self, MntFlags, MsFlags},
   pty::PtyMaster,
   sched::{self, CloneFlags},
@@ -146,7 +145,8 @@ impl DerivationGoal {
     write_side: i32,
     sandbox_tmpdir: &PathBuf,
   ) -> Result<Vec<Action>> {
-    let (user_ns_read, user_ns_write) = unistd::pipe2(OFlag::O_CLOEXEC)?;
+    let (ns_send, ns_receive) = ipc_channel::ipc::channel()?;
+
     match unistd::fork()? {
       unistd::ForkResult::Parent { child } => match wait::waitpid(child, None)? {
         wait::WaitStatus::Exited(_, 0) => {
@@ -161,8 +161,6 @@ impl DerivationGoal {
           };
 
           child_pid.set_separate_pg(true);
-
-          unistd::close(user_ns_read)?;
 
           let host_uid = self.build_user.as_ref().map_or(unistd::getuid(), |x| x.uid);
           let host_gid = self.build_user.as_ref().map_or(unistd::getgid(), |x| x.gid);
@@ -184,8 +182,7 @@ impl DerivationGoal {
             .write(false)
             .open(format!("/proc/{}/ns/mnt", child_pid.pid))?;
 
-          unistd::write(user_ns_write, b"1")?;
-          unistd::close(user_ns_write)?;
+          ns_send.send(())?;
 
           self.pid = Some(child_pid);
 
@@ -248,12 +245,13 @@ impl DerivationGoal {
         if false {
           flags |= CloneFlags::CLONE_NEWNET;
         }
+        let mut user_ns_sync = Some(ns_receive);
         let child = sched::clone(
           Box::new(move || {
             if let Err(e) = (DerivationWorker {
               use_chroot: true,
               private_network: false,
-              user_namespace_sync: (user_ns_read, user_ns_write),
+              user_ns_sync: user_ns_sync.take().unwrap(),
               chroot_root: self.chroot_root.clone(),
               sandbox_tmpdir: sandbox_tmpdir.to_path_buf(),
               dirs_in_chroot: &self.dirs_in_chroot,
@@ -282,15 +280,9 @@ impl DerivationGoal {
 
 impl DerivationWorker<'_> {
   pub fn init_chroot(&self, store: &dyn Store, derivation: &Derivation) -> Result<()> {
-    unistd::close(self.user_namespace_sync.1)?;
-
-    let mut buf = [0u8; 1];
-
-    if unistd::read(self.user_namespace_sync.0, &mut buf)? != 1 || &buf != b"1" {
+    if self.user_ns_sync.recv().is_err() {
       bail!("user namespace initialization failed");
     }
-
-    unistd::close(self.user_namespace_sync.0)?;
 
     if self.private_network {
       let sock = socket::socket(
