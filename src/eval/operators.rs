@@ -161,10 +161,9 @@ pub fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
       }
       true
     }
-    (Value::Lambda { .. }, _)
-    | (Value::Primop(_), _)
-    | (_, Value::Lambda { .. })
-    | (_, Value::Primop(_)) => false,
+    (Value::Lambda { .. } | Value::Primop(_), _) | (_, Value::Lambda { .. } | Value::Primop(_)) => {
+      false
+    }
     (x, y) => bail!("cannot compare {} with {}", x.typename(), y.typename()),
   })
 }

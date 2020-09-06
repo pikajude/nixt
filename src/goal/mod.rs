@@ -84,11 +84,11 @@ pub struct Worker {
 
   derivation_goals: WeakGoalMap,
   substitution_goals: WeakGoalMap,
-  waiting_for_any_goals: Vec<WeakGoal>,
+  _waiting_for_any_goals: Vec<WeakGoal>,
   waiting_for_awhile: Vec<WeakGoal>,
 
   last_woken_up: Option<Instant>,
-  path_contents_good_cache: HashMap<StorePath, bool>,
+  _path_contents_good_cache: HashMap<StorePath, bool>,
 }
 
 impl Worker {
@@ -102,10 +102,10 @@ impl Worker {
       local_builds: 0,
       derivation_goals: Default::default(),
       substitution_goals: Default::default(),
-      waiting_for_any_goals: Default::default(),
+      _waiting_for_any_goals: Default::default(),
       waiting_for_awhile: Default::default(),
       last_woken_up: None,
-      path_contents_good_cache: Default::default(),
+      _path_contents_good_cache: Default::default(),
     }
   }
 

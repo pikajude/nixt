@@ -1,4 +1,4 @@
-use rnix::{eval::Eval, util::*};
+use rix::{eval::Eval, util::*};
 
 #[test]
 fn test_basic_eval() -> Result<()> {

@@ -1,8 +1,8 @@
 #[macro_use] extern crate log;
 
-use rnix::eval::Eval;
+use rix::eval::Eval;
 
-fn main() -> rnix::util::Result<()> {
+fn main() -> rix::util::Result<()> {
   pretty_env_logger::init();
 
   let eval = Eval::new()?;

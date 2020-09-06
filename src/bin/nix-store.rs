@@ -1,4 +1,4 @@
-use rnix::{store::*, util::*};
+use rix::{store::*, util::*};
 use std::{path::PathBuf, sync::Arc};
 use structopt::StructOpt;
 
@@ -21,7 +21,7 @@ fn main() -> Result<()> {
       let targets = buildables
         .into_iter()
         .map(|path| {
-          Ok(rnix::path::PathWithOutputs {
+          Ok(rix::path::PathWithOutputs {
             path: store.parse_store_path(&path.canonicalize()?)?,
             outputs: Default::default(),
           })

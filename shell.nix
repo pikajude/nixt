@@ -1,10 +1,10 @@
 with import <nixpkgs> { };
 mkShell {
-  name = "rnix";
+  name = "rix";
   inputsFrom = [
     (import ../../nix/nix).packages.${builtins.currentSystem}.nix
   ];
   buildInputs = [ cargo-udeps ];
   RUST_LIB_BACKTRACE = true;
-  RUST_LOG = "rnix=info";
+  RUST_LOG = "rix=info";
 }

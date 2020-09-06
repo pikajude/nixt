@@ -4,6 +4,7 @@
 #![feature(duration_zero)]
 #![feature(fn_traits)]
 #![feature(pattern)]
+#![feature(or_patterns)]
 #![feature(try_blocks)]
 #![feature(type_name_of_val)]
 #![feature(unboxed_closures)]

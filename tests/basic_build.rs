@@ -1,7 +1,7 @@
 #![feature(map_first_last)]
 
 #[macro_use] extern crate log;
-use rnix::{eval::Eval, path::PathWithOutputs, util::*};
+use rix::{eval::Eval, path::PathWithOutputs, util::*};
 use std::path::Path;
 
 #[test]
@@ -13,8 +13,8 @@ fn test_basic_build() -> Result<()> {
 
   let paths = vec![PathWithOutputs {
     path: eval.store.parse_store_path(Path::new(
-      "/home/jude/.code/rust/rnix/target/debug/build/rnix-9da108a7a9a129ee/out/nix/store/\
-       iw2rqkkhgx814w3nwbb02ss5dgxnimyd-hello-2.10.drv",
+      "/home/jude/.code/rust/rix/target/debug/build/rix-fd8dabb2b740078e/out/nix/store/\
+       4ym3mblphhnk4n39kdc9zndwh7qa8j2q-hello-2.10.drv",
     ))?,
     outputs: std::iter::once("out".to_string()).collect(),
   }];
