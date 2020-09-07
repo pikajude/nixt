@@ -9,12 +9,12 @@ fn test_basic_build() -> Result<()> {
   std::env::set_var("NIX_TEST", "1");
   pretty_env_logger::init();
 
-  let eval = Eval::new().unwrap();
+  let eval = Eval::new()?;
 
   let paths = vec![PathWithOutputs {
     path: eval.store.parse_store_path(Path::new(
-      "/home/jude/.code/rust/rix/target/debug/build/rix-fd8dabb2b740078e/out/nix/store/\
-       4ym3mblphhnk4n39kdc9zndwh7qa8j2q-hello-2.10.drv",
+      "/home/jude/.code/rust/rix/target/debug/build/rix-1152623a555af3cd/out/nix/store/\
+       2khm01c4ryc52wi7gdbyjd93v7iz2y8b-hello-2.10.drv",
     ))?,
     outputs: std::iter::once("out".to_string()).collect(),
   }];

@@ -111,7 +111,6 @@ fn test_sink() -> io::Result<()> {
 #[as_ref(forward)]
 pub struct AutoDelete(pub PathBuf);
 
-/*
 impl Drop for AutoDelete {
   fn drop(&mut self) {
     let status: Result<()> = try {
@@ -127,7 +126,6 @@ impl Drop for AutoDelete {
     }
   }
 }
-*/
 
 impl NixPath for AutoDelete {
   fn is_empty(&self) -> bool {

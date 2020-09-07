@@ -3,16 +3,14 @@ use crate::{
   prelude::*,
   sync::{fs_lock::PathLocks, user_lock::UserLock},
 };
+use indicatif::ProgressBar;
 use ipc_channel::ipc::IpcReceiver;
 use settings::SandboxMode;
 use std::{
   collections::{BTreeSet, HashMap, HashSet},
   io::ErrorKind::AlreadyExists,
   os::unix::{fs::PermissionsExt, io::AsRawFd, prelude::*, process::CommandExt},
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-  },
+  sync::atomic::{AtomicUsize, Ordering},
 };
 use unix::{
   fcntl::OFlag,
@@ -56,7 +54,7 @@ pub struct DerivationGoal {
 
   log_size: usize,
 
-  chroot_root: PathBuf,
+  chroot_root: AutoDelete,
   dirs_in_chroot: HashMap<String, ChrootDir>,
 
   pid: Option<Pid>,
@@ -75,21 +73,25 @@ impl GoalLike for DerivationGoal {
   }
 
   fn add_waiter(&mut self, ptr: &GoalPtr) {
-    self.waiters.push(Arc::downgrade(ptr))
+    self.waiters.push(Rc::downgrade(ptr))
   }
 
   fn key(&self) -> String {
     format!("b${}${}", self.drv_path.name, self.drv_path.to_string())
   }
 
-  fn handle_output(&mut self, data: &[u8]) -> Result<Vec<Action>> {
+  fn name(&self) -> Cow<str> {
+    Cow::Borrowed(&self.drv_path.name)
+  }
+
+  fn handle_output(&mut self, progress: &ProgressBar, data: &[u8]) -> Result<Vec<Action>> {
     self.log_size += data.len();
     if settings().max_log_size.map_or(false, |x| self.log_size > x) {
       bail!("{} killed after writing too much output", self.key());
     }
 
     for line in data.split(|x| *x == b'\n').filter(|x| !x.is_empty()) {
-      println!("{}: {}", self.key(), String::from_utf8_lossy(line));
+      progress.println(format!("{}: {}", self.key(), String::from_utf8_lossy(line)));
     }
 
     Ok(vec![])
@@ -97,6 +99,18 @@ impl GoalLike for DerivationGoal {
 
   fn handle_eof(&mut self) -> Result<Vec<Action>> {
     Ok(vec![Action::Wakeup])
+  }
+
+  fn waiters(&self) -> &[WeakGoal] {
+    &self.waiters
+  }
+
+  fn waitee_done(&mut self, ptr: &GoalPtr) -> Result<Vec<Action>> {
+    self.waitees.retain(|x| !Rc::ptr_eq(x, ptr));
+    if self.waitees.is_empty() {
+      return Ok(vec![Action::Wakeup]);
+    }
+    Ok(vec![])
   }
 }
 
@@ -106,7 +120,7 @@ impl DerivationGoal {
       state: State::GetDerivation,
       derivation: Derivation::default(),
       drv_path: path,
-      chroot_root: PathBuf::from("/no-such-path"),
+      chroot_root: AutoDelete(PathBuf::from("/no-such-path")),
       build_user: None,
       closure: BTreeSet::default(),
       dirs_in_chroot: HashMap::new(),
@@ -130,7 +144,7 @@ impl DerivationGoal {
       self.load_derivation(worker)
     } else {
       let waitee = worker.make_substitution_goal(self.drv_path.clone(), false)?;
-      self.waitees.push(Arc::clone(&waitee));
+      self.waitees.push(Rc::clone(&waitee));
       self.state = State::LoadDerivation;
       Ok(vec![Action::AddToWaiters(waitee)])
     }
@@ -171,7 +185,7 @@ impl DerivationGoal {
     for (path, wanted_outputs) in &self.derivation.input_derivations {
       let goal =
         worker.make_derivation_goal(path.clone(), wanted_outputs.clone(), self.build_mode)?;
-      self.waitees.push(Arc::clone(&goal));
+      self.waitees.push(Rc::clone(&goal));
       needed.push(Action::AddToWaiters(goal));
     }
 
@@ -187,7 +201,7 @@ impl DerivationGoal {
         );
       }
       let goal = worker.make_substitution_goal(item.clone(), false)?;
-      self.waitees.push(Arc::clone(&goal));
+      self.waitees.push(Rc::clone(&goal));
       needed.push(Action::AddToWaiters(goal));
     }
 
@@ -479,7 +493,7 @@ impl DerivationGoal {
     }
 
     if status != 0 {
-      acts.push(Action::BuildFailure(anyhow!("something went wrong")));
+      acts.push(Action::Done(Some(anyhow!("something went wrong"))));
       return Ok(acts);
     }
 

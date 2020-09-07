@@ -35,7 +35,7 @@ fn get_personality() -> Result<Personality> {
 
 impl DerivationGoal {
   pub fn setup_chroot(&mut self, store: &dyn Store) -> Result<()> {
-    self.chroot_root = store.to_real_path(&self.drv_path)?.with_extension("chroot");
+    self.chroot_root = AutoDelete(store.to_real_path(&self.drv_path)?.with_extension("chroot"));
 
     debug!(
       "setting up chroot environment in `{}'",

@@ -1,11 +1,14 @@
 use crate::{prelude::*, store::LocalStore};
 use derivation::DerivationGoal;
 use downcast_rs::Downcast;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::{
+  cell::RefCell,
   collections::HashMap,
   fmt::Debug,
   os::unix::io::RawFd,
-  sync::{Arc, RwLock, Weak},
+  rc::Weak,
+  sync::Arc,
   time::{Duration, Instant},
 };
 use unix::{
@@ -24,11 +27,14 @@ pub enum BuildMode {
 pub trait GoalLike: Downcast + Debug {
   fn work(&mut self, worker: &mut Worker) -> Result<Vec<Action>>;
   fn add_waiter(&mut self, ptr: &GoalPtr);
+  fn waitee_done(&mut self, ptr: &GoalPtr) -> Result<Vec<Action>>;
+  fn waiters(&self) -> &[WeakGoal];
   fn key(&self) -> String;
+  fn name(&self) -> Cow<str>;
   fn handle_eof(&mut self) -> Result<Vec<Action>> {
     todo!()
   }
-  fn handle_output(&mut self, _: &[u8]) -> Result<Vec<Action>> {
+  fn handle_output(&mut self, _: &ProgressBar, _: &[u8]) -> Result<Vec<Action>> {
     todo!()
   }
 }
@@ -40,10 +46,22 @@ impl GoalLike for SubstitutionGoal {
   }
 
   fn add_waiter(&mut self, ptr: &GoalPtr) {
-    self.waiters.push(Arc::downgrade(ptr))
+    self.waiters.push(Rc::downgrade(ptr))
   }
 
   fn key(&self) -> String {
+    todo!()
+  }
+
+  fn name(&self) -> Cow<str> {
+    todo!()
+  }
+
+  fn waiters(&self) -> &[WeakGoal] {
+    &self.waiters
+  }
+
+  fn waitee_done(&mut self, _: &GoalPtr) -> Result<Vec<Action>> {
     todo!()
   }
 }
@@ -56,10 +74,10 @@ pub struct SubstitutionGoal {
   pub waiters: Vec<WeakGoal>,
 }
 
-type Shared<T> = Arc<RwLock<T>>;
+type Shared<T> = Rc<RefCell<T>>;
 
 type GoalPtr = Shared<dyn GoalLike>;
-type WeakGoal = Weak<RwLock<dyn GoalLike>>;
+type WeakGoal = Weak<RefCell<dyn GoalLike>>;
 type WeakGoalMap = HashMap<StorePath, WeakGoal>;
 
 pub enum Action {
@@ -69,11 +87,13 @@ pub enum Action {
   WaitForBuildSlot,
   RegisterChild(Child),
   ChildTerminated { wake_sleepers: bool },
-  BuildFailure(Error),
+  Done(Option<Error>),
 }
 
 pub struct Worker {
   store: Arc<LocalStore>,
+
+  progress: ProgressBar,
 
   top_goals: Vec<GoalPtr>,
   awake: Vec<WeakGoal>,
@@ -93,8 +113,14 @@ pub struct Worker {
 
 impl Worker {
   pub fn new(store: Arc<LocalStore>) -> Self {
+    let prog = ProgressBar::new(0);
+    prog.set_style(
+      ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {wide_bar} {pos:>7}/{len:7} {msg}"),
+    );
     Self {
       store,
+      progress: prog,
       top_goals: Default::default(),
       awake: Default::default(),
       wanting_to_build: Default::default(),
@@ -127,23 +153,19 @@ impl Worker {
           &path
         )
       })?;
-      match upgraded
-        .write()
-        .expect("unable to write")
-        .downcast_mut::<DerivationGoal>()
-      {
+      match upgraded.borrow_mut().downcast_mut::<DerivationGoal>() {
         Some(d) => d.add_wanted_outputs(wanted_outputs),
         _ => bail!("incompatible goal type"),
       }
       Ok(upgraded)
     } else {
-      let mk_goal: Shared<dyn GoalLike> = Arc::new(RwLock::new(DerivationGoal::new(
+      let mk_goal: Shared<dyn GoalLike> = Rc::new(RefCell::new(DerivationGoal::new(
         path.clone(),
         wanted_outputs.into_iter().collect(),
         build_mode,
       )));
-      self.derivation_goals.insert(path, Arc::downgrade(&mk_goal));
-      self.wake_up(Arc::downgrade(&mk_goal));
+      self.derivation_goals.insert(path, Rc::downgrade(&mk_goal));
+      self.wake_up(Rc::downgrade(&mk_goal));
       Ok(mk_goal)
     }
   }
@@ -157,7 +179,7 @@ impl Worker {
         )
       })
     } else {
-      let mk_goal: Shared<dyn GoalLike> = Arc::new(RwLock::new(SubstitutionGoal {
+      let mk_goal: Shared<dyn GoalLike> = Rc::new(RefCell::new(SubstitutionGoal {
         path: path.clone(),
         repair,
         waitees: vec![],
@@ -165,8 +187,8 @@ impl Worker {
       }));
       self
         .substitution_goals
-        .insert(path, Arc::downgrade(&mk_goal));
-      self.wake_up(Arc::downgrade(&mk_goal));
+        .insert(path, Rc::downgrade(&mk_goal));
+      self.wake_up(Rc::downgrade(&mk_goal));
       Ok(mk_goal)
     }
   }
@@ -182,9 +204,9 @@ impl Worker {
             awake2.push(x);
           }
         }
-        awake2.sort_unstable_by_key(|g| g.read().unwrap().key());
+        awake2.sort_unstable_by_key(|g| g.borrow().key());
         for goal in awake2 {
-          let mut g_lock = goal.write().expect("unable to lock for writing");
+          let mut g_lock = goal.borrow_mut();
           info!("working on: {}", g_lock.key());
           for req in g_lock.work(&mut self)? {
             self.act(&goal, req)?;
@@ -286,7 +308,7 @@ impl Worker {
       let child_fd = child.child.fds[child_ix.1];
 
       let goal_ptr = child.goal.upgrade().unwrap();
-      let mut goal = goal_ptr.write().unwrap();
+      let mut goal = goal_ptr.borrow_mut();
 
       let mut buffer = vec![0u8; 4096];
       let rd = read(child_fd, &mut buffer).or_else(|e| {
@@ -301,9 +323,10 @@ impl Worker {
         child.child.fds.retain(|x| *x != child_fd);
         goal.handle_eof()?
       } else {
-        trace!("{} read {} bytes", goal.key(), rd);
+        trace!("{} read {} bytes", goal.name(), rd);
         child.last_output = after;
-        goal.handle_output(&buffer[..rd])?
+        self.progress.set_message(&goal.name());
+        goal.handle_output(&self.progress, &buffer[..rd])?
       };
 
       for act in actions {
@@ -330,25 +353,26 @@ impl Worker {
   fn act(&mut self, goal: &GoalPtr, act: Action) -> Result<()> {
     match act {
       Action::AddToWaiters(w) => {
-        w.write().unwrap().add_waiter(&goal);
+        w.borrow_mut().add_waiter(&goal);
       }
       Action::Wakeup => {
-        self.awake.push(Arc::downgrade(&goal));
+        self.progress.inc_length(2);
+        self.awake.push(Rc::downgrade(&goal));
       }
       Action::WaitForAwhile => {
-        self.waiting_for_awhile.push(Arc::downgrade(&goal));
+        self.waiting_for_awhile.push(Rc::downgrade(&goal));
       }
       Action::WaitForBuildSlot => {
         if self.local_builds < settings().max_build_jobs {
-          self.awake.push(Arc::downgrade(&goal));
+          self.awake.push(Rc::downgrade(&goal));
         } else {
-          self.wanting_to_build.push(Arc::downgrade(&goal));
+          self.wanting_to_build.push(Rc::downgrade(&goal));
         }
       }
       Action::RegisterChild(child) => {
         let c = ChildGoal {
-          goal: Arc::downgrade(&goal),
-          goal2: Arc::as_ptr(&goal),
+          goal: Rc::downgrade(&goal),
+          goal2: Rc::as_ptr(&goal),
           child,
           last_output: Instant::now(),
           started_at: Instant::now(),
@@ -356,16 +380,18 @@ impl Worker {
         if c.child.in_build_slot {
           self.local_builds += 1;
         }
+        self.progress.inc(1);
         self.children.push(c)
       }
       Action::ChildTerminated { wake_sleepers } => {
-        let goal_raw = Arc::as_ptr(&goal);
+        let goal_raw = Rc::as_ptr(&goal);
         if let Some(i) = self.children.iter().position(|x| x.goal2 == goal_raw) {
           let child = &self.children[i];
           if child.child.in_build_slot {
             assert!(self.local_builds > 0);
             self.local_builds -= 1;
           }
+          self.progress.inc(1);
           self.children.remove(i);
           if wake_sleepers {
             for ptr in self.wanting_to_build.drain(..) {
@@ -376,7 +402,20 @@ impl Worker {
           }
         }
       }
-      Action::BuildFailure(e) => bail!(e),
+      Action::Done(e) => match e {
+        Some(err) => bail!(err),
+        None => {
+          let mut acts = vec![];
+          for g in goal.borrow().waiters() {
+            if let Some(x) = g.upgrade() {
+              acts.extend(x.borrow_mut().waitee_done(goal)?);
+            }
+          }
+          for act in acts {
+            self.act(goal, act)?;
+          }
+        }
+      },
     }
     Ok(())
   }
@@ -389,7 +428,7 @@ fn try_min<A: Ord + Copy>(lhs: Option<A>, rhs: A) -> A {
 impl Drop for Worker {
   fn drop(&mut self) {
     for g in self.top_goals.drain(..) {
-      if Arc::strong_count(&g) > 1 {
+      if Rc::strong_count(&g) > 1 {
         debug!("remaining goal with strong reference: {:?}", g);
       }
     }
@@ -406,7 +445,7 @@ struct ChildGoal {
   child: Child,
   goal: WeakGoal,
   // original nix has this, but idk what it does
-  goal2: *const RwLock<dyn GoalLike>,
+  goal2: *const RefCell<dyn GoalLike>,
   last_output: Instant,
   started_at: Instant,
 }
