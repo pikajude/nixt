@@ -12,7 +12,6 @@ enum Op {
 }
 
 fn main() -> Result<()> {
-  std::env::set_var("NIX_TEST", "1");
   let args = Op::from_args();
 
   match args {

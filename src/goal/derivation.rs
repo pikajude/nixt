@@ -15,7 +15,7 @@ use std::{
 use unix::{
   fcntl::OFlag,
   pty,
-  sys::{stat::Mode, termios},
+  sys::{stat::Mode, statvfs::statvfs, termios, wait::WaitStatus},
   unistd,
 };
 #[cfg(target_os = "linux")] mod linux;
@@ -55,6 +55,7 @@ pub struct DerivationGoal {
   log_size: usize,
 
   chroot_root: AutoDelete,
+  tmpdir: AutoDelete,
   dirs_in_chroot: HashMap<String, ChrootDir>,
 
   pid: Option<Pid>,
@@ -121,6 +122,7 @@ impl DerivationGoal {
       derivation: Derivation::default(),
       drv_path: path,
       chroot_root: AutoDelete(PathBuf::from("/no-such-path")),
+      tmpdir: AutoDelete(PathBuf::from("/no-such-path")),
       build_user: None,
       closure: BTreeSet::default(),
       dirs_in_chroot: HashMap::new(),
@@ -251,9 +253,13 @@ impl DerivationGoal {
     if unistd::getuid().is_root() {
       if let Some(group) = &settings().build_users_group {
         if cfg!(unix) {
-          let u = UserLock::get_free_user(group)?;
-          u.kill()?;
-          self.build_user = Some(u);
+          if let Some(u) = UserLock::get_free_user(group)? {
+            u.kill()?;
+            self.build_user = Some(u);
+          } else {
+            debug!("out of UIDs, waiting");
+            return Ok(vec![Action::WaitForAwhile]);
+          }
         } else {
           bail!("build users are not supported on this platform")
         }
@@ -312,6 +318,12 @@ impl DerivationGoal {
       false,
       unsafe { Mode::from_bits_unchecked(0o700) },
     )?;
+
+    if let Some(ref u) = self.build_user {
+      unistd::chown(&host_tmpdir, Some(u.uid), Some(u.gid))?;
+    }
+
+    self.tmpdir = AutoDelete(host_tmpdir.clone());
 
     let mut input_rewrites = HashMap::new();
 
@@ -459,7 +471,7 @@ impl DerivationGoal {
     termios::tcsetattr(write_side, termios::SetArg::TCSANOW, &term)?;
 
     let actions = if use_chroot {
-      self.exec_child(store, read_side, write_side, sandbox_tmpdir)?
+      self.exec_child(store, read_side.into_raw_fd(), write_side, sandbox_tmpdir)?
     } else {
       bail!("not implemented: building outside chroot")
     };
@@ -483,19 +495,51 @@ impl DerivationGoal {
       .kill()?;
 
     debug!(
-      "builder process for `{}' finished: {}",
+      "builder process for `{}' finished: {:?}",
       worker.store.print_store_path(&self.drv_path),
       status
     );
+
+    warn!("TODO: close the log file");
 
     if let Some(ref u) = self.build_user {
       u.kill()?;
     }
 
-    if status != 0 {
-      acts.push(Action::Done(Some(anyhow!("something went wrong"))));
-      return Ok(acts);
+    warn!("TODO: stop the recursive daemon");
+
+    let mut disk_full = false;
+
+    if !matches!(status, WaitStatus::Exited(_, 0)) {
+      const REQUIRED_SPACE: u64 = 8 * 1024 * 1024;
+      if let Ok(s) = statvfs(&*worker.store.store_path()) {
+        if s.blocks_available() * s.block_size() < REQUIRED_SPACE {
+          disk_full = true;
+        }
+      }
+      if let Ok(s) = statvfs(&self.tmpdir) {
+        if s.blocks_available() * s.block_size() < REQUIRED_SPACE {
+          disk_full = true;
+        }
+      }
+
+      let mut msg = format!(
+        "builder for '{}' {}",
+        worker.store.print_store_path(&self.drv_path),
+        crate::util::show_status(status)
+      );
+
+      if disk_full {
+        msg.push_str("\nnote: failure may have been caused by lack of free disk space");
+      }
+
+      acts.push(Action::Done(Some(anyhow!(msg))));
     }
+
+    self.register_outputs(worker)?;
+
+    // this closes the fd that the userlock holds
+    self.build_user.take();
 
     Ok(acts)
   }
@@ -548,6 +592,16 @@ impl DerivationGoal {
 
     Ok(env)
   }
+
+  fn register_outputs(&self, worker: &mut Worker) -> Result<()> {
+    for (_, out) in &self.derivation.outputs {
+      worker.store.register_valid_path(ValidPathInfo::new(
+        out.path.clone(),
+        Hash::hash_str("foo", HashType::SHA256),
+      ))?;
+    }
+    Ok(())
+  }
 }
 
 struct DerivationWorker<'a> {
@@ -557,7 +611,6 @@ struct DerivationWorker<'a> {
   chroot_root: PathBuf,
   sandbox_tmpdir: PathBuf,
   dirs_in_chroot: &'a HashMap<String, ChrootDir>,
-  build_user: Option<&'a UserLock>,
   write_side: RawFd,
 }
 
@@ -581,14 +634,18 @@ impl<'a> DerivationWorker<'a> {
       self.init_chroot(store, derivation)?;
     }
 
+    /*
     if let Some(u) = self.build_user {
       // no nix::setgroups on macos because fuck you
-      if unsafe { libc::setgroups(u.other_gids.len() as _, u.other_gids.as_ptr().cast()) == -1 } {
+      if !u.other_gids.is_empty()
+        && unsafe { libc::setgroups(u.other_gids.len() as _, u.other_gids.as_ptr().cast()) == -1 }
+      {
         bail!(std::io::Error::last_os_error());
       }
       unistd::setgid(u.gid)?;
       unistd::setuid(u.uid)?;
     }
+    */
 
     unistd::chdir(sandbox_tmpdir)
       .with_context(|| format!("trying to move into tmpdir `{}'", sandbox_tmpdir.display()))?;

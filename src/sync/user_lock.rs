@@ -12,7 +12,7 @@ pub struct UserLock {
 }
 
 impl UserLock {
-  pub fn get_free_user(groupname: &str) -> Result<Self> {
+  pub fn get_free_user(groupname: &str) -> Result<Option<Self>> {
     let group = users::get_group_by_name(groupname)
       .ok_or_else(|| anyhow!("the build users group '{}' does not exist", groupname))?;
 
@@ -35,11 +35,11 @@ impl UserLock {
         )
       })?;
 
-      let filename = settings()
-        .paths
-        .nix_state_dir
-        .join("userpool")
-        .join(format!("{}", user.uid()));
+      let userpool = settings().paths.nix_state_dir.join("userpool");
+
+      fs::create_dir_all(&userpool)?;
+
+      let filename = userpool.join(format!("{}", user.uid()));
 
       let lockfile = File::create(filename)?;
       if lockfile.try_lock(LockType::Write)? {
@@ -59,19 +59,32 @@ impl UserLock {
           vec![]
         };
 
-        return Ok(Self {
+        return Ok(Some(Self {
           _lockfile: lockfile,
           uid: Uid::from_raw(user.uid()),
           gid,
           other_gids,
-        });
+        }));
       }
     }
 
-    bail!("unable to find a free build user")
+    Ok(None)
   }
 
   pub fn kill(&self) -> Result<()> {
     Ok(())
+  }
+}
+
+impl Drop for UserLock {
+  fn drop(&mut self) {
+    if let Some(uname) = users::get_user_by_uid(self.uid.as_raw())
+      .as_ref()
+      .and_then(|x| x.name().to_str())
+    {
+      debug!("releasing lock on user {}", uname);
+    } else {
+      debug!("releasing lock on uid {} (username unknown)", self.uid);
+    }
   }
 }

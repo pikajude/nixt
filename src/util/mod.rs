@@ -113,6 +113,10 @@ pub struct AutoDelete(pub PathBuf);
 
 impl Drop for AutoDelete {
   fn drop(&mut self) {
+    /*
+    if self.0.to_str() == Some("/no-such-path") {
+      return;
+    }
     let status: Result<()> = try {
       let meta = std::fs::metadata(&self.0)?;
       if meta.is_dir() {
@@ -124,6 +128,7 @@ impl Drop for AutoDelete {
     if let Err(e) = status {
       debug!("failed to auto-cleanup path '{}': {}", self.0.display(), e)
     }
+    */
   }
 }
 

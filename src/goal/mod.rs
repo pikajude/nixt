@@ -104,7 +104,7 @@ pub struct Worker {
 
   derivation_goals: WeakGoalMap,
   substitution_goals: WeakGoalMap,
-  _waiting_for_any_goals: Vec<WeakGoal>,
+  waiting_for_any_goals: Vec<WeakGoal>,
   waiting_for_awhile: Vec<WeakGoal>,
 
   last_woken_up: Option<Instant>,
@@ -128,7 +128,7 @@ impl Worker {
       local_builds: 0,
       derivation_goals: Default::default(),
       substitution_goals: Default::default(),
-      _waiting_for_any_goals: Default::default(),
+      waiting_for_any_goals: Default::default(),
       waiting_for_awhile: Default::default(),
       last_woken_up: None,
       _path_contents_good_cache: Default::default(),
@@ -269,10 +269,14 @@ impl Worker {
       if self.last_woken_up.map_or(true, |x| x > before) {
         self.last_woken_up = Some(before);
       }
-      timeout = Some(std::cmp::max(
-        Duration::from_secs(1),
-        self.last_woken_up.unwrap() + settings().poll_interval - before,
-      ));
+      timeout = Some({
+        let delta0 = self.last_woken_up.unwrap() + settings().poll_interval;
+        if delta0 > before {
+          delta0 - before
+        } else {
+          Duration::from_secs(1)
+        }
+      });
     } else {
       self.last_woken_up = None;
     }
@@ -414,11 +418,33 @@ impl Worker {
           for act in acts {
             self.act(goal, act)?;
           }
+          self.remove_goal(goal);
         }
       },
     }
     Ok(())
   }
+
+  fn remove_goal(&mut self, g: &GoalPtr) {
+    remove_goal_ptr(g, &mut self.derivation_goals);
+    remove_goal_ptr(g, &mut self.substitution_goals);
+    if let Some(pos) = self.top_goals.iter().position(|p| Rc::ptr_eq(p, g)) {
+      self.top_goals.remove(pos);
+    }
+
+    for thing in self.waiting_for_any_goals.drain(..) {
+      if thing.upgrade().is_some() {
+        self.awake.push(thing);
+      }
+    }
+  }
+}
+
+fn remove_goal_ptr(g: &GoalPtr, map: &mut WeakGoalMap) {
+  map.retain(|_, v| match v.upgrade() {
+    Some(g0) => !Rc::ptr_eq(&g0, g),
+    None => true,
+  })
 }
 
 fn try_min<A: Ord + Copy>(lhs: Option<A>, rhs: A) -> A {

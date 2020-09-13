@@ -12,7 +12,7 @@ use unix::{
 unix::ioctl_read_bad!(winsize_syscall, TIOCGWINSZ, Winsize);
 
 lazy_static! {
-  static ref WINSIZE: Mutex<(u16, u16)> = Mutex::new(get_win_size());
+  static ref WINSIZE: Mutex<(u16, u16)> = Mutex::new((0, 0));
   static ref SAVED_SIGNAL_MASK: Mutex<SigSet> = {
     let mut ss = SigSet::empty();
     sigprocmask(SigmaskHow::SIG_BLOCK, None, Some(&mut ss)).expect("cannot set signal mask");
@@ -70,7 +70,9 @@ fn start_sig_handler() -> Result<()> {
     match sig {
       Signal::SIGINT | Signal::SIGTERM | Signal::SIGHUP => warn!("interrupted"),
       Signal::SIGWINCH => {
-        *WINSIZE.lock().unwrap() = get_win_size();
+        if let Some(w) = get_win_size() {
+          *WINSIZE.lock().unwrap() = w;
+        }
       }
       _ => {}
     }
@@ -79,15 +81,15 @@ fn start_sig_handler() -> Result<()> {
   Ok(())
 }
 
-fn get_win_size() -> (u16, u16) {
+fn get_win_size() -> Option<(u16, u16)> {
   let mut wsz = MaybeUninit::uninit();
 
-  let ws = unsafe {
-    winsize_syscall(2, wsz.as_mut_ptr()).expect("unable to fetch window size");
-    wsz.assume_init()
-  };
-
-  (ws.ws_col, ws.ws_row)
+  if unsafe { winsize_syscall(2, wsz.as_mut_ptr()) }.is_ok() {
+    let wsz = unsafe { wsz.assume_init() };
+    Some((wsz.ws_col, wsz.ws_row))
+  } else {
+    None
+  }
 }
 
 extern "C" fn signal_handler(sig: i32) {

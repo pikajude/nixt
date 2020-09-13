@@ -33,7 +33,7 @@ impl Pid {
     self.kill_signal = signal;
   }
 
-  pub fn kill(self) -> Result<i32> {
+  pub fn kill(self) -> Result<WaitStatus> {
     debug!("killing process {}", self.pid);
 
     let kill_fn = if self.separate_process_group {
@@ -54,10 +54,16 @@ impl Pid {
     self.wait()
   }
 
-  pub fn wait(self) -> Result<i32> {
-    match waitpid(self.pid, None)? {
-      WaitStatus::Exited(_, stat) => Ok(stat),
-      other => bail!("unhandled wait status: {:?}", other),
-    }
+  pub fn wait(self) -> Result<WaitStatus> {
+    Ok(waitpid(self.pid, None)?)
+  }
+}
+
+pub fn show_status(w: WaitStatus) -> String {
+  match w {
+    WaitStatus::Exited(_, 0) => "succeeded".into(),
+    WaitStatus::Exited(_, n) => format!("failed with exit code {}", n),
+    WaitStatus::Signaled(_, sig, _coredump) => format!("failed due to signal {}", sig),
+    _ => "died abnormally".into(),
   }
 }

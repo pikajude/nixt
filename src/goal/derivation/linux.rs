@@ -13,7 +13,6 @@ use std::{
 };
 use unix::{
   mount::{self, MntFlags, MsFlags},
-  pty::PtyMaster,
   sched::{self, CloneFlags},
   sys::{
     mman::{self, MapFlags, ProtFlags},
@@ -141,8 +140,8 @@ impl DerivationGoal {
   pub fn exec_child(
     &mut self,
     store: &dyn Store,
-    read_side: PtyMaster,
-    write_side: i32,
+    read_side: RawFd,
+    write_side: RawFd,
     sandbox_tmpdir: &PathBuf,
   ) -> Result<Vec<Action>> {
     let (ns_send, ns_receive) = ipc_channel::ipc::channel()?;
@@ -151,8 +150,7 @@ impl DerivationGoal {
       unistd::ForkResult::Parent { child } => match wait::waitpid(child, None)? {
         wait::WaitStatus::Exited(_, 0) => {
           let mut reader =
-            std::io::BufReader::new(unsafe { fs::File::from_raw_fd(read_side.as_raw_fd()) })
-              .lines();
+            std::io::BufReader::new(unsafe { fs::File::from_raw_fd(read_side) }).lines();
 
           let mut child_pid = if let Some(line) = reader.next() {
             Pid::new(line?.parse()?)
@@ -206,7 +204,7 @@ impl DerivationGoal {
           Ok(vec![Action::RegisterChild(Child {
             respect_timeouts: true,
             in_build_slot: true,
-            fds: vec![read_side.into_raw_fd()],
+            fds: vec![read_side],
           })])
         }
         x => bail!("unexpected wait status from child: {:?}", x),
@@ -255,12 +253,11 @@ impl DerivationGoal {
               chroot_root: self.chroot_root.clone(),
               sandbox_tmpdir: sandbox_tmpdir.to_path_buf(),
               dirs_in_chroot: &self.dirs_in_chroot,
-              build_user: self.build_user.as_ref(),
               write_side,
             }
             .run(store, &self.derivation))
             {
-              eprintln!("\x01while setting up the build environment: {}", e);
+              eprintln!("\x01while setting up the build environment: {:#}", e);
             }
             1
           }),
