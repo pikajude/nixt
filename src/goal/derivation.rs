@@ -3,7 +3,6 @@ use crate::{
   prelude::*,
   sync::{fs_lock::PathLocks, user_lock::UserLock},
 };
-use indicatif::ProgressBar;
 use ipc_channel::ipc::IpcReceiver;
 use settings::SandboxMode;
 use std::{
@@ -85,14 +84,14 @@ impl GoalLike for DerivationGoal {
     Cow::Borrowed(&self.drv_path.name)
   }
 
-  fn handle_output(&mut self, progress: &ProgressBar, data: &[u8]) -> Result<Vec<Action>> {
+  fn handle_output(&mut self, _: &(), data: &[u8]) -> Result<Vec<Action>> {
     self.log_size += data.len();
     if settings().max_log_size.map_or(false, |x| self.log_size > x) {
       bail!("{} killed after writing too much output", self.key());
     }
 
     for line in data.split(|x| *x == b'\n').filter(|x| !x.is_empty()) {
-      progress.println(format!("{}: {}", self.key(), String::from_utf8_lossy(line)));
+      println!("{}: {}", self.key(), String::from_utf8_lossy(line))
     }
 
     Ok(vec![])
@@ -594,7 +593,7 @@ impl DerivationGoal {
   }
 
   fn register_outputs(&self, worker: &mut Worker) -> Result<()> {
-    for (_, out) in &self.derivation.outputs {
+    for out in self.derivation.outputs.values() {
       worker.store.register_valid_path(ValidPathInfo::new(
         out.path.clone(),
         Hash::hash_str("foo", HashType::SHA256),

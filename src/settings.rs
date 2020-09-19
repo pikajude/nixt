@@ -727,7 +727,7 @@ fn env_fallback_impl(fallback: &str, vars: &[&str]) -> PathBuf {
 
 fn env_fallback(fallback: &str, vars: &[&str]) -> PathBuf {
   let base_path = env_fallback_impl(fallback, vars);
-  if std::env::var("NIX_TEST").is_ok() {
+  if cfg!(test) || std::env::var("__NIX_TEST").is_ok() {
     PathBuf::from(env!("OUT_DIR")).join(base_path.strip_prefix("/").unwrap())
   } else {
     base_path

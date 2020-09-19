@@ -12,7 +12,10 @@ use crate::{
   syntax::expr::Ident,
   util::*,
 };
-use std::{collections::BTreeSet, path::Path};
+use std::{
+  collections::BTreeSet,
+  path::{Path, PathBuf},
+};
 
 pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(args)?;
@@ -150,6 +153,18 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
         .input_sources
         .insert(eval.store.parse_store_path(&Path::new(path))?);
     }
+  }
+
+  if drv.builder == PathBuf::from("") {
+    bail!("required attribute `builder' missing");
+  }
+
+  if drv.platform.is_empty() {
+    bail!("required attribute `system' missing");
+  }
+
+  if drv.name.ends_with(".drv") {
+    bail!("derivation names may not end in `.drv'");
   }
 
   if let Some(h) = output_hash {

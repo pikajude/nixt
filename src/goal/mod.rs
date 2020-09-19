@@ -1,7 +1,6 @@
 use crate::{prelude::*, store::LocalStore};
 use derivation::DerivationGoal;
 use downcast_rs::Downcast;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::{
   cell::RefCell,
   collections::HashMap,
@@ -34,7 +33,7 @@ pub trait GoalLike: Downcast + Debug {
   fn handle_eof(&mut self) -> Result<Vec<Action>> {
     todo!()
   }
-  fn handle_output(&mut self, _: &ProgressBar, _: &[u8]) -> Result<Vec<Action>> {
+  fn handle_output(&mut self, _: &(), _: &[u8]) -> Result<Vec<Action>> {
     todo!()
   }
 }
@@ -93,7 +92,7 @@ pub enum Action {
 pub struct Worker {
   store: Arc<LocalStore>,
 
-  progress: ProgressBar,
+  progress: (), // ProgressBar,
 
   top_goals: Vec<GoalPtr>,
   awake: Vec<WeakGoal>,
@@ -113,14 +112,14 @@ pub struct Worker {
 
 impl Worker {
   pub fn new(store: Arc<LocalStore>) -> Self {
-    let prog = ProgressBar::new(0);
-    prog.set_style(
-      ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {wide_bar} {pos:>7}/{len:7} {msg}"),
-    );
+    // let prog = ProgressBar::new(0);
+    // prog.set_style(
+    //   ProgressStyle::default_bar()
+    //     .template("[{elapsed_precise}] {wide_bar} {pos:>7}/{len:7} {msg}"),
+    // );
     Self {
       store,
-      progress: prog,
+      progress: (),
       top_goals: Default::default(),
       awake: Default::default(),
       wanting_to_build: Default::default(),
@@ -329,7 +328,7 @@ impl Worker {
       } else {
         trace!("{} read {} bytes", goal.name(), rd);
         child.last_output = after;
-        self.progress.set_message(&goal.name());
+        // self.progress.set_message(&goal.name());
         goal.handle_output(&self.progress, &buffer[..rd])?
       };
 
@@ -360,7 +359,7 @@ impl Worker {
         w.borrow_mut().add_waiter(&goal);
       }
       Action::Wakeup => {
-        self.progress.inc_length(2);
+        // self.progress.inc_length(2);
         self.awake.push(Rc::downgrade(&goal));
       }
       Action::WaitForAwhile => {
@@ -384,7 +383,7 @@ impl Worker {
         if c.child.in_build_slot {
           self.local_builds += 1;
         }
-        self.progress.inc(1);
+        // self.progress.inc(1);
         self.children.push(c)
       }
       Action::ChildTerminated { wake_sleepers } => {
@@ -395,7 +394,7 @@ impl Worker {
             assert!(self.local_builds > 0);
             self.local_builds -= 1;
           }
-          self.progress.inc(1);
+          // self.progress.inc(1);
           self.children.remove(i);
           if wake_sleepers {
             for ptr in self.wanting_to_build.drain(..) {

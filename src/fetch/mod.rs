@@ -132,6 +132,7 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
 
   let response = ureq::get(main_url)
     .set_tls_config(Arc::clone(&*NOVERIFY_CONFIG))
+    .timeout_connect(5_000)
     .call();
 
   if !response.ok() {

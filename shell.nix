@@ -6,5 +6,5 @@ mkShell {
   ];
   buildInputs = [ cargo-udeps ];
   RUST_LIB_BACKTRACE = true;
-  RUST_LOG = "rix=info";
+  RUST_LOG = "rix=debug";
 }

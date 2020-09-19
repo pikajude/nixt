@@ -279,7 +279,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1373a16a4937bc34efec7b391f9c1500c30b8478a701a4f44c9165cc0475a6e0"
 dependencies = [
  "percent-encoding",
- "time 0.2.18",
+ "time 0.2.20",
  "version_check",
 ]
 
@@ -1868,9 +1868,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.2.18"
+version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12785163ae8a1cbb52a5db39af4a5baabd3fe49f07f76f952f89d7e89e5ce531"
+checksum = "0d4953c513c9bf1b97e9cdd83f11d60c4b0a83462880a360d80d96953a953fee"
 dependencies = [
  "const_fn",
  "libc",
