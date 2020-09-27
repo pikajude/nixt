@@ -533,6 +533,8 @@ impl DerivationGoal {
       }
 
       acts.push(Action::Done(Some(anyhow!(msg))));
+    } else {
+      acts.push(Action::Done(None));
     }
 
     self.register_outputs(worker)?;
@@ -594,6 +596,14 @@ impl DerivationGoal {
 
   fn register_outputs(&self, worker: &mut Worker) -> Result<()> {
     for out in self.derivation.outputs.values() {
+      trace!("registering output {}", out.path);
+
+      let dest_path = worker.store.print_store_path(&out.path);
+
+      let real_path = self.chroot_root.join(dest_path.strip_prefix("/").unwrap());
+
+      std::fs::rename(real_path, dest_path)?;
+
       worker.store.register_valid_path(ValidPathInfo::new(
         out.path.clone(),
         Hash::hash_str("foo", HashType::SHA256),

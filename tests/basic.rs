@@ -4,7 +4,7 @@ use std::path::Path;
 
 #[test]
 fn test_basic_build() -> Result<()> {
-  std::env::set_var("__NIX_TEST", "1");
+  std::env::set_var("_NIX_TEST", "1");
   pretty_env_logger::init();
 
   let eval = Eval::new().unwrap();
@@ -25,13 +25,9 @@ fn test_basic_build() -> Result<()> {
 
 fn get_derivation(eval: &Eval) -> Result<&str> {
   let expr = eval.load_inline(
-    r#"
-  (derivation {
-    name = "builder-test";
-    builder = /bin/sh;
-    system = builtins.currentSystem;
-  }).outPath
-  "#,
+    "(import <nixpkgs> {
+    overlays = [];
+  }).stdenv.bootstrapTools.outPath",
   )?;
   match eval.value_with_context_of(expr) {
     Ok((_, ctx)) => {

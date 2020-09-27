@@ -118,6 +118,7 @@ impl<T> Arena<T> {
 
   #[inline]
   pub fn alloc(&self, item: T) -> Id<T> {
+    #[allow(clippy::unnecessary_lazy_evaluations)] // wrong
     self
       .alloc_fast(item)
       .unwrap_or_else(|v| self.alloc_extend(std::iter::once(v))[0])

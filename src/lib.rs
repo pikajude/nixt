@@ -14,7 +14,6 @@
 #[macro_use] extern crate derive_more;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate gen_settings;
-#[macro_use] extern crate downcast_rs;
 
 pub mod archive;
 pub mod arena;

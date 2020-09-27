@@ -1,3 +1,5 @@
+use fmt::Debug;
+
 use crate::prelude::*;
 use std::{cmp::Ordering, collections::BTreeSet, fmt, path::Path as StdPath, str::FromStr};
 
@@ -14,7 +16,7 @@ pub enum Error {
   InvalidStorePathName(String),
 }
 
-#[derive(Clone, PartialEq, Eq, std::hash::Hash, Debug, Display)]
+#[derive(Clone, PartialEq, Eq, std::hash::Hash, Display)]
 #[display(fmt = "{}-{}", hash, name)]
 pub struct Path {
   pub hash: Hash,
@@ -81,7 +83,13 @@ impl Ord for Path {
   }
 }
 
-#[derive(Clone, PartialEq, Eq, std::hash::Hash, Debug, Deref)]
+impl Debug for Path {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("Path").field(&self.to_string()).finish()
+  }
+}
+
+#[derive(Clone, PartialEq, Eq, std::hash::Hash, Deref)]
 pub struct Hash([u8; HASH_BYTES]);
 
 impl Hash {
@@ -116,6 +124,12 @@ impl Ord for Hash {
 impl PartialOrd for Hash {
   fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
     Some(self.cmp(other))
+  }
+}
+
+impl Debug for Hash {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("Hash").field(&self.to_string()).finish()
   }
 }
 

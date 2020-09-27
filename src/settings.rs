@@ -612,7 +612,9 @@ impl Settings {
     &*SETTINGS
   }
 
-  fn apply_overrides(&mut self) {}
+  fn apply_overrides(&mut self) {
+    self.max_silent_time = Some(Duration::from_secs(10));
+  }
 
   pub fn has_experimental_feature<B: Borrow<str>>(&self, feature: &B) -> bool {
     let feature = feature.borrow();
@@ -727,8 +729,12 @@ fn env_fallback_impl(fallback: &str, vars: &[&str]) -> PathBuf {
 
 fn env_fallback(fallback: &str, vars: &[&str]) -> PathBuf {
   let base_path = env_fallback_impl(fallback, vars);
-  if cfg!(test) || std::env::var("__NIX_TEST").is_ok() {
-    PathBuf::from(env!("OUT_DIR")).join(base_path.strip_prefix("/").unwrap())
+  if cfg!(test) || std::env::var("_NIX_TEST").is_ok() {
+    if let Ok(e) = std::env::var("_NIX_TEST_STORE") {
+      PathBuf::from(e)
+    } else {
+      PathBuf::from(env!("OUT_DIR")).join(base_path.strip_prefix("/").unwrap())
+    }
   } else {
     base_path
   }

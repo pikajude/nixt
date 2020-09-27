@@ -257,7 +257,7 @@ impl DerivationGoal {
             }
             .run(store, &self.derivation))
             {
-              eprintln!("\x01while setting up the build environment: {:#}", e);
+              eprintln!("\x01while setting up the build environment: {}", e);
             }
             1
           }),

@@ -1,3 +1,5 @@
+// This code is old
+
 use crate::{prelude::*, store::LocalStore};
 use derivation::DerivationGoal;
 use downcast_rs::Downcast;
@@ -205,10 +207,13 @@ impl Worker {
         }
         awake2.sort_unstable_by_key(|g| g.borrow().key());
         for goal in awake2 {
-          let mut g_lock = goal.borrow_mut();
-          info!("working on: {}", g_lock.key());
-          for req in g_lock.work(&mut self)? {
-            self.act(&goal, req)?;
+          let acts = {
+            let mut g_lock = goal.borrow_mut();
+            info!("working on: {}", g_lock.key());
+            g_lock.work(&mut self)?
+          };
+          for act in acts {
+            self.act(&goal, act)?;
           }
           if self.top_goals.is_empty() {
             break;
@@ -430,6 +435,7 @@ impl Worker {
     if let Some(pos) = self.top_goals.iter().position(|p| Rc::ptr_eq(p, g)) {
       self.top_goals.remove(pos);
     }
+    debug!("{:?}", self.top_goals);
 
     for thing in self.waiting_for_any_goals.drain(..) {
       if thing.upgrade().is_some() {
