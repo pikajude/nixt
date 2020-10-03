@@ -3,6 +3,8 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use std::num::{ParseFloatError, ParseIntError};
 
+use super::expr::StrPart;
+
 #[derive(Clone, Debug, Display)]
 pub enum Token<'a> {
   If,
@@ -291,4 +293,97 @@ fn unescape_str(string: &str) -> String {
     }
   }
   s
+}
+
+pub fn strip_indentation(mut parts: Vec<StrPart>) -> Vec<StrPart> {
+  if parts.is_empty() {
+    return parts;
+  }
+
+  let mut at_start_of_line = true;
+  let mut min_indent: usize = 1_000_000;
+  let mut cur_indent: usize = 0;
+
+  for part in &parts {
+    match part {
+      StrPart::Quote { .. } => {
+        if at_start_of_line {
+          at_start_of_line = false;
+          if cur_indent < min_indent {
+            min_indent = cur_indent;
+          }
+        }
+      }
+      StrPart::Plain(s) => {
+        for ch in s.chars() {
+          if at_start_of_line {
+            if ch == ' ' {
+              cur_indent += 1;
+            } else if ch == '\n' {
+              cur_indent = 0;
+            } else {
+              at_start_of_line = false;
+              if cur_indent < min_indent {
+                min_indent = cur_indent;
+              }
+            }
+          } else if ch == '\n' {
+            at_start_of_line = true;
+            cur_indent = 0;
+          }
+        }
+      }
+    }
+  }
+
+  at_start_of_line = true;
+  let mut cur_dropped = 0usize;
+
+  let is_single_parts = parts.len() == 1;
+
+  for part in &mut parts {
+    match part {
+      StrPart::Quote { .. } => {
+        at_start_of_line = false;
+        cur_dropped = 0;
+      }
+      StrPart::Plain(s) => {
+        let mut s2 = String::new();
+        for ch in s.chars() {
+          if at_start_of_line {
+            if ch == ' ' {
+              if cur_dropped >= min_indent {
+                s2.push(ch);
+              }
+              cur_dropped += 1;
+            } else if ch == '\n' {
+              cur_dropped = 0;
+              s2.push(ch);
+            } else {
+              at_start_of_line = false;
+              cur_dropped = 0;
+              s2.push(ch);
+            }
+          } else {
+            s2.push(ch);
+            if ch == '\n' {
+              at_start_of_line = true;
+            }
+          }
+        }
+
+        if is_single_parts {
+          if let Some(last_nl) = s2.rfind('\n') {
+            if s2[last_nl..].bytes().all(|x| x == b' ') {
+              s2 = s2[..last_nl].to_string();
+            }
+          }
+        }
+
+        *s = s2;
+      }
+    }
+  }
+
+  parts
 }

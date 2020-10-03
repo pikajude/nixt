@@ -12,9 +12,11 @@ pub use crate::{
 pub use std::{
   borrow::Cow,
   convert::TryInto as _,
-  fs, io,
+  fs,
+  io::{self, prelude::*},
   os::unix::fs::{MetadataExt as _, PermissionsExt as _},
   path::{Path, PathBuf},
   rc::Rc,
+  time::Duration,
 };
 pub use unix::errno::Errno;

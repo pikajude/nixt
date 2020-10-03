@@ -123,7 +123,15 @@ impl Hash {
       }
     } else {
       match ty {
-        Some(ht) => Self::decode_with_type(s, ht, false),
+        Some(ht) => {
+          if s.contains(|x| x == ':' || x == '-') {
+            let h = Self::decode(s)?;
+            ensure!(h.type_() == ht, "hash has wrong type");
+            Ok(h)
+          } else {
+            Self::decode_with_type(s, ht, false)
+          }
+        }
         None => Self::decode(s),
       }
     }
@@ -198,8 +206,15 @@ impl Hash {
         ty,
         len: ty.size(),
       })
+    } else if sri || input.len() == len_base64(ty.size()) {
+      base64::decode_config_slice(input, base64::STANDARD, &mut bytes)?;
+      Ok(Self {
+        data: bytes,
+        ty,
+        len: ty.size(),
+      })
     } else {
-      todo!()
+      bail!("incorrect hash")
     }
   }
 

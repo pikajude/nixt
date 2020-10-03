@@ -4,8 +4,8 @@ use crate::{
   prelude::*,
   store::{CheckSigsFlag, FileIngestionMethod, RepairFlag},
 };
-use rustls::{ClientConfig, ServerCertVerifier};
-use std::sync::{Arc, Once};
+use curl::easy::{Easy, HttpVersion};
+use std::sync::Once;
 
 mod cache;
 mod tar;
@@ -130,27 +130,31 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
 
   eprintln!("fetching URL `{}'", main_url);
 
-  let response = ureq::get(main_url)
-    .set_tls_config(Arc::clone(&*NOVERIFY_CONFIG))
-    .timeout_connect(5_000)
-    .call();
+  let mut vec = Vec::new();
+  let mut easy = Easy::new();
+  easy.url(main_url)?;
+  easy.follow_location(true)?;
+  easy.max_redirections(10)?;
+  easy.useragent("curl/Nix/1.0.0")?;
+  easy.http_version(HttpVersion::V11)?;
 
-  if !response.ok() {
-    bail!("fetchurl failed: {}", response.status_text());
+  {
+    let mut transfer = easy.transfer();
+    transfer.write_function(|data| {
+      vec.extend_from_slice(data);
+      Ok(data.len())
+    })?;
+    transfer.header_function(|f| {
+      trace!("{:?}", std::str::from_utf8(f));
+      true
+    })?;
+    transfer.perform()?;
   }
 
-  eprintln!(
-    "response size: {}",
-    response.header("content-length").unwrap_or("unknown")
-  );
-
   if unpack {
-    crate::archive::restore_path(store_path, response.into_reader())?;
+    crate::archive::restore_path(store_path, io::Cursor::new(vec))?;
   } else {
-    std::io::copy(
-      &mut response.into_reader(),
-      &mut fs::File::create(store_path)?,
-    )?;
+    std::fs::write(store_path, vec)?;
   }
 
   eprintln!("finished fetching file");
@@ -176,27 +180,4 @@ pub fn preload_nss() {
       panic!("huh? this should have failed")
     }
   })
-}
-
-lazy_static! {
-  static ref NOVERIFY_CONFIG: Arc<ClientConfig> = {
-    struct NoVerify;
-
-    // cert verification is irrelevant for fixed-output derivations, because we already know the expected hash of the contents.
-    impl ServerCertVerifier for NoVerify {
-      fn verify_server_cert(
-        &self,
-        _: &rustls::RootCertStore,
-        _: &[rustls::Certificate],
-        _: webpki::DNSNameRef,
-        _: &[u8],
-      ) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
-        Ok(rustls::ServerCertVerified::assertion())
-      }
-    }
-
-    let mut cfg = ClientConfig::new();
-    cfg.dangerous().set_certificate_verifier(Arc::new(NoVerify));
-    Arc::new(cfg)
-  };
 }

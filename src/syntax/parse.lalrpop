@@ -466,7 +466,7 @@ expr_simple: ExprRef = {
     => <>.map(|(open,body,close)| arena.alloc(
       Expr::IndStr(IndStr {
         open: open.def(),
-        body,
+        body: crate::syntax::lexer::strip_indentation(body),
         close: close.def(),
       })
     )),

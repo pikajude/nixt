@@ -7,11 +7,16 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in library 'rnix'",
+      "name": "Debug unit tests in library 'rix'",
       "cargo": {
-        "args": ["test", "--no-run", "--lib", "--package=rix"],
+        "args": [
+          "test",
+          "--no-run",
+          "--lib",
+          "--package=rix"
+        ],
         "filter": {
-          "name": "rnix",
+          "name": "rix",
           "kind": "lib"
         }
       },
@@ -23,7 +28,11 @@
       "request": "launch",
       "name": "Debug executable 'repl'",
       "cargo": {
-        "args": ["build", "--bin=repl", "--package=rix"],
+        "args": [
+          "build",
+          "--bin=repl",
+          "--package=rix"
+        ],
         "filter": {
           "name": "repl",
           "kind": "bin"
@@ -37,7 +46,12 @@
       "request": "launch",
       "name": "Debug unit tests in executable 'repl'",
       "cargo": {
-        "args": ["test", "--no-run", "--bin=repl", "--package=rix"],
+        "args": [
+          "test",
+          "--no-run",
+          "--bin=repl",
+          "--package=rix"
+        ],
         "filter": {
           "name": "repl",
           "kind": "bin"
@@ -49,11 +63,15 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'basic_eval'",
+      "name": "Debug executable 'nix-store'",
       "cargo": {
-        "args": ["build", "--bin=basic_eval", "--package=rix"],
+        "args": [
+          "build",
+          "--bin=nix-store",
+          "--package=rix"
+        ],
         "filter": {
-          "name": "basic_eval",
+          "name": "nix-store",
           "kind": "bin"
         }
       },
@@ -63,32 +81,35 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in executable 'basic_eval'",
-      "cargo": {
-        "args": ["test", "--no-run", "--bin=basic_eval", "--package=rix"],
-        "filter": {
-          "name": "basic_eval",
-          "kind": "bin"
-        }
-      },
-      "args": [],
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug integration test 'basic_build'",
+      "name": "Debug unit tests in executable 'nix-store'",
       "cargo": {
         "args": [
           "test",
           "--no-run",
-          "--test=basic_build",
-          "--package=rix",
-          "--",
-          "--no-capture"
+          "--bin=nix-store",
+          "--package=rix"
         ],
         "filter": {
-          "name": "basic_build",
+          "name": "nix-store",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug integration test 'basic'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--test=basic",
+          "--package=rix"
+        ],
+        "filter": {
+          "name": "basic",
           "kind": "test"
         }
       },

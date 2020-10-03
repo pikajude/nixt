@@ -63,6 +63,12 @@ pub fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value>
 
       Ok(Value::Bool(less_than(lhs, rhs)?))
     }
+    BinaryOp::Geq => {
+      let lhs = eval.value_of(t!(bin.lhs))?;
+      let rhs = eval.value_of(t!(bin.rhs))?;
+
+      Ok(Value::Bool(!less_than(lhs, rhs)?))
+    }
     BinaryOp::Ge => {
       let lhs = eval.value_of(t!(bin.lhs))?;
       let rhs = eval.value_of(t!(bin.rhs))?;
@@ -184,7 +190,9 @@ fn plus_operator(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   match eval.value_of(lhs)? {
     Value::Path(p) => {
       let pathstr = eval.value_string_of(rhs)?;
-      Ok(Value::Path(p.join(pathstr)))
+      Ok(Value::Path(
+        p.join(pathstr.strip_prefix("/").unwrap_or(&pathstr)),
+      ))
     }
     Value::Int(i) => match eval.value_of(rhs)? {
       Value::Int(i2) => Ok(Value::Int(i + i2)),

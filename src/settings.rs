@@ -718,23 +718,20 @@ impl Settings {
   }
 }
 
-fn env_fallback_impl(fallback: &str, vars: &[&str]) -> PathBuf {
+fn env_fallback_impl(fallback: impl Into<PathBuf>, vars: &[&str]) -> PathBuf {
   for v in vars {
     if let Some(x) = env::var_os(v) {
       return PathBuf::from(x);
     }
   }
-  PathBuf::from(fallback)
+  fallback.into()
 }
 
-fn env_fallback(fallback: &str, vars: &[&str]) -> PathBuf {
+fn env_fallback(fallback: impl Into<PathBuf>, vars: &[&str]) -> PathBuf {
   let base_path = env_fallback_impl(fallback, vars);
   if cfg!(test) || std::env::var("_NIX_TEST").is_ok() {
-    if let Ok(e) = std::env::var("_NIX_TEST_STORE") {
-      PathBuf::from(e)
-    } else {
-      PathBuf::from(env!("OUT_DIR")).join(base_path.strip_prefix("/").unwrap())
-    }
+    PathBuf::from(std::env::var("_NIX_TEST_STORE").unwrap())
+      .join(base_path.strip_prefix("/").unwrap())
   } else {
     base_path
   }

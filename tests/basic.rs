@@ -12,7 +12,7 @@ fn test_basic_build() -> Result<()> {
   let drv_path = get_derivation(&eval)?;
 
   let paths = vec![PathWithOutputs {
-    path: eval.store.parse_store_path(Path::new(drv_path))?,
+    path: eval.store.parse_store_path(Path::new(&*drv_path))?,
     outputs: std::iter::once("out".to_string()).collect(),
   }];
 
@@ -23,11 +23,17 @@ fn test_basic_build() -> Result<()> {
   Ok(())
 }
 
-fn get_derivation(eval: &Eval) -> Result<&str> {
+fn get_derivation(eval: &Eval) -> Result<String> {
+  if let Ok(x) = std::env::var("BASIC_TEST_DRV") {
+    if std::fs::metadata(&x).is_ok() {
+      return Ok(x);
+    }
+  }
+
   let expr = eval.load_inline(
     "(import <nixpkgs> {
     overlays = [];
-  }).stdenv.bootstrapTools.outPath",
+  }).rustc.outPath",
   )?;
   match eval.value_with_context_of(expr) {
     Ok((_, ctx)) => {
@@ -36,7 +42,7 @@ fn get_derivation(eval: &Eval) -> Result<&str> {
         .find(|x| x.starts_with("!out!"))
         .and_then(|x| x.strip_prefix("!out!"))
       {
-        Ok(drvpath)
+        panic!("export BASIC_TEST_DRV={}", drvpath);
       } else {
         panic!("incorrect derivation")
       }

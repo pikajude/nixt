@@ -36,6 +36,8 @@ pub mod primop;
 pub mod thunk;
 pub mod value;
 
+#[cfg(test)] mod tests;
+
 #[derive(thiserror::Error, Debug)]
 #[error("assertion failure: {}", message)]
 struct AssertFailure {
@@ -309,7 +311,11 @@ impl Eval {
           } else {
             let files = self.files.lock().unwrap();
             let filename = files.name(e.span.file_id);
-            let dest = PathBuf::from(filename).parent().unwrap().join(pb);
+            let dest = if filename.to_str().unwrap().starts_with("<inline-") {
+              std::env::current_dir()?.join(pb)
+            } else {
+              PathBuf::from(filename).parent().unwrap().join(pb)
+            };
             let thing = path_abs::PathAbs::new(dest)?;
             Ok(Value::Path(thing.as_path().to_path_buf()))
           }
@@ -738,37 +744,5 @@ fn preview(s: &str) -> &str {
     s
   } else {
     &s[..500]
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  macro_rules! assert_eval {
-    ($l:literal, $p:pat) => {{
-      let eval = Eval::new().unwrap();
-      assert_matches::assert_matches!(eval.value_of(eval.load_inline($l)?), $p)
-    }};
-  }
-
-  #[test]
-  fn test_rec_order() -> Result<()> {
-    assert_eval!(
-      r#"rec { ${"${b}a"} = 1; ${"b"} = "a"; }.aa"#,
-      Ok(Value::Int(1))
-    );
-    assert_eval!(r#"rec { ${"a"} = 1; b = a; }.b"#, Ok(Value::Int(1)));
-    assert_eval!(r#"rec { inherit (a) b; a.b = 3; }.b"#, Ok(Value::Int(3)));
-    assert_eval!(r#"with { a = 1; }; with { a = 2; }; a"#, Ok(Value::Int(2)));
-    Ok(())
-  }
-
-  #[test]
-  fn test_foldl() -> Result<()> {
-    let e = Eval::new().unwrap();
-    let expr = e.load_inline(r#"builtins.foldl' (x: y: "${x}-${y}") "foo" ["bar" "baz" "qux"]"#)?;
-    assert_eq!(e.value_string_of(expr)?, "foo-bar-baz-qux");
-    Ok(())
   }
 }

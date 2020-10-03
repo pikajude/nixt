@@ -217,17 +217,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     let drv_hash = eval.store.hash_derivation_modulo(&drv, true)?;
 
     for out in &outputs_set {
-      let output_path = eval.store.make_fixed_output_path(
-        if is_recursive {
-          FileIngestionMethod::Recursive
-        } else {
-          FileIngestionMethod::Flat
-        },
-        &drv_hash,
-        name,
-        &mut std::iter::empty(),
-        false,
-      )?;
+      let output_path = eval.store.make_output_path(out, &drv_hash, name)?;
       drv
         .env
         .insert(out.to_string(), eval.store.print_store_path(&output_path));

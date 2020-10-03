@@ -215,6 +215,10 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
         eval.new_value(primop2!("split", strings::split)),
       );
       builtins.insert(
+        "toString".into(),
+        eval.new_value(primop!("toString", strings::prim_to_string)),
+      );
+      builtins.insert(
         "pathExists".into(),
         eval.new_value(primop!("pathExists", sys::path_exists)),
       );

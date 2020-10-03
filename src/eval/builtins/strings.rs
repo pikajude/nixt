@@ -207,11 +207,14 @@ pub fn replace_strings(
       }
     }
     if !found {
+      if p < bytes.len() {
+        out.push(bytes[p]);
+      }
       p += 1;
     }
   }
   Ok(Value::String {
-    string: String::from_utf8_lossy(bytes).to_string(),
+    string: String::from_utf8_lossy(&out).to_string(),
     context: rhs_context,
   })
 }
