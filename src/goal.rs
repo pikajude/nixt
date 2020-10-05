@@ -1,3 +1,5 @@
+use indicatif::{ProgressBar, ProgressStyle};
+
 use crate::{prelude::*, Store};
 use std::{
   collections::{BTreeSet, HashMap},
@@ -14,18 +16,13 @@ pub fn build_derivation<S: Store>(
 
   let mut must_build = false;
 
-  let mut rewrites = HashMap::new();
-
   for out in outputs {
     let p = &drv.outputs[out].path;
     if !store.is_valid_path(p)? {
       debug!("path {} must be built", p);
+      let _ = std::fs::remove_dir_all(store.print_store_path(p));
       must_build = true;
     }
-    rewrites.insert(
-      crate::derivation::hash_placeholder(out),
-      store.print_store_path(&drv.outputs[out].path),
-    );
   }
 
   if !must_build {
@@ -39,7 +36,23 @@ pub fn build_derivation<S: Store>(
     build_derivation(store, path, outputs)?;
   }
 
-  debug!("{:#?}", rewrites);
+  let progress_bar = ProgressBar::new_spinner();
+  progress_bar.set_style(
+    ProgressStyle::default_spinner().template("{spinner} [{prefix:.green}] [{elapsed}] {wide_msg}"),
+  );
+  progress_bar.set_prefix(&drv.name);
+  progress_bar.enable_steady_tick(67);
+
+  let rewrites = drv
+    .outputs
+    .iter()
+    .map(|(name, output)| {
+      (
+        crate::derivation::hash_placeholder(name),
+        store.print_store_path(&output.path),
+      )
+    })
+    .collect::<HashMap<_, _>>();
 
   let build_status = if drv.is_builtin() {
     if drv.builder.to_str() == Some("builtin:fetchurl") {
@@ -62,12 +75,14 @@ pub fn build_derivation<S: Store>(
       cmd.env(ekey, eval_);
     }
 
-    let builder_tmp = tempfile::tempdir()?;
+    let builder_tmp = tempfile::Builder::new()
+      .prefix(format!("nix-build-{}-", drv.name).as_str())
+      .tempdir()?;
     cmd.current_dir(&builder_tmp);
 
     cmd.env("PATH", "/path-not-set");
     cmd.env("HOME", "/homeless-shelter");
-    cmd.env("NIX_STORE", dbg!(store.store_path()));
+    cmd.env("NIX_STORE", store.store_path());
     cmd.env("NIX_BUILD_CORES", settings().build_cores.to_string());
     cmd.env("NIX_LOG_FD", "2");
     cmd.env("TERM", "xterm-256color");
@@ -88,9 +103,9 @@ pub fn build_derivation<S: Store>(
 
     std::fs::create_dir_all(build_log_path.parent().unwrap())?;
 
-    let (pipe_read, pipe_write) = unix::unistd::pipe()?;
-
     info!("running builder in {}", builder_tmp.as_ref().display());
+
+    let (pipe_read, pipe_write) = unix::unistd::pipe()?;
 
     cmd.stdin(Stdio::null());
     unsafe {
@@ -111,7 +126,9 @@ pub fn build_derivation<S: Store>(
           break;
         }
         build_log_file.write_all(&data[..len]).unwrap();
-        eprint!("{}", String::from_utf8_lossy(&data[..len]));
+        let msg_string = String::from_utf8_lossy(&data[..len]);
+        // eprint!("{}", String::from_utf8_lossy(&data[..len]));
+        progress_bar.set_message(msg_string.lines().last().unwrap_or(""));
       }
     });
 
