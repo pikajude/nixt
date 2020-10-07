@@ -241,7 +241,14 @@ impl Eval {
   fn value_int_of(&self, ix: ThunkId) -> Result<i64> {
     match self.value_of(ix)? {
       Value::Int(i) => Ok(*i),
-      v => bail!("Wrong type: expected list, got {}", v.typename()),
+      v => bail!("Wrong type: expected int, got {}", v.typename()),
+    }
+  }
+
+  fn _value_float_of(&self, ix: ThunkId) -> Result<f64> {
+    match self.value_of(ix)? {
+      Value::Float(i) => Ok(*i),
+      v => bail!("Wrong type: expected float, got {}", v.typename()),
     }
   }
 

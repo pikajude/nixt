@@ -80,6 +80,10 @@ pub fn init_primops(eval: &mut Eval) -> Result<()> {
         eval.new_value(primop!("attrNames", attrs::attr_names)),
       );
       builtins.insert(
+        "baseNameOf".into(),
+        eval.new_value(primop!("baseNameOf", strings::basename_of)),
+      );
+      builtins.insert(
         "concatLists".into(),
         eval.new_value(primop!("concatLists", lists::concat_lists)),
       );

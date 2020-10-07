@@ -730,7 +730,7 @@ fn env_fallback_impl(fallback: impl Into<PathBuf>, vars: &[&str]) -> PathBuf {
 fn env_fallback(fallback: impl Into<PathBuf>, vars: &[&str]) -> PathBuf {
   let base_path = env_fallback_impl(fallback, vars);
   if cfg!(test) || std::env::var("_NIX_TEST").is_ok() {
-    PathBuf::from(std::env::var("_NIX_TEST_STORE").unwrap())
+    PathBuf::from(std::env::var("_NIX_TEST_PREFIX").unwrap())
       .join(base_path.strip_prefix("/").unwrap())
   } else {
     base_path

@@ -250,3 +250,15 @@ pub fn placeholder(eval: &Eval, name: ThunkId) -> Result<Value> {
 pub fn discard_context(eval: &Eval, string: ThunkId) -> Result<Value> {
   Ok(Value::string_bare(eval.value_with_context_of(string)?.0))
 }
+
+pub fn basename_of(eval: &Eval, string: ThunkId) -> Result<Value> {
+  let (s, c) = eval.value_with_context_of(string)?;
+  if let Some(x) = std::path::Path::new(s).file_name() {
+    Ok(Value::String {
+      string: x.to_string_lossy().to_string(),
+      context: c.clone(),
+    })
+  } else {
+    bail!("invalid path as input")
+  }
+}

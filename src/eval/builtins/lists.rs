@@ -44,9 +44,8 @@ pub fn elem_at(eval: &Eval, list: ThunkId, index: ThunkId) -> Result<Value> {
 }
 
 pub fn elem(eval: &Eval, thing: ThunkId, list: ThunkId) -> Result<Value> {
-  let thing = eval.value_of(thing)?;
   for item in eval.value_list_of(list)? {
-    if crate::eval::operators::eval_eq(eval, thing, eval.value_of(*item)?)? {
+    if crate::eval::operators::eval_eq(eval, thing, *item)? {
       return Ok(Value::Bool(true));
     }
   }

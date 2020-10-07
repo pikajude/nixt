@@ -33,6 +33,25 @@ fn to_json_impl(eval: &Eval, obj: ThunkId, paths: &mut PathSet) -> Result<JSON> 
       paths.extend(context.iter().cloned());
       JSON::String(string.into())
     }
+    Value::List(items) => JSON::Array(
+      items
+        .into_iter()
+        .map(|x| to_json_impl(eval, *x, paths))
+        .collect::<Result<Vec<_>>>()?,
+    ),
+    Value::AttrSet(a) => {
+      warn!("unimplemented: attrset.toString()");
+
+      if let Some(op) = a.get(&"outPath".into()) {
+        return to_json_impl(eval, *op, paths);
+      }
+
+      let mut m = Map::new();
+      for (k, v) in a {
+        m.insert(k.to_string(), to_json_impl(eval, *v, paths)?);
+      }
+      JSON::Object(m)
+    }
     v => bail!("don't know how to convert {} to JSON", v.typename()),
   })
 }

@@ -127,7 +127,6 @@ pub fn build_derivation<S: Store>(
         }
         build_log_file.write_all(&data[..len]).unwrap();
         let msg_string = String::from_utf8_lossy(&data[..len]);
-        // eprint!("{}", String::from_utf8_lossy(&data[..len]));
         progress_bar.set_message(msg_string.lines().last().unwrap_or(""));
       }
     });

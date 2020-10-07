@@ -6,6 +6,7 @@ use super::{
   Eval,
 };
 use crate::{
+  prelude::Ident,
   syntax::expr::{Binary, BinaryOp, Unary, UnaryOp},
   util::*,
 };
@@ -39,18 +40,20 @@ pub fn eval_binary(eval: &Eval, bin: &Binary, context: Context) -> Result<Value>
 
       do_sub(lhs, rhs)
     }
-    BinaryOp::Eq => {
+    BinaryOp::Mul => {
       let lhs = eval.value_of(t!(bin.lhs))?;
       let rhs = eval.value_of(t!(bin.rhs))?;
 
-      Ok(Value::Bool(eval_eq(eval, lhs, rhs)?))
+      Ok(match (lhs, rhs) {
+        (Value::Float(f1), Value::Float(f2)) => Value::Float(f1 * f2),
+        (Value::Float(f1), Value::Int(i2)) => Value::Float(f1 * (*i2 as f64)),
+        (Value::Int(i1), Value::Float(f2)) => Value::Float((*i1 as f64) * f2),
+        (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
+        (x, y) => bail!("cannot multiply {} and {}", x.typename(), y.typename()),
+      })
     }
-    BinaryOp::Neq => {
-      let lhs = eval.value_of(t!(bin.lhs))?;
-      let rhs = eval.value_of(t!(bin.rhs))?;
-
-      Ok(Value::Bool(!eval_eq(eval, lhs, rhs)?))
-    }
+    BinaryOp::Eq => Ok(Value::Bool(eval_eq(eval, t!(bin.lhs), t!(bin.rhs))?)),
+    BinaryOp::Neq => Ok(Value::Bool(!eval_eq(eval, t!(bin.lhs), t!(bin.rhs))?)),
     BinaryOp::Leq => {
       let lhs = eval.value_of(t!(bin.lhs))?;
       let rhs = eval.value_of(t!(bin.rhs))?;
@@ -109,7 +112,10 @@ fn do_sub(lhs: &Value, rhs: &Value) -> Result<Value> {
   }
 }
 
-pub fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
+pub fn eval_eq(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<bool> {
+  let lhs = eval.value_of(lhs)?;
+  let rhs = eval.value_of(rhs)?;
+
   if lhs as *const _ == rhs as *const _ {
     return Ok(true);
   }
@@ -142,23 +148,27 @@ pub fn eval_eq(eval: &Eval, lhs: &Value, rhs: &Value) -> Result<bool> {
         return Ok(false);
       }
       for (item1, item2) in l1.iter().zip(l2) {
-        let i1 = eval.value_of(*item1)?;
-        let i2 = eval.value_of(*item2)?;
-        if !eval_eq(eval, i1, i2)? {
+        if !eval_eq(eval, *item1, *item2)? {
           return Ok(false);
         }
       }
       true
     }
     (Value::AttrSet(a1), Value::AttrSet(a2)) => {
+      // if both values are derivations, compare their paths
+      if let Some(o1) = a1.get(&Ident::from("outPath")) {
+        if let Some(o2) = a2.get(&Ident::from("outPath")) {
+          return Ok(o1 == o2);
+        }
+      }
+
       if a1.len() != a2.len() {
         return Ok(false);
       }
+
       for (k, v) in a1.iter() {
         if let Some(v2) = a2.get(k) {
-          let v1_value = eval.value_of(*v)?;
-          let v2_value = eval.value_of(*v2)?;
-          if !eval_eq(eval, v1_value, v2_value)? {
+          if !eval_eq(eval, *v, *v2)? {
             return Ok(false);
           }
         } else {
