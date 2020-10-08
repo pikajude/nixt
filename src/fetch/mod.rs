@@ -128,8 +128,6 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
   let main_url = derivation.get_env("url")?;
   let unpack = derivation.env.get("unpack").map_or(false, |x| x == "1");
 
-  eprintln!("fetching URL `{}'", main_url);
-
   let mut vec = Vec::new();
   let mut easy = Easy::new();
   easy.url(main_url)?;
@@ -156,8 +154,6 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
   } else {
     std::fs::write(store_path, vec)?;
   }
-
-  eprintln!("finished fetching file");
 
   if derivation.env.get("executable").map_or(false, |x| x == "1") {
     fs::set_permissions(store_path, fs::Permissions::from_mode(0o755))?;

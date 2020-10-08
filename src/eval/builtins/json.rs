@@ -35,7 +35,7 @@ fn to_json_impl(eval: &Eval, obj: ThunkId, paths: &mut PathSet) -> Result<JSON> 
     }
     Value::List(items) => JSON::Array(
       items
-        .into_iter()
+        .iter()
         .map(|x| to_json_impl(eval, *x, paths))
         .collect::<Result<Vec<_>>>()?,
     ),

@@ -203,7 +203,7 @@ impl Store for LocalStore {
   fn build_paths(self: Arc<Self>, paths: Vec<StorePathWithOutputs>) -> Result<()> {
     for path in paths {
       if path.path.is_derivation() {
-        crate::goal::build_derivation(self.as_ref(), &path.path, &path.outputs)?;
+        crate::goal::build_derivations(self.as_ref(), &path.path, &path.outputs)?;
       }
     }
     Ok(())

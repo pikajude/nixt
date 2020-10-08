@@ -1490,7 +1490,6 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "path_abs",
- "petgraph",
  "pretty_env_logger",
  "proptest",
  "rand 0.7.3",

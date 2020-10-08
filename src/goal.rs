@@ -1,16 +1,30 @@
-use indicatif::{ProgressBar, ProgressStyle};
-
 use crate::{prelude::*, Store};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::{
   collections::{BTreeSet, HashMap},
   os::unix::prelude::*,
   process::{Command, ExitStatus, Stdio},
 };
 
-pub fn build_derivation<S: Store>(
+pub fn build_derivations<S: Store>(
   store: &S,
   path: &StorePath,
   outputs: &BTreeSet<String>,
+) -> Result<()> {
+  let progress_bar = ProgressBar::new_spinner();
+  progress_bar.set_style(
+    ProgressStyle::default_spinner().template("{spinner} [{prefix:.green}] [{elapsed}] {wide_msg}"),
+  );
+  progress_bar.enable_steady_tick(67);
+
+  build_derivation(store, path, outputs, progress_bar)
+}
+
+fn build_derivation<S: Store>(
+  store: &S,
+  path: &StorePath,
+  outputs: &BTreeSet<String>,
+  progress: ProgressBar,
 ) -> Result<()> {
   let drv = store.read_derivation(path)?;
 
@@ -33,15 +47,8 @@ pub fn build_derivation<S: Store>(
   }
 
   for (path, outputs) in &drv.input_derivations {
-    build_derivation(store, path, outputs)?;
+    build_derivation(store, path, outputs, progress.clone())?;
   }
-
-  let progress_bar = ProgressBar::new_spinner();
-  progress_bar.set_style(
-    ProgressStyle::default_spinner().template("{spinner} [{prefix:.green}] [{elapsed}] {wide_msg}"),
-  );
-  progress_bar.set_prefix(&drv.name);
-  progress_bar.enable_steady_tick(67);
 
   let rewrites = drv
     .outputs
@@ -53,6 +60,10 @@ pub fn build_derivation<S: Store>(
       )
     })
     .collect::<HashMap<_, _>>();
+
+  progress.reset_elapsed();
+  progress.set_message("");
+  progress.set_prefix(&drv.name);
 
   let build_status = if drv.is_builtin() {
     if drv.builder.to_str() == Some("builtin:fetchurl") {
@@ -127,7 +138,7 @@ pub fn build_derivation<S: Store>(
         }
         build_log_file.write_all(&data[..len]).unwrap();
         let msg_string = String::from_utf8_lossy(&data[..len]);
-        progress_bar.set_message(msg_string.lines().last().unwrap_or(""));
+        progress.set_message(msg_string.lines().last().unwrap_or(""));
       }
     });
 
@@ -147,6 +158,7 @@ pub fn build_derivation<S: Store>(
         Hash::hash_str("foo", HashType::SHA256),
       ))?;
     }
+
     Ok(())
   } else {
     warn!("{:?}", build_status);

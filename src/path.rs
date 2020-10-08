@@ -89,7 +89,7 @@ impl Debug for Path {
   }
 }
 
-#[derive(Clone, PartialEq, Eq, std::hash::Hash, Deref)]
+#[derive(Clone, PartialEq, Eq, std::hash::Hash, Deref, Copy)]
 pub struct Hash([u8; HASH_BYTES]);
 
 impl Hash {
