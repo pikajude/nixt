@@ -156,3 +156,11 @@ pub fn decode_context(string: &str) -> (&Path, &str) {
     (Path::new(string.strip_prefix('/').unwrap_or(string)), "")
   }
 }
+
+pub fn rmdir<P: AsRef<Path>>(path: P) -> io::Result<()> {
+  match std::fs::remove_dir_all(path) {
+    Ok(_) => Ok(()),
+    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+    Err(e) => Err(e),
+  }
+}

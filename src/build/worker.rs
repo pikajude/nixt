@@ -7,6 +7,7 @@ use petgraph::{
 use std::{
   collections::{BTreeSet, HashMap},
   fmt::Display,
+  io::BufWriter,
   os::unix::{
     io::FromRawFd,
     process::{CommandExt, ExitStatusExt},
@@ -41,7 +42,7 @@ impl Build {
     match &mut self.child {
       Child::Proc { proc, .. } => proc.try_wait(),
       Child::Builtin { status, .. } => status
-        .try_lock()
+        .lock()
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "mutex poisoned"))
         .map(|x| *x),
     }
@@ -102,12 +103,13 @@ impl<'a> Worker<'a> {
       self.build_graph(ix)?;
     }
 
-    let mut jobs = BTreeSet::<String>::new();
+    let mut job_count = 0usize;
 
     // force the multi-bar to stay alive until all builds are finished
-    let all_jobs = self
-      .progress
-      .add(ProgressBar::new(self.goals.node_count() as _));
+    let all_jobs = self.progress.add(
+      ProgressBar::new(self.goals.node_count() as _)
+        .with_style(ProgressStyle::default_bar().template("[{pos}/{len}] {bar:40}")),
+    );
 
     let p2 = Arc::clone(&self.progress);
 
@@ -154,7 +156,7 @@ impl<'a> Worker<'a> {
 
         if let Some(x) = to_remove.take() {
           let goal = self.goals.remove_node(x).unwrap();
-          jobs.remove(&goal.derivation.name);
+          job_count -= 1;
           goal.build.unwrap().progress.finish_and_clear();
           all_jobs.inc(1);
 
@@ -163,16 +165,16 @@ impl<'a> Worker<'a> {
         }
 
         if !in_progress
-          && jobs.len() <= 8
+          && job_count < 8
           && self
             .goals
             .neighbors_directed(node, Incoming)
             .next()
             .is_none()
         {
-          let build = self.run_builder(&self.goals[node])?;
+          let build = self.run_builder(&self.goals[node], job_count)?;
           self.goals[node].build = Some(build);
-          jobs.insert(self.goals[node].derivation.name.to_string());
+          job_count += 1;
           all_jobs.enable_steady_tick(1000);
         }
       }
@@ -195,7 +197,7 @@ impl<'a> Worker<'a> {
       for out in &outputs {
         if !self.store.is_valid_path(&drv.outputs[out].path)? {
           for v in drv.outputs.values() {
-            let _ = std::fs::remove_dir_all(self.store.to_real_path(&v.path)?);
+            rmdir(self.store.to_real_path(&v.path)?)?;
           }
           let new_item = self.add_needed(&path, &outputs)?;
           self.derivations.insert(path.clone(), new_item);
@@ -208,7 +210,7 @@ impl<'a> Worker<'a> {
     Ok(())
   }
 
-  fn run_builder(&self, goal: &Goal) -> Result<Build> {
+  fn run_builder(&self, goal: &Goal, progress_bar_index: usize) -> Result<Build> {
     assert!(
       goal.build.is_none(),
       "shouldn't be using run_builder for a goal that is in progress"
@@ -217,14 +219,13 @@ impl<'a> Worker<'a> {
     let store = self.store;
 
     let progress = self.progress.insert(
-      0, // keep the all-progress bar at the bottom
+      progress_bar_index,
       ProgressBar::new(1).with_style(
-        ProgressStyle::default_spinner()
-          .template("{spinner} {prefix:.green} [{elapsed}] {wide_msg}"),
+        ProgressStyle::default_spinner().template("[{elapsed}] {prefix:.green} {wide_msg}"),
       ),
     );
-    progress.set_prefix(&goal.path.to_string());
-    progress.enable_steady_tick(1000 / 15);
+    progress.set_prefix(&goal.derivation.name);
+    progress.enable_steady_tick(500);
     progress.set_message("building");
 
     if drv.is_builtin() {
@@ -298,18 +299,32 @@ impl<'a> Worker<'a> {
     }
 
     let prog2 = progress.clone();
+    let show_progress = !prog2.is_hidden();
 
     std::thread::spawn(move || {
-      let mut build_log_file = fs::File::create(build_log_path).unwrap();
+      let mut build_log_file = BufWriter::new(fs::File::create(build_log_path).unwrap());
+      let mut last_log_line = String::new();
+      let mut data = vec![0; 8192];
       loop {
-        let mut data = vec![0; 8192];
         let len = unix::unistd::read(pipe_read, &mut data).unwrap();
         if len == 0 {
           break;
         }
         build_log_file.write_all(&data[..len]).unwrap();
-        let msg_string = String::from_utf8_lossy(&data[..len]);
-        prog2.set_message(msg_string.lines().last().unwrap_or(""));
+
+        // the log line display logic is moderately expensive
+        if show_progress {
+          let msg_string = String::from_utf8_lossy(&data[..len]);
+          for c in msg_string.chars() {
+            if c == '\n' {
+              prog2.set_message(&last_log_line);
+              last_log_line.clear();
+            } else if !c.is_ascii_control() {
+              // control characters fuck up the progress bar
+              last_log_line.push(c);
+            }
+          }
+        }
       }
 
       build_log_file.flush().unwrap();
