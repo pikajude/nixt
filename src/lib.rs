@@ -18,6 +18,7 @@
 
 pub mod archive;
 pub mod arena;
+pub mod build;
 pub mod derivation;
 pub mod eval;
 pub mod fetch;

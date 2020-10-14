@@ -62,7 +62,7 @@ impl FromStr for HashType {
   }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Hash {
   data: [u8; 64],
   len: usize,

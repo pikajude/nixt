@@ -1,7 +1,7 @@
 pub use crate::{
   derivation::Derivation,
   hash::{Encoding, Hash, HashType},
-  path::{Path as StorePath, PathWithOutputs as StorePathWithOutputs},
+  path::{Hash as PathHash, Path as StorePath, PathWithOutputs as StorePathWithOutputs},
   path_info::{PathInfo, ValidPathInfo},
   settings,
   settings::Settings,

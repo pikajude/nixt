@@ -1,5 +1,5 @@
 use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
-use crate::{archive, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
+use crate::{archive, build::worker::Worker, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
 use archive::PathFilter;
 use fs::File;
 use std::{
@@ -201,12 +201,11 @@ impl Store for LocalStore {
   }
 
   fn build_paths(self: Arc<Self>, paths: Vec<StorePathWithOutputs>) -> Result<()> {
+    let mut worker = Worker::with_store(self.as_ref());
     for path in paths {
-      if path.path.is_derivation() {
-        crate::goal::build_derivations(self.as_ref(), &path.path, &path.outputs)?;
-      }
+      worker.add_needed(&path.path, &path.outputs)?;
     }
-    Ok(())
+    worker.build()
   }
 
   fn compute_closure(

@@ -79,15 +79,8 @@ pub trait Store: Send + Sync {
     })
   }
 
-  fn parse_derivation(&self, path: &Path, name: &str) -> Result<Derivation> {
-    Derivation::parse(self, &fs::read_to_string(path)?, name)
-  }
-
   fn read_derivation(&self, path: &StorePath) -> Result<Derivation> {
-    self.parse_derivation(
-      &self.to_real_path(path)?,
-      &Derivation::name_from_path(path)?,
-    )
+    Derivation::get(self, path)
   }
 
   fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
@@ -294,4 +287,16 @@ pub trait Store: Send + Sync {
     include_outputs: bool,
     include_derivers: bool,
   ) -> Result<()>;
+
+  fn logfile_of(&self, path: &StorePath) -> PathBuf {
+    let mut log_part0 = path.to_string();
+    let log_part1 = log_part0.split_off(2);
+
+    settings()
+      .paths
+      .nix_log_dir
+      .join("drvs")
+      .join(log_part0)
+      .join(log_part1)
+  }
 }

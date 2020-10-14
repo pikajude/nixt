@@ -10,6 +10,7 @@ mod print;
 
 lazy_static! {
   pub static ref DRV_HASHES: Mutex<HashMap<StorePath, Hash>> = Mutex::new(HashMap::new());
+  pub static ref DERIVATIONS: Mutex<HashMap<PathHash, Derivation>> = Mutex::new(HashMap::new());
 }
 
 impl DRV_HASHES {
@@ -22,7 +23,7 @@ impl DRV_HASHES {
   }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub struct FixedOutputHash {
   pub recursive: bool,
   pub hash: Hash,
@@ -38,13 +39,13 @@ impl FixedOutputHash {
   }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Output {
   pub path: StorePath,
   pub hash: Option<FixedOutputHash>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Derivation {
   pub name: String,
   pub builder: PathBuf,
@@ -105,6 +106,21 @@ impl Derivation {
       .env
       .get("requiredSystemFeatures")
       .map_or(Default::default(), |x| x.split_ascii_whitespace().collect())
+  }
+
+  pub fn get<S: Store + ?Sized>(store: &S, path: &StorePath) -> Result<Self> {
+    let mut drv_lock = DERIVATIONS.try_lock().unwrap();
+    if let Some(x) = drv_lock.get(&path.hash) {
+      Ok(x.clone())
+    } else {
+      let drv = Self::parse(
+        store,
+        &fs::read_to_string(store.to_real_path(path)?)?,
+        &Self::name_from_path(path)?,
+      )?;
+      drv_lock.insert(path.hash, drv.clone());
+      Ok(drv)
+    }
   }
 }
 
