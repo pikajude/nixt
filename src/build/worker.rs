@@ -4,12 +4,14 @@ use petgraph::{
   graph::{DiGraph, NodeIndex},
   EdgeDirection::Incoming,
 };
+use serde::Deserialize;
 use std::{
   collections::{BTreeSet, HashMap},
   fmt::Display,
+  fs::File,
   io::BufWriter,
   os::unix::{
-    io::FromRawFd,
+    prelude::*,
     process::{CommandExt, ExitStatusExt},
   },
   process::{Command, ExitStatus, Stdio},
@@ -107,8 +109,11 @@ impl<'a> Worker<'a> {
 
     // force the multi-bar to stay alive until all builds are finished
     let all_jobs = self.progress.add(
-      ProgressBar::new(self.goals.node_count() as _)
-        .with_style(ProgressStyle::default_bar().template("[{pos}/{len}] {bar:40}")),
+      ProgressBar::new(self.goals.node_count() as _).with_style(
+        ProgressStyle::default_bar()
+          .template("[{bar:40}] {percent}% {pos}/{len}")
+          .progress_chars("=> "),
+      ),
     );
 
     let p2 = Arc::clone(&self.progress);
@@ -229,21 +234,7 @@ impl<'a> Worker<'a> {
     progress.set_message("building");
 
     if drv.is_builtin() {
-      if drv.builder.to_str() == Some("builtin:fetchurl") {
-        let status = Arc::new(Mutex::new(None));
-        let drv2 = drv.clone();
-        let stat2 = Arc::clone(&status);
-        std::thread::spawn(move || {
-          let stat = crate::fetch::fetchurl(&drv2).is_ok();
-          *stat2.lock().unwrap() = Some(ExitStatus::from_raw(if stat { 0 } else { 1 }))
-        });
-        return Ok(Build {
-          progress,
-          child: Child::Builtin { status },
-        });
-      } else {
-        bail!("unknown builtin: {}", drv.builder.display());
-      }
+      return exec_builtin(drv, progress);
     }
 
     let rewrites = drv
@@ -298,37 +289,7 @@ impl<'a> Worker<'a> {
       cmd.stderr(Stdio::from_raw_fd(pipe_write));
     }
 
-    let prog2 = progress.clone();
-    let show_progress = !prog2.is_hidden();
-
-    std::thread::spawn(move || {
-      let mut build_log_file = BufWriter::new(fs::File::create(build_log_path).unwrap());
-      let mut last_log_line = String::new();
-      let mut data = vec![0; 8192];
-      loop {
-        let len = unix::unistd::read(pipe_read, &mut data).unwrap();
-        if len == 0 {
-          break;
-        }
-        build_log_file.write_all(&data[..len]).unwrap();
-
-        // the log line display logic is moderately expensive
-        if show_progress {
-          let msg_string = String::from_utf8_lossy(&data[..len]);
-          for c in msg_string.chars() {
-            if c == '\n' {
-              prog2.set_message(&last_log_line);
-              last_log_line.clear();
-            } else if !c.is_ascii_control() {
-              // control characters fuck up the progress bar
-              last_log_line.push(c);
-            }
-          }
-        }
-      }
-
-      build_log_file.flush().unwrap();
-    });
+    read_log(build_log_path, pipe_read, progress.clone());
 
     Ok(Build {
       child: Child::Proc {
@@ -337,5 +298,117 @@ impl<'a> Worker<'a> {
       },
       progress,
     })
+  }
+}
+
+struct Logger {
+  pipe: RawFd,
+  file: BufWriter<File>,
+  progress: ProgressBar,
+  current_line: String,
+  phase: Option<String>,
+}
+
+impl Logger {
+  fn new<P: AsRef<Path>>(path: P, pipe: RawFd, progress: ProgressBar) -> Result<Self> {
+    Ok(Self {
+      pipe,
+      file: BufWriter::new(File::create(path)?),
+      progress,
+      current_line: String::new(),
+      phase: None,
+    })
+  }
+
+  fn handle_line(&mut self) {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", tag = "action")]
+    enum LogMsg {
+      Start {
+        #[serde(rename = "type")]
+        type_: String,
+      },
+      SetPhase {
+        phase: String,
+      },
+    }
+
+    let l = &self.current_line;
+    if l.starts_with("@nix ") {
+      if let Ok(msg) = serde_json::from_str::<LogMsg>(&l[5..]) {
+        #[allow(clippy::single_match)]
+        match msg {
+          LogMsg::SetPhase { phase } => {
+            self.phase = Some(phase);
+          }
+          _ => {}
+        }
+      } else {
+        self
+          .progress
+          .println(&format!("bad JSON message from builder: {:?}", l));
+      }
+    } else if let Some(ref p) = self.phase {
+      self.progress.set_message(&format!("[{}] {}", p, l));
+    } else {
+      self.progress.set_message(l);
+    }
+  }
+
+  fn run(mut self) -> Result<()> {
+    let mut data = vec![0; 8192];
+    let show_progress = !self.progress.is_hidden();
+
+    loop {
+      let len = unix::unistd::read(self.pipe, &mut data)?;
+      if len == 0 {
+        break;
+      }
+      self.file.write_all(&data[..len])?;
+
+      // the log line display logic is moderately expensive
+      if show_progress {
+        let msg_string = String::from_utf8_lossy(&data[..len]);
+        for c in msg_string.chars() {
+          if c == '\n' {
+            self.handle_line();
+            self.current_line.clear();
+          } else if !c.is_ascii_control() {
+            // control characters fuck up the progress bar
+            self.current_line.push(c);
+          }
+        }
+      }
+    }
+
+    Ok(self.file.flush()?)
+  }
+}
+
+fn read_log(log_path: PathBuf, stdout: RawFd, job_progress: ProgressBar) {
+  let show_progress = !job_progress.is_hidden();
+
+  std::thread::spawn(move || {
+    if let Err(e) = Logger::new(log_path, stdout, job_progress).and_then(|l| l.run()) {
+      panic!("while running logger: {:?}", e);
+    }
+  });
+}
+
+fn exec_builtin(drv: &Derivation, progress: ProgressBar) -> Result<Build> {
+  if drv.builder.to_str() == Some("builtin:fetchurl") {
+    let status = Arc::new(Mutex::new(None));
+    let drv2 = drv.clone();
+    let stat2 = Arc::clone(&status);
+    std::thread::spawn(move || {
+      let stat = crate::fetch::fetchurl(&drv2).is_ok();
+      *stat2.lock().unwrap() = Some(ExitStatus::from_raw(if stat { 0 } else { 1 }))
+    });
+    Ok(Build {
+      progress,
+      child: Child::Builtin { status },
+    })
+  } else {
+    bail!("unknown builtin: {}", drv.builder.display());
   }
 }

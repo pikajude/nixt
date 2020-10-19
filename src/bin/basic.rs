@@ -41,7 +41,8 @@ fn get_derivation(eval: &Eval) -> Result<String> {
         .find(|x| x.starts_with("!out!"))
         .and_then(|x| x.strip_prefix("!out!"))
       {
-        panic!("export BASIC_TEST_DRV={}", drvpath);
+        eprintln!("export BASIC_TEST_DRV={}", drvpath);
+        Ok(drvpath.to_string())
       } else {
         panic!("incorrect derivation")
       }
