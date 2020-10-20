@@ -561,7 +561,7 @@ pub struct Settings {
   pub flake_registry: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MaxBuildJobs {
   N(usize),
   Auto,

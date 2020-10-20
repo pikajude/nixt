@@ -1,13 +1,16 @@
-pub mod base32;
 pub use anyhow::{Context as _, *};
-mod pid;
 pub use pid::*;
 use std::{
   io::{self, Read, Write},
   path::{Path, PathBuf},
   str::pattern::{Pattern, Searcher},
 };
+pub use task::*;
 use unix::NixPath;
+
+pub mod base32;
+mod pid;
+mod task;
 
 pub fn break_str<'a, P: Pattern<'a>>(s: &'a str, pattern: P) -> Option<(&'a str, &'a str)> {
   let mut search = pattern.into_searcher(s);
@@ -158,9 +161,28 @@ pub fn decode_context(string: &str) -> (&Path, &str) {
 }
 
 pub fn rmdir<P: AsRef<Path>>(path: P) -> io::Result<()> {
-  match std::fs::remove_dir_all(path) {
-    Ok(_) => Ok(()),
-    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-    Err(e) => Err(e),
+  let p = path.as_ref();
+  std::fs::remove_dir_all(p).notfound_ok().or_else(|e| {
+    if e.raw_os_error() == Some(libc::ENOTDIR) {
+      std::fs::remove_file(p).notfound_ok()
+    } else {
+      Err(e)
+    }
+  })
+}
+
+pub trait Ignore {
+  fn notfound_ok(self) -> Self;
+}
+
+impl<T: Default> Ignore for io::Result<T> {
+  fn notfound_ok(self) -> Self {
+    self.or_else(|e| {
+      if e.kind() == io::ErrorKind::NotFound {
+        Ok(T::default())
+      } else {
+        Err(e)
+      }
+    })
   }
 }

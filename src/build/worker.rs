@@ -10,12 +10,9 @@ use std::{
   fmt::Display,
   fs::File,
   io::BufWriter,
-  os::unix::{
-    prelude::*,
-    process::{CommandExt, ExitStatusExt},
-  },
-  process::{Command, ExitStatus, Stdio},
-  sync::{Arc, Mutex},
+  os::unix::prelude::*,
+  process::*,
+  sync::Arc,
 };
 use tempfile::TempDir;
 use unix::fcntl::OFlag;
@@ -35,18 +32,31 @@ enum Child {
     build_dir: TempDir,
   },
   Builtin {
-    status: Arc<Mutex<Option<ExitStatus>>>,
+    task: Task<Result<()>>,
   },
 }
 
+impl Drop for Child {
+  fn drop(&mut self) {
+    if let Self::Proc { proc, .. } = self {
+      let _ = proc.kill();
+    }
+  }
+}
+
 impl Build {
-  fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+  fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
     match &mut self.child {
-      Child::Proc { proc, .. } => proc.try_wait(),
-      Child::Builtin { status, .. } => status
-        .lock()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "mutex poisoned"))
-        .map(|x| *x),
+      Child::Proc { proc, .. } => Ok(proc.try_wait()?),
+      Child::Builtin { task, .. } => {
+        if task.is_panicked() {
+          Ok(Some(ExitStatus::from_raw(1)))
+        } else if task.is_completed() {
+          Ok(Some(ExitStatus::from_raw(0)))
+        } else {
+          Ok(None)
+        }
+      }
     }
   }
 }
@@ -106,6 +116,8 @@ impl<'a> Worker<'a> {
     }
 
     let mut job_count = 0usize;
+    let jobs_max = 8;
+    // let jobs_max = settings().max_build_jobs;
 
     // force the multi-bar to stay alive until all builds are finished
     let all_jobs = self.progress.add(
@@ -148,7 +160,7 @@ impl<'a> Worker<'a> {
               let build_log_path = self.store.logfile_of(&self.goals[node].path);
               if build_log_path.exists() {
                 let contents = std::fs::read_to_string(&build_log_path)?;
-                for line in contents.lines().rev().take(10).collect::<Vec<_>>() {
+                for line in contents.lines().rev().take(40).collect::<Vec<_>>() {
                   all_jobs.println(line);
                 }
               }
@@ -170,7 +182,7 @@ impl<'a> Worker<'a> {
         }
 
         if !in_progress
-          && job_count < 8
+          && job_count < jobs_max
           && self
             .goals
             .neighbors_directed(node, Incoming)
@@ -326,7 +338,7 @@ impl Logger {
     enum LogMsg {
       Start {
         #[serde(rename = "type")]
-        type_: String,
+        _type: String,
       },
       SetPhase {
         phase: String,
@@ -386,8 +398,6 @@ impl Logger {
 }
 
 fn read_log(log_path: PathBuf, stdout: RawFd, job_progress: ProgressBar) {
-  let show_progress = !job_progress.is_hidden();
-
   std::thread::spawn(move || {
     if let Err(e) = Logger::new(log_path, stdout, job_progress).and_then(|l| l.run()) {
       panic!("while running logger: {:?}", e);
@@ -397,16 +407,11 @@ fn read_log(log_path: PathBuf, stdout: RawFd, job_progress: ProgressBar) {
 
 fn exec_builtin(drv: &Derivation, progress: ProgressBar) -> Result<Build> {
   if drv.builder.to_str() == Some("builtin:fetchurl") {
-    let status = Arc::new(Mutex::new(None));
     let drv2 = drv.clone();
-    let stat2 = Arc::clone(&status);
-    std::thread::spawn(move || {
-      let stat = crate::fetch::fetchurl(&drv2).is_ok();
-      *stat2.lock().unwrap() = Some(ExitStatus::from_raw(if stat { 0 } else { 1 }))
-    });
+    let handle = Task::run(move || crate::fetch::fetchurl(&drv2));
     Ok(Build {
       progress,
-      child: Child::Builtin { status },
+      child: Child::Builtin { task: handle },
     })
   } else {
     bail!("unknown builtin: {}", drv.builder.display());
