@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use rusqlite::{Connection, DatabaseName};
 
-#[derive(Deref, DerefMut)]
+#[derive(Deref, DerefMut, Debug)]
 pub struct Sqlite(Connection);
 
 impl Sqlite {

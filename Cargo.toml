@@ -10,6 +10,8 @@ base64 = "0.13.0"
 binascii = "0.1.4"
 codespan = "0.9.5"
 codespan-reporting = "0.9.5"
+crossbeam = "0.8.0"
+ctrlc = { version = "3.1.6", features = ["termination"] }
 curl = "0.4.33"
 derive_more = "0.99.10"
 dirs-next = "1.0.1"

@@ -160,7 +160,7 @@ pub fn decode_context(string: &str) -> (&Path, &str) {
   }
 }
 
-pub fn rmdir<P: AsRef<Path>>(path: P) -> io::Result<()> {
+pub fn remove_path<P: AsRef<Path>>(path: P) -> io::Result<()> {
   let p = path.as_ref();
   std::fs::remove_dir_all(p).notfound_ok().or_else(|e| {
     if e.raw_os_error() == Some(libc::ENOTDIR) {

@@ -1,5 +1,5 @@
 use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
-use crate::{archive, build::worker::Worker, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
+use crate::{archive, build::Worker, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
 use archive::PathFilter;
 use fs::File;
 use std::{
@@ -34,6 +34,7 @@ pub struct OptimiseStats {
   pub blocks_freed: u64,
 }
 
+#[derive(Debug)]
 pub struct LocalStore {
   temproots_dir: PathBuf,
   links_dir: PathBuf,
@@ -201,9 +202,9 @@ impl Store for LocalStore {
   }
 
   fn build_paths(self: Arc<Self>, paths: Vec<StorePathWithOutputs>) -> Result<()> {
-    let mut worker = Worker::with_store(self.as_ref());
+    let mut worker = Worker::with_store(self);
     for path in paths {
-      worker.add_needed(&path.path, &path.outputs)?;
+      worker.add_needed(&path.path)?;
     }
     worker.build()
   }

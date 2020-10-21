@@ -2,7 +2,7 @@ use crate::{archive::PathFilter, prelude::*};
 use std::{
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
-  fmt::Display,
+  fmt::{Debug, Display},
   sync::Arc,
 };
 
@@ -38,7 +38,7 @@ pub enum FileIngestionMethod {
   Recursive,
 }
 
-pub trait Store: Send + Sync {
+pub trait Store: Send + Sync + Debug {
   fn store_path(&self) -> Cow<OsStr>;
 
   fn print_store_path(&self, path: &StorePath) -> String {
