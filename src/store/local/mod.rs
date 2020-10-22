@@ -2,6 +2,7 @@ use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
 use crate::{archive, build::Worker, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
 use archive::PathFilter;
 use fs::File;
+use parking_lot::Mutex;
 use std::{
   borrow::Cow,
   collections::BTreeSet,
@@ -12,7 +13,7 @@ use std::{
   os::unix::io::AsRawFd,
   path::{Path, PathBuf},
   rc::Rc,
-  sync::{Arc, Mutex},
+  sync::Arc,
 };
 use tee_readwrite::TeeWriter;
 use unix::{sys::stat::*, unistd::*};
@@ -90,7 +91,7 @@ impl Store for LocalStore {
   }
 
   fn get_path_info(&self, path: &StorePath) -> Result<Option<Rc<dyn PathInfo>>> {
-    let conn = self.db.lock().unwrap();
+    let conn = self.db.lock();
     if let Some(x) = db::get_path_info(&conn, self, path)? {
       Ok(Some(Rc::new(x)))
     } else {
@@ -118,9 +119,9 @@ impl Store for LocalStore {
     Ok(())
   }
 
-  fn register_valid_path(&self, _path_info: ValidPathInfo) -> Result<()> {
-    let mut sql = self.db.lock().unwrap();
-    db::insert_valid_paths(&mut sql, self, iter::once(&_path_info))?;
+  fn register_valid_path(&self, path_info: ValidPathInfo) -> Result<()> {
+    let mut sql = self.db.lock();
+    db::insert_valid_paths(&mut sql, self, iter::once(&path_info))?;
     Ok(())
   }
 

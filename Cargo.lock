@@ -1137,6 +1137,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "psm"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96e0536f6528466dbbbbe6b986c34175a8d0ff25b794c4bacda22e068cd2f2c5"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "qstring"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1359,11 +1368,11 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "path_abs",
- "petgraph",
  "pretty_env_logger",
  "proptest",
  "rand 0.7.3",
  "regex",
+ "rm_rf",
  "rusqlite",
  "rust-crypto",
  "rustyline",
@@ -1378,6 +1387,15 @@ dependencies = [
  "ureq",
  "users",
  "webpki",
+]
+
+[[package]]
+name = "rm_rf"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "047ab6155a1d09020e6d073998d51e941fc66260b3bb73839e1bcdb1c472d721"
+dependencies = [
+ "stacker",
 ]
 
 [[package]]
@@ -1614,6 +1632,19 @@ name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
+
+[[package]]
+name = "stacker"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21ccb4c06ec57bc82d0f610f1a2963d7648700e43a6f513e564b9c89f7991786"
+dependencies = [
+ "cc",
+ "cfg-if 0.1.10",
+ "libc",
+ "psm",
+ "winapi",
+]
 
 [[package]]
 name = "standback"

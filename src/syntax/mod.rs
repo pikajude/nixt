@@ -6,10 +6,10 @@ pub mod lexer;
 pub mod parse;
 pub mod span;
 
-pub fn parse<'input>(
+pub fn parse(
   file_id: FileId,
   arena: &Arena<expr::Expr>,
-  input: &'input str,
+  input: &str,
 ) -> Result<expr::ExprRef, parse::ParseError> {
   let ast = parse::ExprParser::new().parse(arena, file_id, lexer::Lexer::new(input));
   ast.map_err(|e| parse::ParseError {

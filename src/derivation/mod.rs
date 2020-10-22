@@ -1,8 +1,8 @@
 use crate::prelude::*;
+use parking_lot::Mutex;
 use std::{
   collections::{BTreeMap, BTreeSet, HashMap},
   fmt::{Display, Write},
-  sync::Mutex,
 };
 
 mod parse;
@@ -15,11 +15,11 @@ lazy_static! {
 
 impl DRV_HASHES {
   pub fn lookup(&self, path: &StorePath) -> Option<Hash> {
-    self.lock().unwrap().get(path).cloned()
+    self.lock().get(path).cloned()
   }
 
   pub fn add(&self, path: StorePath, hash: Hash) -> Option<Hash> {
-    self.lock().unwrap().insert(path, hash)
+    self.lock().insert(path, hash)
   }
 }
 

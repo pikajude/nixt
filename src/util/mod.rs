@@ -5,12 +5,10 @@ use std::{
   path::{Path, PathBuf},
   str::pattern::{Pattern, Searcher},
 };
-pub use task::*;
 use unix::NixPath;
 
 pub mod base32;
 mod pid;
-mod task;
 
 pub fn break_str<'a, P: Pattern<'a>>(s: &'a str, pattern: P) -> Option<(&'a str, &'a str)> {
   let mut search = pattern.into_searcher(s);
@@ -153,36 +151,9 @@ impl NixPath for AutoDelete {
 }
 
 pub fn decode_context(string: &str) -> (&Path, &str) {
-  if string.starts_with('!') {
-    break_str(&string[1..], '!').map_or((Path::new(&string[1..]), ""), |(a, b)| (Path::new(b), a))
+  if let Some(s) = string.strip_prefix('!') {
+    break_str(s, '!').map_or((Path::new(&string[1..]), ""), |(a, b)| (Path::new(b), a))
   } else {
     (Path::new(string.strip_prefix('/').unwrap_or(string)), "")
-  }
-}
-
-pub fn remove_path<P: AsRef<Path>>(path: P) -> io::Result<()> {
-  let p = path.as_ref();
-  std::fs::remove_dir_all(p).notfound_ok().or_else(|e| {
-    if e.raw_os_error() == Some(libc::ENOTDIR) {
-      std::fs::remove_file(p).notfound_ok()
-    } else {
-      Err(e)
-    }
-  })
-}
-
-pub trait Ignore {
-  fn notfound_ok(self) -> Self;
-}
-
-impl<T: Default> Ignore for io::Result<T> {
-  fn notfound_ok(self) -> Self {
-    self.or_else(|e| {
-      if e.kind() == io::ErrorKind::NotFound {
-        Ok(T::default())
-      } else {
-        Err(e)
-      }
-    })
   }
 }

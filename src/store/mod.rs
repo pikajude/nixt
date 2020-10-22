@@ -10,6 +10,7 @@ mod local;
 
 pub use local::*;
 
+#[allow(clippy::needless_lifetimes)] // clippy pls
 pub(crate) fn show_path<'a>(i: &'a OsStr) -> impl Display + 'a {
   Path::new(i).display()
 }

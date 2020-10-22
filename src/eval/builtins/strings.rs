@@ -10,10 +10,11 @@ use crate::{
   util::*,
 };
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use regex::Regex;
 use std::{
   collections::{BTreeSet, HashMap},
-  sync::{Arc, Mutex},
+  sync::Arc,
 };
 
 lazy_static! {
@@ -21,7 +22,7 @@ lazy_static! {
 }
 
 fn make_regex(s: &str) -> Result<Arc<Regex>> {
-  let mut m = REGEX_CACHE.lock().unwrap();
+  let mut m = REGEX_CACHE.lock();
   match m.get(s) {
     Some(x) => Ok(Arc::clone(x)),
     None => {

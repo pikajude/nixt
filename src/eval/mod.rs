@@ -14,6 +14,7 @@ use config::Config;
 use context::{Context, Scope, StaticScope};
 use itertools::{Either, Itertools};
 use log::Level;
+use parking_lot::Mutex;
 use primop::{Op, Primop};
 use std::{
   cell::RefCell,
@@ -21,7 +22,7 @@ use std::{
   fs,
   sync::{
     atomic::{AtomicU16, Ordering},
-    Arc, Mutex,
+    Arc,
   },
 };
 use termcolor::{ColorChoice, StandardStream};
@@ -82,7 +83,7 @@ impl Eval {
   }
 
   pub fn print_error(&self, e: Error) -> Result<()> {
-    let files = self.files.lock().unwrap();
+    let files = self.files.lock();
     let trace = self.trace.borrow();
     let trace_limit = if self.config.trace { trace.len() } else { 1 };
     let diagnostic = Diagnostic::error()
@@ -117,14 +118,14 @@ impl Eval {
 
   pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ThunkId> {
     let path = path.as_ref().canonicalize()?;
-    let mut ids = self.file_ids.lock().unwrap();
+    let mut ids = self.file_ids.lock();
     if let Some(x) = ids.get(&path) {
       return Ok(*x);
     }
     let eid = {
       trace!("loading file: {}", path.display());
       let contents = fs::read_to_string(&path)?;
-      let mut f = self.files.lock().unwrap();
+      let mut f = self.files.lock();
       let id = f.add(&path, contents);
       crate::syntax::parse(id, &self.expr, f.source(id))?
     };
@@ -137,7 +138,7 @@ impl Eval {
 
   pub fn load_inline<S: Into<String>>(&self, src: S) -> Result<ThunkId> {
     let eid = {
-      let mut f = self.files.lock().unwrap();
+      let mut f = self.files.lock();
       let id = f.add(
         format!(
           "<inline-{}>",
@@ -278,7 +279,7 @@ impl Eval {
 
   fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
     if log_enabled!(target: "eval::entry", Level::Trace) {
-      let fs = self.files.lock().unwrap();
+      let fs = self.files.lock();
       trace!(
         target: "eval::entry",
         "{}:{}\n  {}",
@@ -316,7 +317,7 @@ impl Eval {
           if pb.is_absolute() {
             Ok(Value::Path(pb.into()))
           } else {
-            let files = self.files.lock().unwrap();
+            let files = self.files.lock();
             let filename = files.name(e.span.file_id);
             let dest = if filename.to_str().unwrap().starts_with("<inline-") {
               std::env::current_dir()?.join(pb)
@@ -506,7 +507,7 @@ impl Eval {
     let mut fn_body_scope = StaticScope::new();
 
     if log_enabled!(target: "eval::lambda", Level::Trace) {
-      let fs = self.files.lock().unwrap();
+      let fs = self.files.lock();
       trace!(
         target: "eval::lambda",
         "{}:{}\n  {}",

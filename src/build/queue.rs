@@ -34,7 +34,7 @@ impl<T> Queue<T> {
     self.popper_cv.notify_one();
   }
 
-  pub fn push_bounded(&self, item: T) {
+  pub fn _push_bounded(&self, item: T) {
     let locked_state = self.state.lock().unwrap();
     let mut state = self
       .bounded_cv

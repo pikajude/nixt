@@ -118,10 +118,10 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   }
 
   for path in &context {
-    if path.starts_with('=') {
+    if let Some(p) = path.strip_prefix('=') {
       let mut refs = Default::default();
       eval.store.compute_closure(
-        &eval.store.parse_store_path(Path::new(&path[1..]))?,
+        &eval.store.parse_store_path(Path::new(p))?,
         &mut refs,
         false,
         false,

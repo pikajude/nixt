@@ -1,10 +1,10 @@
 use crate::prelude::*;
+use parking_lot::Mutex;
 use rusqlite::{params, Connection};
 use serde::ser::Serialize;
 use std::{
   collections::HashMap,
   fmt::Debug,
-  sync::Mutex,
   time::{Duration, SystemTime},
 };
 
@@ -51,7 +51,6 @@ impl Cache {
     if let Some(r) = self
       .0
       .lock()
-      .expect("unable to lock DB handle")
       .query_row_and_then(
         "select info, path, immutable, timestamp from Cache where input = ?",
         params![serde_json::to_string(&data)?],
