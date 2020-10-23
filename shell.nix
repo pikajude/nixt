@@ -1,7 +1,7 @@
 with import <nixpkgs> { };
 mkShell {
   name = "rix";
-  buildInputs = [ rustup cargo-udeps libarchive pkg-config sqlite openssl ];
+  buildInputs = [ rustup cargo-udeps libarchive pkg-config sqlite openssl linuxPackages.perf ];
   RUST_LIB_BACKTRACE = true;
   PKG_CONFIG_ALLOW_CROSS = true;
   NIX_TRACE = true;

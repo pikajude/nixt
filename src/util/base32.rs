@@ -17,6 +17,13 @@ lazy_static! {
     }
     xs
   };
+  pub static ref IS_BASE32: [bool; 256] = {
+    let mut isb32 = [false; 256];
+    for c in BASE32_CHARS.iter() {
+      isb32[*c as usize] = true;
+    }
+    isb32
+  };
 }
 
 fn encode_len(i: usize) -> usize {

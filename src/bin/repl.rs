@@ -4,7 +4,6 @@ use rix::eval::Eval;
 
 fn main() -> rix::util::Result<()> {
   std::env::set_var("_NIX_TEST", "1");
-  pretty_env_logger::init();
 
   let eval = Eval::new()?;
   let mut rl = rustyline::Editor::<()>::with_config(

@@ -4,7 +4,6 @@ use std::path::Path;
 
 fn main() -> Result<()> {
   std::env::set_var("_NIX_TEST", "1");
-  pretty_env_logger::init();
 
   let eval = Eval::new().unwrap();
 

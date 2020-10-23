@@ -14,5 +14,7 @@ pub fn init() -> Result<()> {
     env::remove_var("TMPDIR");
   }
 
+  crate::logger::Logger::init();
+
   Ok(())
 }

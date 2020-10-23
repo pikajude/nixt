@@ -24,6 +24,7 @@ pub mod eval;
 pub mod fetch;
 pub mod globals;
 pub mod hash;
+pub mod logger;
 pub mod path;
 pub mod path_info;
 mod prelude;

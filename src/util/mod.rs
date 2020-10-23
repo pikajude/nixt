@@ -1,13 +1,15 @@
 pub use anyhow::{Context as _, *};
+pub use fs::*;
+pub use io::*;
 pub use pid::*;
 use std::{
-  io::{self, Read, Write},
-  path::{Path, PathBuf},
+  path::Path,
   str::pattern::{Pattern, Searcher},
 };
-use unix::NixPath;
 
 pub mod base32;
+mod fs;
+mod io;
 mod pid;
 
 pub fn break_str<'a, P: Pattern<'a>>(s: &'a str, pattern: P) -> Option<(&'a str, &'a str)> {
@@ -17,11 +19,12 @@ pub fn break_str<'a, P: Pattern<'a>>(s: &'a str, pattern: P) -> Option<(&'a str,
   Some((&s[..start], &s[end..]))
 }
 
-#[test]
-fn break_str_test() {
-  assert_eq!(break_str("foobar", 'b'), Some(("foo", "ar")));
-  assert_eq!(break_str("foobar", "baz"), None);
-  assert_eq!(break_str("foobar", "bar"), Some(("foo", "")));
+pub fn decode_context(string: &str) -> (&Path, &str) {
+  if let Some(s) = string.strip_prefix('!') {
+    break_str(s, '!').map_or((Path::new(&string[1..]), ""), |(a, b)| (Path::new(b), a))
+  } else {
+    (Path::new(string.strip_prefix('/').unwrap_or(string)), "")
+  }
 }
 
 pub trait OptionalExt<T> {
@@ -43,117 +46,27 @@ impl<T> OptionalExt<T> for Result<T> {
   }
 }
 
-pub struct FnSink<F: FnMut(&[u8]) -> io::Result<()>>(F);
+pub struct RunOnDrop<F: FnOnce()> {
+  run: Option<F>,
+}
 
-impl<F: FnMut(&[u8]) -> io::Result<()>> FnSink<F> {
+impl<F: FnOnce()> RunOnDrop<F> {
   pub fn new(f: F) -> Self {
-    Self(f)
+    Self { run: Some(f) }
   }
 }
 
-impl<F: FnMut(&[u8]) -> io::Result<()>> Write for FnSink<F> {
-  fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-    (self.0)(buf)?;
-    Ok(buf.len())
-  }
-
-  fn flush(&mut self) -> io::Result<()> {
-    Ok(())
-  }
-}
-
-pub struct SourceSink<F: FnMut(&mut dyn Write) -> io::Result<()>> {
-  cb: F,
-  buffer: Vec<u8>,
-}
-
-impl<F: FnMut(&mut dyn Write) -> io::Result<()>> SourceSink<F> {
-  pub fn new(f: F) -> Self {
-    Self {
-      cb: f,
-      buffer: vec![],
+impl<F: FnOnce()> Drop for RunOnDrop<F> {
+  fn drop(&mut self) {
+    if let Some(t) = self.run.take() {
+      t()
     }
-  }
-}
-
-impl<F: FnMut(&mut dyn Write) -> io::Result<()>> Read for SourceSink<F> {
-  fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-    if self.buffer.is_empty() {
-      (self.cb)(&mut self.buffer)?;
-    }
-    let mut read_data = self
-      .buffer
-      .split_off(std::cmp::min(self.buffer.len(), buf.len()));
-    // split_off returns the back, but i want the front here
-    std::mem::swap(&mut read_data, &mut self.buffer);
-    buf[..read_data.len()].copy_from_slice(&read_data);
-    Ok(read_data.len())
   }
 }
 
 #[test]
-fn test_sink() -> io::Result<()> {
-  let mut called = false;
-  let mut ss = SourceSink::new(move |writer| {
-    if !called {
-      writer.write_all(b"hello world!")?;
-      called = true;
-    }
-    Ok(())
-  });
-
-  let mut output = vec![];
-  std::io::copy(&mut ss, &mut output)?;
-  assert_eq!(&output[..], b"hello world!");
-  Ok(())
-}
-
-#[derive(Debug, AsRef, Deref, DerefMut, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[as_ref(forward)]
-pub struct AutoDelete(pub PathBuf);
-
-impl Drop for AutoDelete {
-  fn drop(&mut self) {
-    /*
-    if self.0.to_str() == Some("/no-such-path") {
-      return;
-    }
-    let status: Result<()> = try {
-      let meta = std::fs::metadata(&self.0)?;
-      if meta.is_dir() {
-        std::fs::remove_dir_all(&self.0)?;
-      } else {
-        std::fs::remove_file(&self.0)?;
-      }
-    };
-    if let Err(e) = status {
-      debug!("failed to auto-cleanup path '{}': {}", self.0.display(), e)
-    }
-    */
-  }
-}
-
-impl NixPath for AutoDelete {
-  fn is_empty(&self) -> bool {
-    self.0.is_empty()
-  }
-
-  fn len(&self) -> usize {
-    self.0.len()
-  }
-
-  fn with_nix_path<T, F>(&self, f: F) -> unix::Result<T>
-  where
-    F: FnOnce(&std::ffi::CStr) -> T,
-  {
-    self.0.with_nix_path(f)
-  }
-}
-
-pub fn decode_context(string: &str) -> (&Path, &str) {
-  if let Some(s) = string.strip_prefix('!') {
-    break_str(s, '!').map_or((Path::new(&string[1..]), ""), |(a, b)| (Path::new(b), a))
-  } else {
-    (Path::new(string.strip_prefix('/').unwrap_or(string)), "")
-  }
+fn break_str_test() {
+  assert_eq!(break_str("foobar", 'b'), Some(("foo", "ar")));
+  assert_eq!(break_str("foobar", "baz"), None);
+  assert_eq!(break_str("foobar", "bar"), Some(("foo", "")));
 }

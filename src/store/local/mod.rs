@@ -16,17 +16,10 @@ use std::{
   sync::Arc,
 };
 use tee_readwrite::TeeWriter;
-use unix::{sys::stat::*, unistd::*};
+use unix::unistd::*;
 
-mod canonicalise;
 pub mod db;
 pub mod gc;
-
-#[derive(Eq, PartialEq, Hash)]
-struct Inode {
-  dev: u64,
-  ino: u64,
-}
 
 #[derive(Default)]
 pub struct OptimiseStats {
@@ -66,18 +59,18 @@ impl Store for LocalStore {
       let _ = PathLocks::new().lock(iter::once(&real_path), true, None)?;
 
       if repair || !self.is_valid_path(&dest_path)? {
-        self.delete_path(&real_path)?;
+        delete_path(&real_path)?;
 
         fs::write(&real_path, contents)?;
 
         debug!("added {} to store", real_path.display());
 
-        self.canonicalise_path_metadata(&real_path, None)?;
+        canonicalise_path_metadata(&real_path, None)?;
 
         let nar_bytes = archive::dump_to_bytes(contents.len(), contents.as_bytes())?;
         let nar_hash = Hash::hash_bytes(&nar_bytes, HashType::SHA256);
 
-        self.optimise_path(&real_path)?;
+        optimise_path(&real_path)?;
 
         let mut path_info = ValidPathInfo::new(dest_path.clone(), nar_hash);
         path_info.nar_size = Some(nar_bytes.len() as u64);
@@ -103,7 +96,7 @@ impl Store for LocalStore {
     let file = self.temproots_dir.join(std::process::id().to_string());
     let mut temp_file = loop {
       let all_gc_roots = gc::open_gc_lock(&settings().paths.nix_state_dir, LockType::Read)?;
-      self.delete_path(&file)?;
+      delete_path(&file)?;
       let temproots_file = File::create(&file)?;
       drop(all_gc_roots);
       debug!("acquiring read lock on `{}'", file.display());
@@ -140,11 +133,11 @@ impl Store for LocalStore {
       PathLocks::new().lock(&mut iter::once(&dest), true, None)?;
 
       if repair.repair() || !self.is_valid_path(path_info.store_path())? {
-        self.delete_path(&dest)?;
+        delete_path(&dest)?;
 
         archive::restore_path(&dest, input)?;
 
-        self.canonicalise_path_metadata(&dest, None)?;
+        canonicalise_path_metadata(&dest, None)?;
       }
     }
 
@@ -187,11 +180,11 @@ impl Store for LocalStore {
       let real_path = self.to_real_path(&dest_path)?;
       PathLocks::new().lock(iter::once(&real_path), false, None)?;
       if repair.repair() || !self.is_valid_path(&dest_path)? {
-        self.delete_path(&real_path)?;
+        delete_path(&real_path)?;
         fs::rename(&tmpdir, &real_path)?;
 
-        self.canonicalise_path_metadata(&real_path, None)?;
-        self.optimise_path(&real_path)?;
+        canonicalise_path_metadata(&real_path, None)?;
+        optimise_path(&real_path)?;
 
         let mut pi = ValidPathInfo::new(dest_path.clone(), nar_hash);
         pi.nar_size = Some(nar_size as _);
@@ -227,10 +220,6 @@ impl Store for LocalStore {
 
 impl LocalStore {
   pub fn open() -> Result<Self> {
-    if cfg!(test) {
-      let _ = pretty_env_logger::try_init();
-    }
-
     crate::globals::init()?;
 
     let settings = settings();
@@ -289,39 +278,5 @@ impl LocalStore {
     fs::create_dir_all(&this.temproots_dir)?;
     fs::create_dir_all(&this.links_dir)?;
     Ok(this)
-  }
-
-  fn delete_path(&self, p: &Path) -> Result<u64> {
-    if !p.exists() {
-      return Ok(0);
-    }
-    let mut bytes_freed = 0;
-    self.delete_path_impl(p, &mut bytes_freed)?;
-    Ok(bytes_freed)
-  }
-
-  fn delete_path_impl(&self, path: &Path, bytes_freed: &mut u64) -> Result<()> {
-    let meta = fs::symlink_metadata(path)?;
-    if meta.is_file() && meta.nlink() == 1 {
-      *bytes_freed += meta.len();
-    } else if meta.is_dir() {
-      let cur_mode = Mode::from_bits_truncate(meta.mode() as _);
-      let target_mode = Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IXUSR;
-      if !cur_mode.contains(target_mode) {
-        let mut perms = meta.permissions();
-        perms.set_mode((cur_mode | target_mode).bits() as _);
-        fs::set_permissions(path, perms)
-          .with_context(|| format!("while making `{}' writable", path.display()))?;
-      }
-      for file in fs::read_dir(path)? {
-        self.delete_path_impl(&file?.path(), bytes_freed)?;
-      }
-
-      fs::remove_dir(path)?;
-      return Ok(());
-    }
-    fs::remove_file(path)
-      .with_context(|| format!("while trying to delete file `{}'", path.display()))?;
-    Ok(())
   }
 }

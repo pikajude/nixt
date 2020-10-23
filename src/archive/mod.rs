@@ -62,9 +62,10 @@ fn dump_path_impl<P: AsRef<Path>, W: Write>(
   filter: &PathFilter,
 ) -> io::Result<()> {
   let path = path.as_ref();
-  let meta = fs::metadata(path)?;
+  let meta = fs::symlink_metadata(path)?;
   sink.write_tag("(")?;
   if meta.file_type().is_file() {
+    trace!("dump file: {}", path.display());
     sink.write_tag("type")?;
     sink.write_tag("regular")?;
     if Mode::from_bits_truncate(meta.mode() as _).contains(Mode::S_IXUSR) {
@@ -74,6 +75,7 @@ fn dump_path_impl<P: AsRef<Path>, W: Write>(
 
     dump_file(path, meta.len(), sink)?;
   } else if meta.file_type().is_dir() {
+    trace!("dump directory: {}", path.display());
     sink.write_tag("type")?;
     sink.write_tag("directory")?;
 
@@ -97,10 +99,11 @@ fn dump_path_impl<P: AsRef<Path>, W: Write>(
       }
     }
   } else if meta.file_type().is_symlink() {
+    trace!("dump symlink: {}", path.display());
     sink.write_tag("type")?;
     sink.write_tag("symlink")?;
     sink.write_tag("target")?;
-    sink.write_tag(fs::canonicalize(path)?.display().to_string())?;
+    sink.write_tag(std::fs::read_link(path)?.display().to_string())?;
   } else {
     return Err(io::Error::new(
       io::ErrorKind::Other,
