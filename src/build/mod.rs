@@ -88,7 +88,7 @@ impl Worker {
   }
 
   fn has_slots(&self) -> bool {
-    self.active.len() < settings().build_cores
+    self.active.len() < settings().max_build_jobs
   }
 
   fn wait_for_events(&mut self, all_jobs: &ProgressBar) -> Vec<Message> {
@@ -403,7 +403,7 @@ fn exec_builder(
     canonicalise_path_metadata(&out_path, None)?;
 
     let mut path_hash = crate::hash::Sink::new(HashType::SHA256);
-    let mut scanner = RefsScanner::new(referenceable_paths.iter().map(|p| p.hash));
+    let mut scanner = crate::archive::RefsScanner::new(referenceable_paths.iter().map(|p| p.hash));
 
     debug!("dumping {}", out_path);
 
@@ -421,107 +421,4 @@ fn exec_builder(
   }
 
   Ok(Some(pid))
-}
-
-struct RefsScanner {
-  hashes: HashSet<Vec<u8>>,
-  seen: HashSet<Vec<u8>>,
-  tail: Vec<u8>,
-}
-
-impl RefsScanner {
-  pub fn new(hashes: impl IntoIterator<Item = PathHash>) -> Self {
-    Self {
-      hashes: hashes
-        .into_iter()
-        .map(|h| h.to_string().as_bytes().to_vec())
-        .collect(),
-      seen: HashSet::new(),
-      tail: vec![],
-    }
-  }
-}
-
-const HASH_LENGTH: usize = 32;
-
-fn search(data: &[u8], hashes: &mut HashSet<Vec<u8>>, seen: &mut HashSet<Vec<u8>>) {
-  if hashes.is_empty() {
-    return;
-  }
-
-  let mut i = 0;
-  while i + HASH_LENGTH <= data.len() {
-    let mut matched = true;
-    let mut j = HASH_LENGTH - 1;
-    while j > 0 {
-      if !crate::util::base32::IS_BASE32[data[i + j] as usize] {
-        i += j + 1;
-        matched = false;
-        break;
-      }
-      j -= 1;
-    }
-    if !matched {
-      continue;
-    }
-    let this_ref = &data[i..i + HASH_LENGTH];
-    if hashes.remove(this_ref) {
-      seen.insert(this_ref.to_vec());
-    }
-    i += 1;
-  }
-}
-
-impl io::Write for RefsScanner {
-  fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-    // all hashes found, this scanner is now a no-op
-    if self.hashes.is_empty() {
-      return Ok(data.len());
-    }
-
-    let len = data.len();
-
-    self.tail.extend(if len > HASH_LENGTH {
-      &data[..HASH_LENGTH]
-    } else {
-      data
-    });
-
-    search(self.tail.as_slice(), &mut self.hashes, &mut self.seen);
-    search(data, &mut self.hashes, &mut self.seen);
-
-    let tail_len = if len <= HASH_LENGTH { len } else { HASH_LENGTH };
-    let tail_start = if self.tail.len() < HASH_LENGTH - tail_len {
-      0
-    } else {
-      self.tail.len() - (HASH_LENGTH - tail_len)
-    };
-    self.tail = self.tail.split_off(tail_start);
-    self.tail.extend(&data[len - tail_len..]);
-
-    Ok(len)
-  }
-
-  fn flush(&mut self) -> io::Result<()> {
-    Ok(())
-  }
-}
-
-#[test]
-fn test_refs() -> Result<()> {
-  let mut refs_scanner =
-    RefsScanner::new(vec![PathHash::decode("psbp1f0qrdh6jsa1iz3xk0b7rlx5w4rs")?]);
-
-  refs_scanner.write_all(b"foobar psbp1f0qrdh6jsa1iz3x")?;
-
-  assert!(refs_scanner.seen.is_empty());
-
-  refs_scanner.write_all(b"k0b7rlx5w4rs baz")?;
-
-  assert_eq!(
-    refs_scanner.seen.iter().next().unwrap(),
-    b"psbp1f0qrdh6jsa1iz3xk0b7rlx5w4rs"
-  );
-
-  Ok(())
 }

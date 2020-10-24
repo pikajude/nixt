@@ -11,11 +11,13 @@ use std::{
 };
 use unix::unistd;
 
+mod cli;
+
 static NIXOS_CACHE_PUBKEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
 
 static SETTINGS: Lazy<Settings> = Lazy::new(|| {
   let mut settings = Settings::default();
-  settings.apply_overrides();
+  settings.parse();
   settings
 });
 
@@ -96,17 +98,17 @@ pub struct Settings {
   pub log_lines: usize,
 
   #[setting(
-    value = "MaxBuildJobs::N(1)",
+    value = "num_cpus::get()",
     help = "Maximum number of parallel build jobs. \"auto\" means use number of cores.",
     flag = "max-jobs",
     alias = "build-max-jobs"
   )]
-  pub max_build_jobs: MaxBuildJobs,
+  pub max_build_jobs: usize,
 
   #[setting(
     value = "Self::get_default_cores()",
     help = "Number of CPU cores to utilize in parallel within a build, i.e. by passing this \
-            number to Make via '-j'. 0 means that the number of actual CPU cores on the local \
+            number to Make via `-j`. 0 means that the number of actual CPU cores on the local \
             host ought to be auto-detected.",
     flag = "cores",
     alias = "build-cores"
@@ -324,7 +326,7 @@ pub struct Settings {
   #[doc(cfg(target_os = "linux"))]
   #[setting(
     value = "String::from(\"50%\")",
-    help = "The size of /dev/shm in the build sandbox."
+    help = "The size of `/dev/shm` in the build sandbox."
   )]
   pub sandbox_shm_size: String,
 
@@ -394,14 +396,14 @@ pub struct Settings {
   #[setting(
     value = "true",
     help = "Whether to check that any non-content-addressed path added to the Nix store has a \
-            valid signature (that is, one signed using a key listed in 'trusted-public-keys'."
+            valid signature (that is, one signed using a key listed in `trusted-public-keys`."
   )]
   pub require_sigs: bool,
 
   #[setting(
     value = "Self::get_extra_platforms()",
     help = "Additional platforms that can be built on the local system. These may be supported \
-            natively (e.g. armv7 on some aarch64 CPUs or using hacks like qemu-user."
+            natively (e.g. armv7 on some aarch64 CPUs or using hacks like qemu-user)."
   )]
   pub extra_platforms: HashSet<String>,
 
@@ -441,15 +443,15 @@ pub struct Settings {
 
   #[setting(
     value = "Duration::from_secs(3600)",
-    help = "The TTL in seconds for negative lookups in the disk cache i.e binary cache lookups \
-            that return an invalid path result",
+    help = "The TTL in seconds for negative lookups in the disk cache, i.e binary cache lookups \
+            that return an invalid path result.",
     flag = "narinfo-cache-negative-ttl"
   )]
   pub ttl_negative_nar_info_cache: Duration,
 
   #[setting(
     value = "Duration::from_secs(30 * 24 * 3600)",
-    help = "The TTL in seconds for positive lookups in the disk cache i.e binary cache lookups \
+    help = "The TTL in seconds for positive lookups in the disk cache, i.e binary cache lookups \
             that return a valid path result.",
     flag = "narinfo-cache-positive-ttl"
   )]
@@ -532,7 +534,7 @@ pub struct Settings {
   #[setting(
     value = "None",
     help = "GitHub access token to get access to GitHub data through the GitHub API for \
-            github:<..> flakes."
+            `github:<..>` flakes."
   )]
   pub github_access_token: Option<String>,
 
@@ -561,45 +563,6 @@ pub struct Settings {
   pub flake_registry: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MaxBuildJobs {
-  N(usize),
-  Auto,
-}
-
-impl PartialEq<usize> for MaxBuildJobs {
-  fn eq(&self, other: &usize) -> bool {
-    match self {
-      Self::N(u) => u.eq(other),
-      Self::Auto => false,
-    }
-  }
-}
-
-impl PartialOrd<usize> for MaxBuildJobs {
-  fn partial_cmp(&self, other: &usize) -> Option<cmp::Ordering> {
-    match self {
-      Self::N(u) => u.partial_cmp(other),
-      Self::Auto => None,
-    }
-  }
-}
-
-impl PartialEq<MaxBuildJobs> for usize {
-  fn eq(&self, other: &MaxBuildJobs) -> bool {
-    other.eq(self)
-  }
-}
-
-impl PartialOrd<MaxBuildJobs> for usize {
-  fn partial_cmp(&self, other: &MaxBuildJobs) -> Option<cmp::Ordering> {
-    match other {
-      MaxBuildJobs::N(u) => self.partial_cmp(u),
-      MaxBuildJobs::Auto => None,
-    }
-  }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum SandboxMode {
   Enabled,
@@ -610,10 +573,6 @@ pub enum SandboxMode {
 impl Settings {
   pub fn get() -> &'static Self {
     &*SETTINGS
-  }
-
-  fn apply_overrides(&mut self) {
-    self.max_silent_time = Some(Duration::from_secs(10));
   }
 
   pub fn has_experimental_feature<B: Borrow<str>>(&self, feature: &B) -> bool {

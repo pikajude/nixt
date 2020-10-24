@@ -160,16 +160,19 @@ impl Store for LocalStore {
 
     let tmpdir = tempfile::tempdir_in(Path::new(&self.store_path()))?.into_path();
 
-    let mut nar_hash = crate::hash::Sink::new(HashType::SHA256);
+    let nar_hash = Arc::new(Mutex::new(crate::hash::Sink::new(HashType::SHA256)));
+    let nh = Arc::clone(&nar_hash);
 
-    crate::archive::restore_path(
-      &tmpdir,
-      SourceSink::new(|sink| {
-        crate::archive::dump_path(&path, TeeWriter::new(&mut nar_hash, sink), filter)
-      }),
-    )?;
+    crossbeam::scope(|s| {
+      let reader = make_pipe(s, move |writer| {
+        crate::archive::dump_path(&path, TeeWriter::new(&mut *nh.lock(), writer), filter)
+      });
 
-    let (nar_hash, nar_size) = nar_hash.finish();
+      crate::archive::restore_path(&tmpdir, reader)
+    })
+    .unwrap()?;
+
+    let (nar_hash, nar_size) = nar_hash.lock().finish();
 
     let dest_path =
       self.make_fixed_output_path(ingest_method, &nar_hash, name, &mut iter::empty(), false)?;

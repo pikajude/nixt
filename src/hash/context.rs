@@ -73,7 +73,7 @@ impl Context {
 }
 
 impl Context {
-  pub fn finish(mut self) -> (Hash, usize) {
+  pub fn finish(&mut self) -> (Hash, usize) {
     let mut bytes = [0; 64];
     self.result(&mut bytes);
     (

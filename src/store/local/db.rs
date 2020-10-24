@@ -49,8 +49,6 @@ pub fn insert_valid_paths<'a, I: Iterator<Item = &'a ValidPathInfo>, S: Store + 
         ":ca": ""
       },
     )?;
-    let row_id = txn.last_insert_rowid();
-    debug!("inserted new row: {}", row_id);
   }
   txn.commit()?;
   Ok(())

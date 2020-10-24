@@ -1,12 +1,14 @@
 use crate::prelude::*;
+pub use scan::RefsScanner;
 pub use sink::Sink;
 use std::io::{Read, Write};
 use tee_readwrite::{TeeReader, TeeWriter};
 use unix::sys::stat::Mode;
 
+mod scan;
 mod sink;
 
-pub struct PathFilter(Option<Box<dyn Fn(&Path) -> bool>>);
+pub struct PathFilter(Option<Box<dyn Fn(&Path) -> bool + Send + Sync>>);
 
 impl PathFilter {
   pub fn none() -> Self {

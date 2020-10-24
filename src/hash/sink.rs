@@ -9,7 +9,7 @@ impl Sink {
     Self(Context::new(ty))
   }
 
-  pub fn finish(self) -> (Hash, usize) {
+  pub fn finish(&mut self) -> (Hash, usize) {
     self.0.finish()
   }
 }

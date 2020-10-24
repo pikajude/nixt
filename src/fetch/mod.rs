@@ -127,8 +127,12 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
   let store_path = derivation.get_env("out")?;
   let main_url = derivation.get_env("url")?;
   let unpack = derivation.env.get("unpack").map_or(false, |x| x == "1");
+  let expected_hash = derivation
+    .env
+    .get("sha256")
+    .map(|s| Hash::decode_with_type(s, HashType::SHA256, false))
+    .transpose()?;
 
-  let mut vec = Vec::new();
   let mut easy = Easy::new();
   easy.url(main_url)?;
   easy.follow_location(true)?;
@@ -136,30 +140,56 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
   easy.useragent("curl/Nix/1.0.0")?;
   easy.http_version(HttpVersion::V11)?;
 
-  {
-    let mut transfer = easy.transfer();
-    transfer.write_function(|data| {
-      vec.extend_from_slice(data);
-      Ok(data.len())
-    })?;
-    transfer.header_function(|f| {
-      trace!("{:?}", std::str::from_utf8(f));
-      true
-    })?;
-    transfer.perform()?;
-  }
+  crossbeam::thread::scope(|s| {
+    let mut xfer = make_pipe(s, move |writer| {
+      let mut transfer = easy.transfer();
+      transfer.write_function(|data| {
+        writer.write_all(data).unwrap();
+        trace!("received {} bytes from upstream", data.len());
+        Ok(data.len())
+      })?;
+      transfer.header_function(|f| {
+        trace!(
+          "curl header: {}",
+          std::str::from_utf8(f).unwrap_or("<bad UTF-8>")
+        );
+        true
+      })?;
+      transfer.perform()?;
+      Ok::<_, curl::Error>(())
+    });
 
-  if unpack {
-    crate::archive::restore_path(store_path, io::Cursor::new(vec))?;
-  } else {
-    std::fs::write(store_path, vec)?;
-  }
+    if unpack {
+      crate::archive::restore_path(store_path, xfer)?;
+    } else {
+      let mut f = fs::File::create(store_path)?;
+      std::io::copy(&mut xfer, &mut f)?;
+    }
 
-  if derivation.env.get("executable").map_or(false, |x| x == "1") {
-    fs::set_permissions(store_path, fs::Permissions::from_mode(0o755))?;
-  }
+    if derivation.env.get("executable").map_or(false, |x| x == "1") {
+      fs::set_permissions(store_path, fs::Permissions::from_mode(0o755))?;
+    }
 
-  Ok(())
+    if let Some(e) = expected_hash {
+      let actual_hash = if unpack {
+        panic!("TODO: hash an archive")
+      } else {
+        Hash::hash_file(store_path, HashType::SHA256)?.0
+      };
+
+      if actual_hash != e {
+        bail!(
+          "hash mismatch in file downloaded from {}:\n  wanted {:?}, got {:?}",
+          main_url,
+          e.encode(Encoding::Base32),
+          actual_hash.encode(Encoding::Base32)
+        );
+      }
+    }
+
+    Ok(())
+  })
+  .unwrap()
 }
 
 static PRELOAD_NSS: Once = Once::new();
