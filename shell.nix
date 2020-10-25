@@ -6,7 +6,7 @@ mkShell {
   PKG_CONFIG_ALLOW_CROSS = true;
   NIX_TRACE = true;
   RUST_LOG = "info";
-  _NIX_TEST_PREFIX = "${builtins.toString ./.}/rix-store";
+  _NIX_TEST_PREFIX = "/tmp/rix-store";
   LD_LIBRARY_PATH = "${python38}/lib";
   PYTHONPATH = "${llvmPackages_10.lldb}/lib/python3.8/site-packages";
 }

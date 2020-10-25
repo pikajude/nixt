@@ -1,7 +1,7 @@
-use crate::expr::*;
-use crate::lexer::{LexError, Token};
-use crate::span::{FileSpan, Spanned};
-use rix_arena::Arena;
+use crate::arena::Arena;
+use crate::syntax::expr::*;
+use crate::syntax::lexer::{LexError, Token};
+use crate::syntax::span::{FileSpan, Spanned};
 use codespan::{ByteOffset, FileId};
 
 grammar<'input>(
@@ -466,7 +466,7 @@ expr_simple: ExprRef = {
     => <>.map(|(open,body,close)| arena.alloc(
       Expr::IndStr(IndStr {
         open: open.def(),
-        body: crate::lexer::strip_indentation(body),
+        body: crate::syntax::lexer::strip_indentation(body),
         close: close.def(),
       })
     )),

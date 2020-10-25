@@ -16,10 +16,8 @@
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate gen_settings;
 
-extern crate rix_arena as arena;
-extern crate rix_syntax as syntax;
-
 pub mod archive;
+pub mod arena;
 pub mod build;
 pub mod derivation;
 pub mod eval;
@@ -34,6 +32,7 @@ pub mod settings;
 pub mod sqlite;
 pub mod store;
 pub mod sync;
+pub mod syntax;
 pub mod util;
 
 pub use settings::Settings;

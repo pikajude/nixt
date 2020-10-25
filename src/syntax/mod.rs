@@ -1,5 +1,5 @@
+use crate::arena::Arena;
 use codespan::FileId;
-use rix_arena::Arena;
 
 pub mod expr;
 pub mod lexer;

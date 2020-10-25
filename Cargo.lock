@@ -1364,8 +1364,6 @@ dependencies = [
  "proptest",
  "rand 0.7.3",
  "regex",
- "rix-arena",
- "rix-syntax",
  "rusqlite",
  "rust-crypto",
  "rustyline",
@@ -1381,28 +1379,6 @@ dependencies = [
  "ureq",
  "users",
  "webpki",
-]
-
-[[package]]
-name = "rix-arena"
-version = "0.1.0"
-dependencies = [
- "parking_lot",
-]
-
-[[package]]
-name = "rix-syntax"
-version = "0.1.0"
-dependencies = [
- "codespan",
- "derive_more",
- "lalrpop",
- "lalrpop-util",
- "lazy_static",
- "regex",
- "rix-arena",
- "string_cache",
- "thiserror",
 ]
 
 [[package]]

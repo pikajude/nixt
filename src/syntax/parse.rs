@@ -3,7 +3,7 @@ use lalrpop_util::ParseError as LALRError;
 
 mod imp {
   #![allow(clippy::all, unused_parens)]
-  include!(concat!(env!("OUT_DIR"), "/syntax.rs"));
+  include!(concat!(env!("OUT_DIR"), "/syntax/parser.rs"));
 }
 
 pub use imp::ExprParser;
