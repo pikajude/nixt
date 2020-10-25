@@ -1,5 +1,5 @@
 use super::span::Spanned;
-use crate::arena::Id;
+use rix_arena::Id;
 use string_cache::DefaultAtom;
 
 pub mod symbol;

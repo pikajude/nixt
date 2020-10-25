@@ -3,7 +3,6 @@ use std::{
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
   fmt::{Debug, Display},
-  sync::Arc,
 };
 
 mod local;
@@ -273,7 +272,8 @@ pub trait Store: Send + Sync + Debug {
     repair: RepairFlag,
   ) -> Result<StorePath>;
 
-  fn build_paths(self: Arc<Self>, _paths: Vec<StorePathWithOutputs>) -> Result<()> {
+  #[allow(unused_variables)]
+  fn build_paths(&self, paths: Vec<StorePathWithOutputs>) -> Result<()> {
     bail!(
       "store backend {} does not support building paths",
       self.store_path().to_string_lossy()

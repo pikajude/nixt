@@ -149,7 +149,7 @@ impl Store for LocalStore {
     name: &str,
     path: &Path,
     ingest_method: FileIngestionMethod,
-    _hash_type: HashType,
+    hash_type: HashType,
     filter: &PathFilter,
     repair: RepairFlag,
   ) -> Result<StorePath> {
@@ -160,7 +160,7 @@ impl Store for LocalStore {
 
     let tmpdir = tempfile::tempdir_in(Path::new(&self.store_path()))?.into_path();
 
-    let nar_hash = Arc::new(Mutex::new(crate::hash::Sink::new(HashType::SHA256)));
+    let nar_hash = Arc::new(Mutex::new(crate::hash::Sink::new(hash_type)));
     let nh = Arc::clone(&nar_hash);
 
     crossbeam::scope(|s| {
@@ -198,7 +198,7 @@ impl Store for LocalStore {
     Ok(dest_path)
   }
 
-  fn build_paths(self: Arc<Self>, paths: Vec<StorePathWithOutputs>) -> Result<()> {
+  fn build_paths(&self, paths: Vec<StorePathWithOutputs>) -> Result<()> {
     let mut worker = Worker::with_store(self);
     for path in paths {
       worker.add_needed(&path.path)?;

@@ -33,7 +33,7 @@ enum Message {
 }
 
 #[derive(Debug)]
-pub struct Worker {
+pub struct Worker<'a> {
   queue: DependencyQueue<StorePath, String, Derivation>,
   pending: Vec<(StorePath, Derivation)>,
   active: HashMap<usize, StorePath>,
@@ -41,11 +41,11 @@ pub struct Worker {
   next_id: usize,
   active_pids: HashSet<u32>,
   progress: Arc<MultiProgress>,
-  store: Arc<dyn Store>,
+  store: &'a dyn Store,
 }
 
-impl Worker {
-  pub fn with_store(store: Arc<dyn Store>) -> Self {
+impl<'a> Worker<'a> {
+  pub fn with_store(store: &'a dyn Store) -> Self {
     Self {
       store,
       pending: Default::default(),
@@ -74,7 +74,7 @@ impl Worker {
     Ok(())
   }
 
-  fn spawn_if_possible(&mut self, scope: &Scope) -> Result<()> {
+  fn spawn_if_possible(&mut self, scope: &Scope<'a>) -> Result<()> {
     while let Some((path, drv)) = self.queue.dequeue() {
       self.pending.push((path, drv));
     }
@@ -91,11 +91,10 @@ impl Worker {
     self.active.len() < settings().max_build_jobs
   }
 
-  fn wait_for_events(&mut self, all_jobs: &ProgressBar) -> Vec<Message> {
+  fn wait_for_events(&mut self) -> Vec<Message> {
     let mut events = self.messages.try_pop_all();
     if events.is_empty() {
       loop {
-        all_jobs.tick();
         match self.messages.pop(Duration::from_millis(500)) {
           Some(message) => {
             events.push(message);
@@ -111,7 +110,7 @@ impl Worker {
     events
   }
 
-  fn drain(&mut self, scope: &Scope, all_jobs: ProgressBar) -> Result<()> {
+  fn drain(&mut self, scope: &Scope<'a>, all_jobs: ProgressBar) -> Result<()> {
     let mut error = None;
 
     loop {
@@ -126,7 +125,7 @@ impl Worker {
         break;
       }
 
-      for event in self.wait_for_events(&all_jobs) {
+      for event in self.wait_for_events() {
         if let Err(e) = self.handle_event(event, &all_jobs) {
           error = Some(e);
           break;
@@ -228,7 +227,7 @@ impl Worker {
     .expect("child thread shouldn't panic")
   }
 
-  fn run(&mut self, path: StorePath, drv: Derivation, scope: &Scope<'_>) -> Result<()> {
+  fn run(&mut self, path: StorePath, drv: Derivation, scope: &Scope<'a>) -> Result<()> {
     let id = self.next_id;
     self.next_id += 1;
     assert!(self.active.insert(id, path.clone()).is_none());
@@ -237,7 +236,7 @@ impl Worker {
 
     let messages = Arc::clone(&self.messages);
     let pog = Arc::clone(&self.progress);
-    let store = Arc::clone(&self.store);
+    let store = self.store;
 
     let doit = move |scope: &Scope<'_>| {
       let mut result = Ok(None);
@@ -259,30 +258,17 @@ impl Worker {
         return;
       }
 
-      let progress = pog.insert(
-        0,
-        ProgressBar::new_spinner().with_style(
-          ProgressStyle::default_spinner()
-            .template("[{elapsed_precise}] {prefix:.green} {wide_msg}"),
-        ),
-      );
-      progress.set_prefix(&drv.name);
-
       result = if drv.is_builtin() {
-        exec_builtin(store, &messages, &drv, progress.clone()).map(|_| None)
+        exec_builtin(store, &messages, &drv, &pog).map(|_| None)
       } else {
-        exec_builder(store, &messages, scope, &path, &drv, progress.clone())
+        exec_builder(store, &messages, scope, &path, &drv, &pog)
       };
 
-      let _ = RunOnDrop::new(move || {
-        messages.push(Message::Finish {
-          job_id: id,
-          outputs: drv.outputs.keys().cloned().collect(),
-          result,
-        });
+      messages.push(Message::Finish {
+        job_id: id,
+        outputs: drv.outputs.keys().cloned().collect(),
+        result,
       });
-
-      progress.finish_and_clear();
     };
 
     scope.spawn(doit);
@@ -292,35 +278,53 @@ impl Worker {
 }
 
 fn exec_builtin(
-  store: Arc<dyn Store>,
+  store: &dyn Store,
   _messages: &Arc<Queue<Message>>,
   drv: &Derivation,
-  progress: ProgressBar,
+  progress: &Arc<MultiProgress>,
 ) -> Result<()> {
+  let progress = progress.insert(
+    0,
+    ProgressBar::new(1).with_style(
+      ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {prefix:.green} {bar:40} {bytes}/{total_bytes}"),
+    ),
+  );
+  progress.set_prefix(&drv.name);
+
   if drv.builder.to_str() == Some("builtin:fetchurl") {
-    progress.set_message("fetching...");
-
-    crate::fetch::fetchurl(&drv)?;
-
-    progress.set_message("registering outputs");
+    crate::fetch::fetchurl(&drv, &progress)?;
 
     store.register_valid_path(ValidPathInfo::new(
       drv.outputs["out"].path.clone(),
       Hash::hash_str("foobar", HashType::SHA256),
-    ))
+    ))?;
+
+    progress.finish_and_clear();
+
+    Ok(())
   } else {
     bail!("unknown builtin: {}", drv.builder.display())
   }
 }
 
 fn exec_builder(
-  store: Arc<dyn Store>,
+  store: &dyn Store,
   messages: &Arc<Queue<Message>>,
   scope: &Scope<'_>,
   path: &StorePath,
   drv: &Derivation,
-  progress: ProgressBar,
+  progress: &Arc<MultiProgress>,
 ) -> Result<Option<u32>> {
+  let progress = progress.insert(
+    0,
+    ProgressBar::new_spinner().with_style(
+      ProgressStyle::default_spinner().template("[{elapsed_precise}] {prefix:.green} {wide_msg}"),
+    ),
+  );
+  progress.set_prefix(&drv.name);
+  progress.enable_steady_tick(1000);
+
   let mut rewrites = HashMap::new();
 
   for (name, output) in &drv.outputs {
@@ -419,6 +423,8 @@ fn exec_builder(
 
     store.register_valid_path(ValidPathInfo::new(output.path.clone(), path_hash))?;
   }
+
+  progress.finish_and_clear();
 
   Ok(Some(pid))
 }

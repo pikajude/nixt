@@ -5,6 +5,7 @@ use crate::{
   store::{CheckSigsFlag, FileIngestionMethod, RepairFlag},
 };
 use curl::easy::{Easy, HttpVersion};
+use indicatif::ProgressBar;
 use std::sync::Once;
 
 mod cache;
@@ -123,7 +124,7 @@ pub fn download_tarball(
   Ok(new_path)
 }
 
-pub fn fetchurl(derivation: &Derivation) -> Result<()> {
+pub fn fetchurl(derivation: &Derivation, progress: &ProgressBar) -> Result<()> {
   let store_path = derivation.get_env("out")?;
   let main_url = derivation.get_env("url")?;
   let unpack = derivation.env.get("unpack").map_or(false, |x| x == "1");
@@ -139,14 +140,21 @@ pub fn fetchurl(derivation: &Derivation) -> Result<()> {
   easy.max_redirections(10)?;
   easy.useragent("curl/Nix/1.0.0")?;
   easy.http_version(HttpVersion::V11)?;
+  easy.progress(true)?;
 
   crossbeam::thread::scope(|s| {
     let mut xfer = make_pipe(s, move |writer| {
       let mut transfer = easy.transfer();
       transfer.write_function(|data| {
         writer.write_all(data).unwrap();
-        trace!("received {} bytes from upstream", data.len());
         Ok(data.len())
+      })?;
+      transfer.progress_function(|total_down, partial_down, _, _| {
+        if total_down > 0.0 {
+          progress.set_length(total_down as u64);
+        }
+        progress.set_position(partial_down as u64);
+        true
       })?;
       transfer.header_function(|f| {
         trace!(

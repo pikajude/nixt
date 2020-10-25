@@ -157,7 +157,13 @@ fn canonicalise_path_metadata_impl<P: AsRef<Path>>(
 
   if ty.is_dir() {
     for entry in fs::read_dir(path)? {
-      canonicalise_path_metadata_impl(entry?.path(), uid, inodes)?;
+      canonicalise_path_metadata_impl(
+        entry
+          .with_context(|| format!("while reading dir entries in {}", path.display()))?
+          .path(),
+        uid,
+        inodes,
+      )?;
     }
   }
 
