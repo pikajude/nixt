@@ -10,11 +10,19 @@ use std::{
   sync::Arc,
 };
 use tee_readwrite::TeeWriter;
-use unix::{fcntl::OFlag, sys::signal::Signal};
+use unix::fcntl::OFlag;
 
 mod dependency_queue;
 mod logger;
 mod queue;
+
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod sys;
+
+#[cfg(target_os = "macos")]
+#[path = "macos.rs"]
+mod sys;
 
 #[derive(Debug)]
 struct Build {
@@ -22,12 +30,17 @@ struct Build {
   progress: ProgressBar,
 }
 
+#[derive(Debug, Deref)]
+struct FinishedChild(u32);
+
 #[derive(Debug)]
 enum Message {
   Finish {
     job_id: usize,
     outputs: BTreeSet<String>,
-    result: Result<Option<u32>>,
+    // If `Err`, the build failed and other builds should be killed. If `Ok`, optionally returns
+    // the pid of a process that should be removed from self.active_pids.
+    result: Result<Option<FinishedChild>>,
   },
   SpawnedProcess(u32),
 }
@@ -116,8 +129,7 @@ impl<'a> Worker<'a> {
     loop {
       if error.is_none() {
         if let Err(e) = self.spawn_if_possible(scope) {
-          error = Some(e);
-          break;
+          self.handle_error(&mut error, e, &all_jobs);
         }
       }
 
@@ -127,21 +139,13 @@ impl<'a> Worker<'a> {
 
       for event in self.wait_for_events() {
         if let Err(e) = self.handle_event(event, &all_jobs) {
-          error = Some(e);
-          break;
+          self.handle_error(&mut error, e, &all_jobs);
         }
       }
     }
 
     if let Some(e) = error {
-      // try killing other active jobs
-      for pid in &self.active_pids {
-        let _ = unix::sys::signal::kill(
-          unix::unistd::Pid::from_raw(*pid as _),
-          Some(Signal::SIGKILL),
-        );
-      }
-      bail!(e)
+      return Err(e);
     } else if self.queue.is_empty() && self.pending.is_empty() {
       all_jobs.finish_and_clear()
     } else {
@@ -149,6 +153,23 @@ impl<'a> Worker<'a> {
     }
 
     Ok(())
+  }
+
+  fn handle_error(
+    &self,
+    some_error: &mut Option<anyhow::Error>,
+    error: anyhow::Error,
+    all_jobs: &ProgressBar,
+  ) {
+    if some_error.is_some() {
+      warn!("{:?}", error);
+    } else {
+      if !self.active.is_empty() {
+        warn!("{:?}", error);
+        all_jobs.println("build failed, waiting for others to finish");
+      }
+      *some_error = Some(error);
+    }
   }
 
   fn handle_event(&mut self, event: Message, all_jobs: &ProgressBar) -> Result<()> {
@@ -167,7 +188,7 @@ impl<'a> Worker<'a> {
             debug!("finished {}:{:?}", thingy, outputs);
             all_jobs.inc(1);
             if let Some(pid) = x {
-              self.active_pids.remove(&pid);
+              self.active_pids.remove(&*pid);
             }
           }
           Err(e) => {
@@ -261,7 +282,7 @@ impl<'a> Worker<'a> {
       result = if drv.is_builtin() {
         exec_builtin(store, &messages, &drv, &pog).map(|_| None)
       } else {
-        exec_builder(store, &messages, scope, &path, &drv, &pog)
+        self::sys::exec_builder(store, &messages, scope, &path, &drv, &pog)
       };
 
       messages.push(Message::Finish {
@@ -306,125 +327,4 @@ fn exec_builtin(
   } else {
     bail!("unknown builtin: {}", drv.builder.display())
   }
-}
-
-fn exec_builder(
-  store: &dyn Store,
-  messages: &Arc<Queue<Message>>,
-  scope: &Scope<'_>,
-  path: &StorePath,
-  drv: &Derivation,
-  progress: &Arc<MultiProgress>,
-) -> Result<Option<u32>> {
-  let progress = progress.insert(
-    0,
-    ProgressBar::new_spinner().with_style(
-      ProgressStyle::default_spinner().template("[{elapsed_precise}] {prefix:.green} {wide_msg}"),
-    ),
-  );
-  progress.set_prefix(&drv.name);
-  progress.enable_steady_tick(1000);
-
-  let mut rewrites = HashMap::new();
-
-  for (name, output) in &drv.outputs {
-    let out_path = store.print_store_path(&output.path);
-    rm_rf(&out_path)?;
-
-    rewrites.insert(crate::derivation::hash_placeholder(name), out_path);
-  }
-
-  let mut cmd = Command::new(drv.builder.as_os_str());
-  cmd.arg0(&drv.args[0]);
-  cmd.args(&drv.args[1..]);
-  cmd.env_clear();
-
-  for (ekey, eval) in &drv.env {
-    let mut eval_ = eval.to_owned();
-    for (find, replace) in &rewrites {
-      eval_ = eval_.replace(find, replace);
-    }
-    cmd.env(ekey, eval_);
-  }
-
-  let builder_tmp = tempfile::Builder::new()
-    .prefix(format!("nix-build-{}-", drv.name).as_str())
-    .tempdir()?;
-  cmd.current_dir(&builder_tmp);
-
-  cmd.env("PATH", "/path-not-set");
-  cmd.env("HOME", "/homeless-shelter");
-  cmd.env("NIX_STORE", store.store_path());
-  cmd.env("NIX_BUILD_CORES", settings().build_cores.to_string());
-  cmd.env("NIX_LOG_FD", "2");
-  cmd.env("TERM", "xterm-256color");
-
-  for alias in &["NIX_BUILD_TOP", "TMPDIR", "TEMPDIR", "TMP", "TEMP", "PWD"] {
-    cmd.env(alias, builder_tmp.as_ref().display().to_string());
-  }
-
-  let build_log_path = store.logfile_of(path);
-
-  std::fs::create_dir_all(build_log_path.parent().unwrap())?;
-
-  let (pipe_read, pipe_write) = unix::unistd::pipe2(OFlag::O_CLOEXEC)?;
-
-  cmd.stdin(Stdio::null());
-  unsafe {
-    cmd.stdout(Stdio::from_raw_fd(pipe_write));
-    cmd.stderr(Stdio::from_raw_fd(pipe_write));
-  }
-
-  let p2 = progress.clone();
-  scope.spawn(move |_| Logger::new(build_log_path, pipe_read, p2)?.run());
-
-  let mut child = cmd.spawn()?;
-  let pid = child.id();
-
-  messages.push(Message::SpawnedProcess(pid));
-
-  let stat = child.wait()?;
-  if !stat.success() {
-    bail!(
-      "builder for {} failed: {}",
-      store.print_store_path(path),
-      stat
-    );
-  }
-
-  progress.set_message("registering outputs");
-
-  // Register the build outputs.
-  let mut referenceable_paths = HashSet::<StorePath>::new();
-
-  for out in drv.outputs.values() {
-    referenceable_paths.insert(out.path.clone());
-  }
-
-  for output in drv.outputs.values() {
-    let out_path = store.print_store_path(&output.path);
-
-    canonicalise_path_metadata(&out_path, None)?;
-
-    let mut path_hash = crate::hash::Sink::new(HashType::SHA256);
-    let mut scanner = crate::archive::RefsScanner::new(referenceable_paths.iter().map(|p| p.hash));
-
-    debug!("dumping {}", out_path);
-
-    crate::archive::dump_path(
-      &out_path,
-      TeeWriter::new(&mut path_hash, &mut scanner),
-      &PathFilter::none(),
-    )?;
-
-    let (path_hash, _) = path_hash.finish();
-
-    debug!("output has hash {}", path_hash.encode(Encoding::Base32));
-
-    store.register_valid_path(ValidPathInfo::new(output.path.clone(), path_hash))?;
-  }
-
-  progress.finish_and_clear();
-
-  Ok(Some(pid))
 }

@@ -28,6 +28,9 @@ fn main() -> Result<()> {
 }
 
 fn get_derivation(eval: &Eval) -> Result<String> {
+  if let Ok(e) = std::env::var("DERIVATION") {
+    return Ok(e);
+  }
   let expr = eval.load_inline(
     "(import <nixpkgs> {
     overlays = [];

@@ -1,7 +1,7 @@
 pub use anyhow::{Context as _, *};
 pub use fs::*;
 pub use io::*;
-pub use pid::*;
+pub use pid::show_status;
 use std::{
   path::Path,
   str::pattern::{Pattern, Searcher},
@@ -10,7 +10,7 @@ use std::{
 pub mod base32;
 mod fs;
 mod io;
-mod pid;
+pub mod pid;
 
 pub fn break_str<'a, P: Pattern<'a>>(s: &'a str, pattern: P) -> Option<(&'a str, &'a str)> {
   let mut search = pattern.into_searcher(s);

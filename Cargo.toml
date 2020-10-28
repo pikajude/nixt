@@ -53,6 +53,8 @@ users = "0.10.0"
 webpki = "0.21.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ipc-channel = "0.14.1"
+prctl = "1.0.0"
 # linux-personality = "1.0.0"
 # netdevice = "0.1.1"
 # rlimit = "0.4.0"

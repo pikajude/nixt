@@ -1,4 +1,5 @@
 #![feature(btree_drain_filter)]
+#![feature(command_access)]
 #![feature(crate_visibility_modifier)]
 #![feature(doc_cfg)]
 #![feature(duration_zero)]
