@@ -38,6 +38,13 @@ pub enum FileIngestionMethod {
   Recursive,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ClosureOpts {
+  backwards: bool,
+  include_outputs: bool,
+  include_derivers: bool,
+}
+
 pub trait Store: Send + Sync + Debug {
   fn store_path(&self) -> Cow<OsStr>;
 
@@ -284,9 +291,7 @@ pub trait Store: Send + Sync + Debug {
     &self,
     path: &StorePath,
     closure: &mut BTreeSet<StorePath>,
-    backwards: bool,
-    include_outputs: bool,
-    include_derivers: bool,
+    options: ClosureOpts,
   ) -> Result<()>;
 
   fn logfile_of(&self, path: &StorePath) -> PathBuf {

@@ -8,7 +8,7 @@ use crate::{
     Eval,
   },
   hash::{Hash, HashType},
-  store::{FileIngestionMethod, RepairFlag},
+  store::{ClosureOpts, FileIngestionMethod, RepairFlag},
   syntax::expr::Ident,
   util::*,
 };
@@ -123,9 +123,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       eval.store.compute_closure(
         &eval.store.parse_store_path(Path::new(p))?,
         &mut refs,
-        false,
-        false,
-        false,
+        ClosureOpts::default(),
       )?;
       for r in refs {
         if r.is_derivation() {

@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, fmt::Debug, time::SystemTime};
 
 pub trait PathInfo: Send + Sync + Debug {
   fn store_path(&self) -> &StorePath;
+  fn references(&self) -> &BTreeSet<StorePath>;
 }
 
 #[derive(Clone, Debug)]
@@ -49,5 +50,9 @@ impl Eq for ValidPathInfo {}
 impl PathInfo for ValidPathInfo {
   fn store_path(&self) -> &StorePath {
     &self.store_path
+  }
+
+  fn references(&self) -> &BTreeSet<StorePath> {
+    &self.references
   }
 }

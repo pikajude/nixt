@@ -1,4 +1,4 @@
-use super::{CheckSigsFlag, FileIngestionMethod, RepairFlag};
+use super::{CheckSigsFlag, ClosureOpts, FileIngestionMethod, RepairFlag};
 use crate::{archive, build::Worker, prelude::*, sqlite::Sqlite, sync::fs_lock::*};
 use archive::PathFilter;
 use fs::File;
@@ -209,15 +209,24 @@ impl Store for LocalStore {
   fn compute_closure(
     &self,
     path: &StorePath,
-    _closure: &mut BTreeSet<StorePath>,
-    _backwards: bool,
-    _include_outputs: bool,
-    _include_derivers: bool,
+    closure: &mut BTreeSet<StorePath>,
+    options: ClosureOpts,
   ) -> Result<()> {
+    if !closure.insert(path.clone()) {
+      return Ok(());
+    }
+
     let info = self
       .get_path_info(path)?
       .ok_or_else(|| anyhow!("path {} is invalid", self.print_store_path(path)))?;
-    todo!("{:?}", info)
+
+    for r in info.references() {
+      if r != path {
+        self.compute_closure(r, closure, options)?;
+      }
+    }
+
+    Ok(())
   }
 }
 
