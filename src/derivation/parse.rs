@@ -16,7 +16,7 @@ fn parse_derivation(store: &(impl Store + ?Sized), input: &str, name: &str) -> R
     p.expect("(")?;
     let id = p.string()?;
     p.expect(",")?;
-    let path = store.parse_store_path(&p.path()?)?;
+    let path = store.parse_store_path(p.path()?)?;
     p.expect(",")?;
     let hash_algo = p.string()?;
     p.expect(",")?;
@@ -52,7 +52,7 @@ fn parse_derivation(store: &(impl Store + ?Sized), input: &str, name: &str) -> R
     let drvpath = p.path()?;
     p.expect(",[")?;
     input_drvs.insert(
-      store.parse_store_path(&drvpath)?,
+      store.parse_store_path(drvpath)?,
       p.strings()?.into_iter().collect(),
     );
     p.expect(")")?;
@@ -62,7 +62,7 @@ fn parse_derivation(store: &(impl Store + ?Sized), input: &str, name: &str) -> R
   let input_srcs = p
     .paths()?
     .into_iter()
-    .map(|x| store.parse_store_path(&x))
+    .map(|x| store.parse_store_path(x))
     .collect::<Result<BTreeSet<StorePath>>>()?;
 
   p.expect(",")?;

@@ -8,7 +8,7 @@ use crate::{
     Eval,
   },
   hash::{Hash, HashType},
-  store::{ClosureOpts, FileIngestionMethod, RepairFlag},
+  store::{ClosureOpts, FileIngestionMethod, RepairFlag, Store},
   syntax::expr::Ident,
   util::*,
 };
@@ -126,7 +126,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     if let Some(p) = path.strip_prefix('=') {
       let mut refs = Default::default();
       eval.store.compute_closure(
-        &eval.store.parse_store_path(Path::new(p))?,
+        &eval.store.parse_store_path(p)?,
         &mut refs,
         ClosureOpts::default(),
       )?;
@@ -152,9 +152,7 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
         std::iter::once(name.to_string()).collect(),
       );
     } else {
-      drv
-        .input_sources
-        .insert(eval.store.parse_store_path(&Path::new(path))?);
+      drv.input_sources.insert(eval.store.parse_store_path(path)?);
     }
   }
 

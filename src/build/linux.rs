@@ -22,8 +22,8 @@ use super::*;
 const SANDBOX_UID: u32 = 1000;
 const SANDBOX_GID: u32 = 100;
 
-pub(super) fn exec_builder(
-  store: &dyn Store,
+pub(super) fn exec_builder<S: Store>(
+  store: &S,
   messages: &Arc<Queue<Message>>,
   scope: &Scope<'_>,
   path: &StorePath,
@@ -305,6 +305,7 @@ pub(super) fn exec_builder(
     let real_path = store.print_store_path(&out.path);
     let chroot_path = chroot_root_dir.join(Path::new(&real_path).strip_prefix("/").unwrap());
     if chroot_path.exists() {
+      rm_rf(&real_path)?;
       fs::rename(chroot_path, real_path)?;
     }
   }
@@ -336,7 +337,7 @@ pub(super) fn exec_builder(
   Ok(Some(FinishedChild(pid as _)))
 }
 
-fn mk_command(store: &dyn Store, drv: &Derivation) -> Result<Command> {
+fn mk_command<S: Store>(store: &S, drv: &Derivation) -> Result<Command> {
   let mut rewrites = HashMap::new();
 
   for (name, output) in &drv.outputs {
@@ -374,8 +375,8 @@ fn mk_command(store: &dyn Store, drv: &Derivation) -> Result<Command> {
 
 const NULLSTR: Option<&'static str> = None;
 
-fn try_run_child(
-  store: &dyn Store,
+fn try_run_child<S: Store>(
+  store: &S,
   drv: &Derivation,
   command: &mut Command,
   user_ns_ok: &IpcReceiver<()>,
@@ -389,6 +390,8 @@ fn try_run_child(
 
   let mut result = move || {
     common_child_init()?;
+
+    eprintln!("{:?}", dirs_in_chroot);
 
     // wait for (mount) namespace initialization
     user_ns_ok

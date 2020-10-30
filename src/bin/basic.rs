@@ -1,6 +1,5 @@
 #[macro_use] extern crate log;
-use rix::{eval::Eval, path::PathWithOutputs, util::*};
-use std::path::Path;
+use rix::{eval::Eval, path::PathWithOutputs, util::*, Store};
 
 fn main() -> Result<()> {
   std::env::set_var("_NIX_TEST", "1");
@@ -8,7 +7,7 @@ fn main() -> Result<()> {
   let eval = Eval::new().unwrap();
 
   let drv_path = get_derivation(&eval)?;
-  let store_path = eval.store.parse_store_path(Path::new(&*drv_path))?;
+  let store_path = eval.store.parse_store_path(drv_path)?;
   let drv = eval.store.read_derivation(&store_path)?;
 
   let path = PathWithOutputs {

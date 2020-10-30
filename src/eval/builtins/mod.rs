@@ -2,6 +2,7 @@ use super::AssertFailure;
 use crate::{
   eval::{context::StaticScope, primop::Primop, thunk::ThunkId, value::Value, Eval},
   primop, primop2, primop3, primop_inline,
+  store::Store,
   syntax::expr::Ident,
   util::*,
 };

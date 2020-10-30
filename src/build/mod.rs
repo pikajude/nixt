@@ -46,7 +46,7 @@ enum Message {
 }
 
 #[derive(Debug)]
-pub struct Worker<'a> {
+pub struct Worker<'a, S: Store = crate::store::LocalStore> {
   queue: DependencyQueue<StorePath, String, Derivation>,
   pending: Vec<(StorePath, Derivation)>,
   active: HashMap<usize, StorePath>,
@@ -54,11 +54,11 @@ pub struct Worker<'a> {
   next_id: usize,
   active_pids: HashSet<u32>,
   progress: Arc<MultiProgress>,
-  store: &'a dyn Store,
+  store: &'a S,
 }
 
-impl<'a> Worker<'a> {
-  pub fn with_store(store: &'a dyn Store) -> Self {
+impl<'a, S: Store> Worker<'a, S> {
+  pub fn with_store(store: &'a S) -> Self {
     Self {
       store,
       pending: Default::default(),
@@ -298,8 +298,8 @@ impl<'a> Worker<'a> {
   }
 }
 
-fn exec_builtin(
-  store: &dyn Store,
+fn exec_builtin<S: Store>(
+  store: &S,
   _messages: &Arc<Queue<Message>>,
   drv: &Derivation,
   progress: &Arc<MultiProgress>,

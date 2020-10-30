@@ -6,7 +6,7 @@ mkShell {
   RUST_LIB_BACKTRACE = true;
   PKG_CONFIG_ALLOW_CROSS = true;
   NIX_TRACE = true;
-  RUST_LOG = "info";
+  RUST_LOG = "rix::store::local=debug,rix::sqlite=trace";
   _NIX_TEST_PREFIX = "/tmp/rix-store";
   LD_LIBRARY_PATH = "${python38}/lib";
   PYTHONPATH = "${llvmPackages_10.lldb}/lib/python3.8/site-packages";

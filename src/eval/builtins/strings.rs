@@ -29,7 +29,7 @@ lazy_static! {
 }
 
 impl IMPORTED_PATHS {
-  fn copy_to_store<P: AsRef<Path>>(&self, store: &dyn Store, path: P) -> Result<StorePath> {
+  fn copy_to_store<P: AsRef<Path>, S: Store>(&self, store: &S, path: P) -> Result<StorePath> {
     let path = path.as_ref();
     if let Some(p) = self.lock().get(path) {
       return Ok(p.clone());

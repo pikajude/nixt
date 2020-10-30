@@ -40,16 +40,22 @@ impl Store for LocalStore {
     Cow::Borrowed(settings().paths.nix_store.as_os_str())
   }
 
-  fn add_text_to_store<'a>(
+  fn add_text_to_store<I: IntoIterator<Item = StorePath>>(
     &self,
     name: &str,
     contents: &str,
-    references: &mut dyn Iterator<Item = &'a StorePath>,
+    references: I,
     repair: RepairFlag,
   ) -> Result<StorePath> {
     let repair = repair == RepairFlag::Repair;
     let hash = Hash::hash_str(contents, HashType::SHA256);
-    let dest_path = self.make_text_path(name, &hash, references)?;
+    let references_set = references.into_iter().collect::<BTreeSet<_>>();
+    let dest_path = self.make_text_path(name, &hash, references_set.clone())?;
+
+    debug!(
+      "adding path {} to store with references: {:#?}",
+      name, references_set
+    );
 
     self.add_temp_root(&dest_path)?;
 
@@ -74,7 +80,7 @@ impl Store for LocalStore {
 
         let mut path_info = ValidPathInfo::new(dest_path.clone(), nar_hash);
         path_info.nar_size = Some(nar_bytes.len() as u64);
-        path_info.references = references.cloned().collect();
+        path_info.references = references_set;
 
         self.register_valid_path(path_info)?;
       }
@@ -118,10 +124,10 @@ impl Store for LocalStore {
     Ok(())
   }
 
-  fn add_to_store_from_source(
+  fn add_to_store_from_source<I: PathInfo, R: std::io::Read>(
     &self,
-    path_info: &dyn PathInfo,
-    input: &mut dyn std::io::Read,
+    path_info: I,
+    input: R,
     repair: RepairFlag,
     _check_sigs: CheckSigsFlag,
   ) -> Result<()> {
@@ -293,5 +299,26 @@ impl LocalStore {
     fs::create_dir_all(&this.temproots_dir)?;
     fs::create_dir_all(&this.links_dir)?;
     Ok(this)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  #[test]
+  fn test_glibc_thingy() -> Result<()> {
+    let s = LocalStore::open()?;
+    let bootstrap = s.parse_store_path(
+      "/tmp/rix-store/nix/store/q4z8prj9sd3jcrn3x1xc0f5zna40ma5a-bootstrap-stage0-glibc.drv",
+    )?;
+    let drv = s.read_derivation(&bootstrap)?;
+
+    let mut pathset = BTreeSet::new();
+
+    s.compute_closure(&bootstrap, &mut pathset, Default::default())?;
+
+    eprintln!("{:#?}", drv);
+    eprintln!("{:#?}", pathset);
+    Ok(())
   }
 }

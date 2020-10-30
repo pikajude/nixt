@@ -18,8 +18,8 @@ pub struct DownloadFile {
   pub effective_url: String,
 }
 
-pub fn download_file(
-  store: &dyn Store,
+pub fn download_file<S: Store>(
+  store: &S,
   url: &str,
   name: &str,
   _immutable: bool,
@@ -58,7 +58,7 @@ pub fn download_file(
   path_info.nar_size = Some(nar_size as u64);
 
   store.add_to_store_from_source(
-    &path_info,
+    path_info,
     &mut destfile.reopen()?,
     RepairFlag::NoRepair,
     CheckSigsFlag::NoCheckSigs,
@@ -71,8 +71,8 @@ pub fn download_file(
   })
 }
 
-pub fn download_tarball(
-  store: &dyn Store,
+pub fn download_tarball<S: Store>(
+  store: &S,
   url: &str,
   name: &str,
   immutable: bool,

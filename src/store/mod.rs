@@ -66,8 +66,8 @@ pub trait Store: Send + Sync + Debug {
     StorePath::from_parts(hash.as_bytes(), name)
   }
 
-  fn parse_store_path(&self, path: &Path) -> Result<StorePath> {
-    StorePath::new(path, self.store_path().as_ref())
+  fn parse_store_path<P: AsRef<Path>>(&self, path: P) -> Result<StorePath> {
+    StorePath::new(path.as_ref(), self.store_path().as_ref())
   }
 
   fn parse_path_with_outputs(&self, input: &str) -> Result<StorePathWithOutputs> {
@@ -110,15 +110,15 @@ pub trait Store: Send + Sync + Debug {
     bail!("not supported by this store backend")
   }
 
-  fn make_type<'a>(
+  fn make_type<I: IntoIterator<Item = StorePath>>(
     &self,
     mut s: String,
-    references: &mut dyn Iterator<Item = &'a StorePath>,
+    references: I,
     has_self_reference: bool,
   ) -> String {
     for item in references {
       s.push(':');
-      s.push_str(&self.print_store_path(item));
+      s.push_str(&self.print_store_path(&item));
     }
     if has_self_reference {
       s.push_str(":self");
@@ -139,12 +139,12 @@ pub trait Store: Send + Sync + Debug {
     )
   }
 
-  fn make_fixed_output_path<'a>(
+  fn make_fixed_output_path<I: IntoIterator<Item = StorePath>>(
     &self,
     ingest_method: FileIngestionMethod,
     hash: &Hash,
     name: &str,
-    references: &mut dyn Iterator<Item = &'a StorePath>,
+    references: I,
     has_self_reference: bool,
   ) -> Result<StorePath> {
     let recursive = ingest_method == FileIngestionMethod::Recursive;
@@ -155,7 +155,7 @@ pub trait Store: Send + Sync + Debug {
         name,
       )
     } else {
-      assert!(references.next().is_none());
+      assert!(references.into_iter().next().is_none());
       self.make_store_path(
         "output:out",
         &Hash::hash_str(
@@ -171,11 +171,11 @@ pub trait Store: Send + Sync + Debug {
     }
   }
 
-  fn make_text_path<'a>(
+  fn make_text_path<I: IntoIterator<Item = StorePath>>(
     &self,
     name: &str,
     hash: &Hash,
-    references: &mut dyn Iterator<Item = &'a StorePath>,
+    references: I,
   ) -> Result<StorePath> {
     assert!(hash.type_() == HashType::SHA256);
     self.make_store_path(
@@ -185,11 +185,11 @@ pub trait Store: Send + Sync + Debug {
     )
   }
 
-  fn store_path_for_text<'a>(
+  fn store_path_for_text<I: IntoIterator<Item = StorePath>>(
     &self,
     name: &str,
     contents: &str,
-    references: &mut dyn Iterator<Item = &'a StorePath>,
+    references: I,
   ) -> Result<StorePath> {
     self.make_text_path(
       name,
@@ -237,13 +237,16 @@ pub trait Store: Send + Sync + Debug {
     name: &str,
     repair: RepairFlag,
   ) -> Result<StorePath> {
-    let mut refs = derivation.input_sources.iter().collect::<BTreeSet<_>>();
+    let mut refs = derivation
+      .input_sources
+      .iter()
+      .cloned()
+      .collect::<BTreeSet<_>>();
     for k in derivation.input_derivations.keys() {
-      refs.insert(k);
+      refs.insert(k.clone());
     }
     let suffix = format!("{}.drv", name);
     let contents = derivation.unparse(self, false, Default::default());
-    let refs = &mut refs.into_iter();
     if settings().read_only {
       self.store_path_for_text(&suffix, &contents, refs)
     } else {
@@ -251,20 +254,21 @@ pub trait Store: Send + Sync + Debug {
     }
   }
 
-  fn add_text_to_store<'a>(
+  #[allow(unused_variables)] // we want nice variable names for rustdoc
+  fn add_text_to_store<I: IntoIterator<Item = StorePath>>(
     &self,
-    _name: &str,
-    _contents: &str,
-    _references: &mut dyn Iterator<Item = &'a StorePath>,
-    _repair: RepairFlag,
+    name: &str,
+    contents: &str,
+    references: I,
+    repair: RepairFlag,
   ) -> Result<StorePath> {
     bail!("add_text_to_store not supported by this backend.")
   }
 
-  fn add_to_store_from_source(
+  fn add_to_store_from_source<I: PathInfo, R: std::io::Read>(
     &self,
-    info: &dyn PathInfo,
-    source: &mut dyn std::io::Read,
+    info: I,
+    source: R,
     repair: RepairFlag,
     check_signatures: CheckSigsFlag,
   ) -> Result<()>;

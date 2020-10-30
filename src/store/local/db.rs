@@ -1,9 +1,19 @@
 use crate::{path_info::ValidPathInfo, prelude::*, sqlite::Sqlite};
 use rusqlite::{named_params, DatabaseName};
-use std::time::{Duration, SystemTime};
+use std::{
+  collections::BTreeSet,
+  time::{Duration, SystemTime},
+};
 
 static QUERY_PATH_INFO: &str = "select id, hash, registrationTime, deriver, narSize, ultimate, \
                                 sigs, ca from ValidPaths where path = :path";
+
+static QUERY_REFERENCES: &str =
+  "select path from Refs join ValidPaths on reference = id where referrer = :path";
+
+static INSERT_REFERENCE: &str = "insert or replace into Refs (referrer, reference) select \
+                                 :referrer as referrer, validpaths.id as reference from \
+                                 validpaths where validpaths.path = :referenc";
 
 static REGISTER_VALID_PATHS: &str =
   "insert or replace into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, \
@@ -35,21 +45,34 @@ pub fn insert_valid_paths<'a, I: Iterator<Item = &'a ValidPathInfo>, S: Store + 
   paths: I,
 ) -> Result<()> {
   let txn = db.transaction()?;
-  for path in paths {
+
+  for path_info in paths {
     txn.execute_named(
       REGISTER_VALID_PATHS,
       named_params! {
-        ":path": store.print_store_path(&path.store_path),
-        ":hash": path.nar_hash.encode_with_type(Encoding::Base16),
-        ":registrationTime": path.registration_time.duration_since(SystemTime::UNIX_EPOCH)?.as_secs() as i64,
-        ":deriver": path.deriver.as_ref().map(|r|store.print_store_path(r)),
-        ":narSize": path.nar_size.unwrap_or(0) as i64,
-        ":ultimate": path.ultimate,
-        ":sigs": itertools::join(&path.signatures, " "),
+        ":path": store.print_store_path(&path_info.store_path),
+        ":hash": path_info.nar_hash.encode_with_type(Encoding::Base16),
+        ":registrationTime": path_info.registration_time.duration_since(SystemTime::UNIX_EPOCH)?.as_secs() as i64,
+        ":deriver": path_info.deriver.as_ref().map(|r|store.print_store_path(r)),
+        ":narSize": path_info.nar_size.unwrap_or(0) as i64,
+        ":ultimate": path_info.ultimate,
+        ":sigs": itertools::join(&path_info.signatures, " "),
         ":ca": ""
       },
     )?;
+    let id = txn.last_insert_rowid();
+
+    for r in &path_info.references {
+      txn.execute_named(
+        INSERT_REFERENCE,
+        named_params! {
+          ":referrer": id,
+          ":reference": store.print_store_path(r),
+        },
+      )?;
+    }
   }
+
   txn.commit()?;
   Ok(())
 }
@@ -69,7 +92,7 @@ pub fn get_path_info<S: Store + ?Sized>(
         id: row.get::<_, i64>("id")?,
         store_path: path.clone(),
         deriver: maybe_deriver
-          .map(|x| store.parse_store_path(Path::new(&x)))
+          .map(|x| store.parse_store_path(x))
           .transpose()?,
         nar_hash: Hash::decode(&row.get::<_, String>("hash")?)?,
         references: Default::default(),
@@ -83,10 +106,27 @@ pub fn get_path_info<S: Store + ?Sized>(
     },
   )?;
 
-  if let Some(pinfo) = maybe_valid.next().transpose()? {
+  if let Some(mut pinfo) = maybe_valid.next().transpose()? {
+    pinfo.references = get_references(db, store, path)?;
     // gather references
     Ok(Some(pinfo))
   } else {
     Ok(None)
   }
+}
+
+pub fn get_references<S: Store + ?Sized>(
+  db: &Sqlite,
+  store: &S,
+  path: &StorePath,
+) -> Result<BTreeSet<StorePath>> {
+  let mut stmt0 = db.prepare(QUERY_REFERENCES)?;
+
+  let items = stmt0
+    .query_and_then_named(
+      named_params! { ":path": store.print_store_path(path).as_str() },
+      |row| store.parse_store_path(row.get::<_, String>("path")?),
+    )?
+    .collect();
+  items
 }

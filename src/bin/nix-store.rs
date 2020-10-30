@@ -21,7 +21,7 @@ fn main() -> Result<()> {
         .into_iter()
         .map(|path| {
           Ok(rix::path::PathWithOutputs {
-            path: store.parse_store_path(&path.canonicalize()?)?,
+            path: store.parse_store_path(path.canonicalize()?)?,
             outputs: Default::default(),
           })
         })

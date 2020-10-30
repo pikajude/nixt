@@ -47,7 +47,7 @@ struct AssertFailure {
   message: String,
 }
 
-pub struct Eval {
+pub struct Eval<S: Store = LocalStore> {
   items: Arena<Thunk>,
   expr: Arena<Expr>,
   toplevel: StaticScope,
@@ -57,7 +57,7 @@ pub struct Eval {
   trace: RefCell<VecDeque<FileSpan>>,
   writer: StandardStream,
   config: Config,
-  pub store: Arc<dyn Store>,
+  pub store: Arc<S>,
 }
 
 impl Eval {

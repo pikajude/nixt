@@ -57,7 +57,7 @@ impl Cache {
         |row| {
           Ok(CacheResultTmp {
             info_json: row.get("info")?,
-            path: store.parse_store_path(Path::new(&row.get::<_, String>("path")?))?,
+            path: store.parse_store_path(row.get::<_, String>("path")?)?,
             immutable: row.get("immutable")?,
             timestamp: row.get("timestamp")?,
           })
