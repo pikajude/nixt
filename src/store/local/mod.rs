@@ -158,7 +158,8 @@ impl Store for LocalStore {
       bail!("add a flat file")
     }
 
-    let tmpdir = tempfile::tempdir_in(Path::new(&self.store_path()))?.into_path();
+    let tmpdir = tempfile::tempdir_in(Path::new(&self.store_path()))?;
+    let tmp_dest = tmpdir.as_ref().join("x");
 
     let nar_hash = Arc::new(Mutex::new(crate::hash::Sink::new(hash_type)));
     let nh = Arc::clone(&nar_hash);
@@ -168,7 +169,7 @@ impl Store for LocalStore {
         crate::archive::dump_path(&path, TeeWriter::new(&mut *nh.lock(), writer), filter)
       });
 
-      crate::archive::restore_path(&tmpdir, reader)
+      crate::archive::restore_path(&tmp_dest, reader)
     })
     .unwrap()?;
 
@@ -184,7 +185,7 @@ impl Store for LocalStore {
       PathLocks::new().lock(iter::once(&real_path), false, None)?;
       if repair.repair() || !self.is_valid_path(&dest_path)? {
         delete_path(&real_path)?;
-        fs::rename(&tmpdir, &real_path)?;
+        fs::rename(tmp_dest, &real_path)?;
 
         canonicalise_path_metadata(&real_path, None)?;
         optimise_path(&real_path)?;
@@ -194,6 +195,8 @@ impl Store for LocalStore {
         self.register_valid_path(pi)?;
       }
     }
+
+    debug!("deleting {}", tmpdir.as_ref().display());
 
     Ok(dest_path)
   }

@@ -29,6 +29,8 @@ use termcolor::{ColorChoice, StandardStream};
 use thunk::{Thunk, ThunkCell, ThunkId};
 use value::{PathSet, Value};
 
+use self::builtins::strings::CoerceOpts;
+
 pub mod builtins;
 mod config;
 pub mod context;
@@ -300,7 +302,15 @@ impl Eval {
             StrPart::Plain(s) => final_buf.push_str(s),
             StrPart::Quote { quote, .. } => {
               let t = self.items.alloc(Thunk::thunk(*quote, context.clone()));
-              let contents = coerce_to_string(self, t, &mut str_context, false, true)?;
+              let contents = coerce_to_string(
+                self,
+                t,
+                &mut str_context,
+                CoerceOpts {
+                  extended: false,
+                  copy_to_store: true,
+                },
+              )?;
               final_buf.push_str(&contents);
             }
           }

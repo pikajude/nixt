@@ -301,6 +301,12 @@ pub(super) fn exec_builder(
 
   for out in drv.outputs.values() {
     referenceable_paths.insert(out.path.clone());
+
+    let real_path = store.print_store_path(&out.path);
+    let chroot_path = chroot_root_dir.join(Path::new(&real_path).strip_prefix("/").unwrap());
+    if chroot_path.exists() {
+      fs::rename(chroot_path, real_path)?;
+    }
   }
 
   for output in drv.outputs.values() {
@@ -378,8 +384,8 @@ fn try_run_child(
   dirs_in_chroot: &mut HashMap<Cow<Path>, (Cow<Path>, bool)>,
 ) -> isize {
   // redirects print! and eprint! to the logger
-  unistd::dup2(logger_fd, std::io::stderr().as_raw_fd()).unwrap();
-  unistd::dup2(logger_fd, std::io::stdout().as_raw_fd()).unwrap();
+  unistd::dup2(logger_fd, io::stderr().as_raw_fd()).unwrap();
+  unistd::dup2(logger_fd, io::stdout().as_raw_fd()).unwrap();
 
   let mut result = move || {
     common_child_init()?;

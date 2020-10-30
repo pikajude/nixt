@@ -17,6 +17,8 @@ use std::{
   path::{Path, PathBuf},
 };
 
+use super::strings::CoerceOpts;
+
 pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
   let attrs = eval.value_attrs_of(args)?;
 
@@ -57,14 +59,17 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
 
     if k == "args" {
       for arg in eval.value_list_of(*v)? {
-        drv
-          .args
-          .push(coerce_to_string(eval, *arg, &mut context, true, false)?);
+        drv.args.push(coerce_to_string(
+          eval,
+          *arg,
+          &mut context,
+          CoerceOpts::default().extended(),
+        )?);
       }
       continue;
     }
 
-    let string_value = coerce_to_string(eval, *v, &mut context, true, false)?;
+    let string_value = coerce_to_string(eval, *v, &mut context, CoerceOpts::default().extended())?;
 
     if ignore_nulls {
       if let Value::Null = eval.value_of(*v)? {

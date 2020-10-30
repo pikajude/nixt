@@ -11,6 +11,8 @@ use std::{
   path::{Path, PathBuf},
 };
 
+use super::strings::CoerceOpts;
+
 pub fn get_env(eval: &Eval, varname: ThunkId) -> Result<Value> {
   let varname = eval.value_string_of(varname)?;
   match std::env::var(String::from(varname)) {
@@ -74,8 +76,14 @@ pub fn find_file(eval: &Eval, path: ThunkId, filename: &str) -> Result<PathBuf> 
     let kv = eval.value_attrs_of(*entry)?;
     let path = eval.value_string_of(*kv.get(&Ident::from("path")).unwrap())?;
 
-    let (_context, prefix) =
-      coerce_new_string(eval, *kv.get(&Ident::from("prefix")).unwrap(), false, false)?;
+    let (_context, prefix) = coerce_new_string(
+      eval,
+      *kv.get(&Ident::from("prefix")).unwrap(),
+      CoerceOpts {
+        extended: false,
+        copy_to_store: false,
+      },
+    )?;
 
     if !_context.is_empty() {
       warn!("try to realise context {:?}", _context);

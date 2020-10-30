@@ -83,7 +83,11 @@ fn canonicalise_path_metadata_impl<P: AsRef<Path>>(
     match attrsize.cmp(&0) {
       Ordering::Less => {
         if Errno::last() != ENOTSUP && Errno::last() != Errno::ENODATA {
-          bail!("querying extended attributes of `{}'", path.display());
+          bail!(
+            "querying extended attributes of `{}': {}",
+            path.display(),
+            Errno::last()
+          );
         }
       }
       Ordering::Greater => {

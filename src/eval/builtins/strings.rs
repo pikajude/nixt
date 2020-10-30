@@ -1,4 +1,5 @@
 use crate::{
+  archive::PathFilter,
   derivation::hash_placeholder,
   eval::{
     context::StaticScope,
@@ -6,19 +7,79 @@ use crate::{
     value::{PathSet, Value},
     Eval,
   },
+  hash::HashType,
+  prelude::StorePath,
+  store::{FileIngestionMethod, RepairFlag},
   syntax::expr::Ident,
   util::*,
+  Store,
 };
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use regex::Regex;
 use std::{
   collections::{BTreeSet, HashMap},
+  path::{Path, PathBuf},
   sync::Arc,
 };
 
 lazy_static! {
   static ref REGEX_CACHE: Mutex<HashMap<String, Arc<Regex>>> = Default::default();
+  static ref IMPORTED_PATHS: Mutex<HashMap<PathBuf, StorePath>> = Default::default();
+}
+
+impl IMPORTED_PATHS {
+  fn copy_to_store<P: AsRef<Path>>(&self, store: &dyn Store, path: P) -> Result<StorePath> {
+    let path = path.as_ref();
+    if let Some(p) = self.lock().get(path) {
+      return Ok(p.clone());
+    }
+    debug!("importing path {} into the store", path.display());
+    let new_path = store.add_to_store_from_path(
+      &*path
+        .file_name()
+        .ok_or_else(|| anyhow!("invalid imported path name"))?
+        .to_string_lossy(),
+      path,
+      FileIngestionMethod::Recursive,
+      HashType::SHA256,
+      &PathFilter::none(),
+      RepairFlag::NoRepair,
+    )?;
+    self.lock().insert(path.to_owned(), new_path.clone());
+    Ok(new_path)
+  }
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub struct CoerceOpts {
+  pub extended: bool,
+  pub copy_to_store: bool,
+}
+
+impl CoerceOpts {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn extended(mut self) -> Self {
+    self.extended = true;
+    self
+  }
+
+  pub fn dont_copy(mut self) -> Self {
+    self.copy_to_store = false;
+    self
+  }
+}
+
+impl Default for CoerceOpts {
+  fn default() -> Self {
+    Self {
+      extended: false,
+      copy_to_store: true,
+    }
+  }
 }
 
 fn make_regex(s: &str) -> Result<Arc<Regex>> {
@@ -33,7 +94,7 @@ fn make_regex(s: &str) -> Result<Arc<Regex>> {
 }
 
 pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> Result<Value> {
-  let (ctx, s) = coerce_new_string(eval, string, false, false)?;
+  let (ctx, s) = coerce_new_string(eval, string, Default::default())?;
   let start = eval.value_int_of(start)?;
   if start < 0 {
     bail!("first argument to `substring' must be >= 0");
@@ -50,19 +111,22 @@ pub fn substring(eval: &Eval, start: ThunkId, len: ThunkId, string: ThunkId) -> 
 pub fn prim_to_string(eval: &Eval, obj: ThunkId) -> Result<Value> {
   let mut ctx = PathSet::new();
   Ok(Value::String {
-    string: coerce_to_string(eval, obj, &mut ctx, true, false)?,
+    string: coerce_to_string(
+      eval,
+      obj,
+      &mut ctx,
+      CoerceOpts {
+        extended: true,
+        copy_to_store: false,
+      },
+    )?,
     context: ctx,
   })
 }
 
-pub fn coerce_new_string(
-  eval: &Eval,
-  obj: ThunkId,
-  extended: bool,
-  copy_to_store: bool,
-) -> Result<(PathSet, String)> {
+pub fn coerce_new_string(eval: &Eval, obj: ThunkId, opts: CoerceOpts) -> Result<(PathSet, String)> {
   let mut p = PathSet::new();
-  let string = coerce_to_string(eval, obj, &mut p, extended, copy_to_store)?;
+  let string = coerce_to_string(eval, obj, &mut p, opts)?;
   Ok((p, string))
 }
 
@@ -70,44 +134,46 @@ pub fn coerce_to_string(
   eval: &Eval,
   obj: ThunkId,
   ctx: &mut PathSet,
-  extended: bool,
-  copy_to_store: bool,
+  opts: CoerceOpts,
 ) -> Result<String> {
   let v = eval.value_of(obj)?;
   Ok(match v {
-    Value::Path(p) => p.display().to_string(),
+    Value::Path(p) => {
+      if opts.copy_to_store {
+        let storepath = IMPORTED_PATHS.copy_to_store(&*eval.store, p)?;
+        let str_path = eval.store.print_store_path(&storepath);
+        ctx.insert(str_path.clone());
+        str_path
+      } else {
+        p.display().to_string()
+      }
+    }
     Value::String { string, context } => {
       ctx.extend(context.iter().cloned());
       string.clone()
     }
     Value::Int(i) => i.to_string(),
-    Value::Bool(b) if extended => {
+    Value::Bool(b) if opts.extended => {
       if *b {
         "1".into()
       } else {
         String::new()
       }
     }
-    Value::Null if extended => String::new(),
-    Value::List(items) if extended => {
+    Value::Null if opts.extended => String::new(),
+    Value::List(items) if opts.extended => {
       let mut output = String::new();
       for (i, item) in items.iter().enumerate() {
         if i > 0 {
           output.push(' ');
         }
-        output.push_str(&coerce_to_string(
-          eval,
-          *item,
-          ctx,
-          extended,
-          copy_to_store,
-        )?);
+        output.push_str(&coerce_to_string(eval, *item, ctx, opts)?);
       }
       output
     }
     Value::AttrSet(a) => {
       if let Some(o) = a.get(&Ident::from("outPath")) {
-        coerce_to_string(eval, *o, ctx, extended, copy_to_store)?
+        coerce_to_string(eval, *o, ctx, opts)?
       } else {
         bail!("cannot coerce a set to a string unless it has an `outPath' attribute")
       }
@@ -130,7 +196,12 @@ pub fn concat_strings_sep(eval: &Eval, sep: ThunkId, strings: ThunkId) -> Result
     if ix > 0 {
       output.push_str(sep);
     }
-    output.push_str(&coerce_to_string(eval, *s, &mut all_ctx, false, false)?);
+    output.push_str(&coerce_to_string(
+      eval,
+      *s,
+      &mut all_ctx,
+      Default::default(),
+    )?);
   }
 
   Ok(Value::String {

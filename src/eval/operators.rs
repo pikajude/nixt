@@ -1,5 +1,5 @@
 use super::{
-  builtins::strings::coerce_to_string,
+  builtins::strings::{coerce_to_string, CoerceOpts},
   context::Context,
   thunk::{Thunk, ThunkId},
   value::Value,
@@ -254,15 +254,19 @@ pub fn concat_strings(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> 
         eval,
         lhs,
         &mut ctx,
-        false,
-        lhs_is_string,
+        CoerceOpts {
+          extended: false,
+          copy_to_store: lhs_is_string,
+        },
       )?);
       buf.push_str(&coerce_to_string(
         eval,
         rhs,
         &mut ctx,
-        false,
-        lhs_is_string,
+        CoerceOpts {
+          extended: false,
+          copy_to_store: lhs_is_string,
+        },
       )?);
       Value::String {
         string: buf,
