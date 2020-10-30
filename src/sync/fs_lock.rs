@@ -98,11 +98,11 @@ impl PathLocks {
         }
         debug!("lock acquired on `{}'", lock_path.display());
         let meta = fs::metadata(&lock_path)?;
-        if meta.len() != 0 {
-          debug!("lock file `{}' has become stale", lock_path.display());
-        } else {
+        if meta.len() == 0 {
           self.0.push(lockfile);
           break;
+        } else {
+          debug!("lock file `{}' has become stale", lock_path.display());
         }
       }
     }

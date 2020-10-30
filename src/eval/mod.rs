@@ -264,9 +264,9 @@ impl Eval {
       ThunkCell::Expr(e, c) => self.step_eval(e, c),
       ThunkCell::Apply(loc, lhs, rhs) => {
         self.trace.borrow_mut().push_front(loc);
-        let res = self.step_fn(lhs, rhs)?;
+        let step_result = self.step_fn(lhs, rhs)?;
         self.trace.borrow_mut().pop_front();
-        Ok(res)
+        Ok(step_result)
       }
       ThunkCell::Blackhole => bail!("infinite loop"),
     }
@@ -339,7 +339,7 @@ impl Eval {
           }
         }
         expr::Path::Home(_) => todo!(),
-        expr::Path::NixPath { path, .. } => {
+        expr::Path::Nix { path, .. } => {
           let nixpath = self.synthetic_variable(e.span, Ident::from("__nixPath"), &context);
           Ok(Value::Path(builtins::sys::find_file(
             self,

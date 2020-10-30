@@ -164,7 +164,7 @@ pub struct AttrSet {
 pub enum Path {
   Plain(String),
   Home(String),
-  NixPath {
+  Nix {
     open: Spanned<symbol::AngleL>,
     path: String,
     close: Spanned<symbol::AngleR>,

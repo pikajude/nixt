@@ -11,6 +11,7 @@
 #![feature(type_name_of_val)]
 #![feature(unboxed_closures)]
 #![feature(untagged_unions)]
+#![deny(clippy::all)]
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate derive_more;

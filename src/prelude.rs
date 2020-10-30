@@ -10,7 +10,7 @@ pub use crate::{
   util::*,
 };
 pub use std::{
-  borrow::Cow,
+  borrow::{Borrow, Cow},
   convert::TryInto as _,
   fs,
   io::{self, prelude::*},

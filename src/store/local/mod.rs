@@ -89,9 +89,9 @@ impl Store for LocalStore {
     Ok(dest_path)
   }
 
-  fn get_path_info(&self, path: &StorePath) -> Result<Option<Rc<dyn PathInfo>>> {
+  fn get_path_info<P: Borrow<StorePath>>(&self, path: P) -> Result<Option<Rc<dyn PathInfo>>> {
     let conn = self.db.lock();
-    if let Some(x) = db::get_path_info(&conn, self, path)? {
+    if let Some(x) = db::get_path_info(&conn, self, path.borrow())? {
       Ok(Some(Rc::new(x)))
     } else {
       Ok(None)

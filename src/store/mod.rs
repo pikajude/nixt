@@ -1,5 +1,6 @@
 use crate::{archive::PathFilter, prelude::*};
 use std::{
+  borrow::Borrow,
   collections::{BTreeMap, BTreeSet},
   ffi::OsStr,
   fmt::{Debug, Display},
@@ -48,8 +49,8 @@ pub struct ClosureOpts {
 pub trait Store: Send + Sync + Debug {
   fn store_path(&self) -> Cow<OsStr>;
 
-  fn print_store_path(&self, path: &StorePath) -> String {
-    format!("{}/{}", show_path(&self.store_path()), path)
+  fn print_store_path<P: Borrow<StorePath>>(&self, path: P) -> String {
+    format!("{}/{}", show_path(&self.store_path()), path.borrow())
   }
 
   fn make_store_path(&self, path_type: &str, hash: &Hash, name: &str) -> Result<StorePath> {
@@ -86,15 +87,15 @@ pub trait Store: Send + Sync + Debug {
     })
   }
 
-  fn read_derivation(&self, path: &StorePath) -> Result<Derivation> {
+  fn read_derivation<P: Borrow<StorePath>>(&self, path: P) -> Result<Derivation> {
     Derivation::get(self, path)
   }
 
-  fn to_real_path(&self, path: &StorePath) -> Result<PathBuf> {
+  fn to_real_path<P: Borrow<StorePath>>(&self, path: P) -> Result<PathBuf> {
     Ok(self.print_store_path(path).into())
   }
 
-  fn get_path_info(&self, path: &StorePath) -> Result<Option<Rc<dyn PathInfo>>>;
+  fn get_path_info<P: Borrow<StorePath>>(&self, path: P) -> Result<Option<Rc<dyn PathInfo>>>;
 
   fn is_valid_path(&self, path: &StorePath) -> Result<bool> {
     self.get_path_info(path).map(|x| x.is_some())

@@ -1,3 +1,5 @@
+#![deny(clippy::all)]
+
 #[macro_use] extern crate darling;
 #[macro_use] extern crate quote;
 

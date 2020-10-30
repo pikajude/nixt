@@ -48,7 +48,18 @@ impl Derivation {
 
     s.push_str("],[");
 
-    if !actual_inputs.is_empty() {
+    if actual_inputs.is_empty() {
+      for (i, (input_name, input_value)) in self.input_derivations.iter().enumerate() {
+        if i > 0 {
+          s.push(',');
+        }
+        s.push('(');
+        unquoted!(s, store.print_store_path(input_name));
+        s.push(',');
+        print_unquoted_strings(&mut s, input_value);
+        s.push(')');
+      }
+    } else {
       for (i, (input_name, input_value)) in actual_inputs.iter().enumerate() {
         if i > 0 {
           s.push(',');
@@ -62,17 +73,6 @@ impl Derivation {
         );
         s.push(',');
         print_unquoted_strings(&mut s, *input_value);
-        s.push(')');
-      }
-    } else {
-      for (i, (input_name, input_value)) in self.input_derivations.iter().enumerate() {
-        if i > 0 {
-          s.push(',');
-        }
-        s.push('(');
-        unquoted!(s, store.print_store_path(input_name));
-        s.push(',');
-        print_unquoted_strings(&mut s, input_value);
         s.push(')');
       }
     }
