@@ -473,7 +473,7 @@ expr_simple: ExprRef = {
 
   S<Path>  => <>.map(|x| arena.alloc(Expr::Path(Path::Plain(x.into())))),
   S<HPath> => <>.map(|x| arena.alloc(Expr::Path(Path::Home(x.into())))),
-  S<NPath> => <>.map(|x| arena.alloc(Expr::Path(Path::NixPath {
+  S<NPath> => <>.map(|x| arena.alloc(Expr::Path(Path::Nix {
     open: Spanned::new(
       FileSpan::new(
         <>.span.span.start(),
