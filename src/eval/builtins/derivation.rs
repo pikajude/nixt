@@ -149,10 +149,13 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
       }
     } else if path.starts_with('!') {
       let (path, name) = decode_context(path);
-      drv.input_derivations.insert(
-        eval.store.parse_store_path(path)?,
-        std::iter::once(name.to_string()).collect(),
-      );
+      drv
+        .input_derivations
+        .entry(eval.store.parse_store_path(path)?)
+        .and_modify(|x| {
+          x.insert(name.to_string());
+        })
+        .or_insert_with(|| std::iter::once(name.to_string()).collect());
     } else {
       drv.input_sources.insert(eval.store.parse_store_path(path)?);
     }

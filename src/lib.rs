@@ -13,7 +13,7 @@
 #![feature(untagged_unions)]
 #![deny(clippy::all)]
 
-#[macro_use] extern crate log;
+#[macro_use(trace, debug, info, warn, error)] extern crate slog_scope;
 #[macro_use] extern crate derive_more;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate gen_settings;

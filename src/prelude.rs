@@ -9,6 +9,7 @@ pub use crate::{
   syntax::{expr::Ident, span::*},
   util::*,
 };
+pub use slog::Drain as _;
 pub use std::{
   borrow::{Borrow, Cow},
   convert::TryInto as _,

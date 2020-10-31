@@ -7,7 +7,7 @@ pub struct Sqlite(Connection);
 impl Sqlite {
   pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
     let mut conn = Connection::open(path)?;
-    if log_enabled!(log::Level::Trace) {
+    if slog_scope::logger().is_trace_enabled() {
       conn.trace(Some(|x| trace!("{}", x)));
     }
     Ok(Self(conn))

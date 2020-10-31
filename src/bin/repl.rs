@@ -1,4 +1,4 @@
-#[macro_use] extern crate log;
+#[macro_use] extern crate slog_scope;
 
 use rix::eval::Eval;
 

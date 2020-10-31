@@ -188,7 +188,10 @@ pub(super) fn exec_builder<S: Store>(
   scope.spawn(move |_| {
     let f = BufReader::new(unsafe { fs::File::from_raw_fd(log_read) });
     for l in f.lines() {
-      info!("{}", l?);
+      slog_scope::with_logger(|logger| {
+        slog::slog_info!(logger, "{}", l?);
+        <io::Result<()>>::Ok(())
+      })?;
     }
     Ok::<_, io::Error>(())
   });

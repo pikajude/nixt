@@ -13,7 +13,6 @@ use codespan_reporting::{
 use config::Config;
 use context::{Context, Scope, StaticScope};
 use itertools::{Either, Itertools};
-use log::Level;
 use parking_lot::Mutex;
 use primop::{Op, Primop};
 use std::{
@@ -162,9 +161,9 @@ impl Eval {
         None => {
           let thunk = &self.items[thunk_id];
           let expr = thunk.get_thunk();
-          trace!(target: "eval::thunk", "{:?} => {:?}", thunk_id, &expr);
+          trace!(#"eval::thunk", "{:?} => {:?}", thunk_id, &expr);
           let val = self.step_thunk(expr)?;
-          trace!(target: "eval::thunk", "output: {:?}", &val);
+          trace!(#"eval::thunk", "output: {:?}", &val);
           thunk.put_value(val)
         }
       };
@@ -280,19 +279,18 @@ impl Eval {
   }
 
   fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
-    // trace!();
-    // if log_enabled!(target: "eval::entry", Level::Trace) {
-    //   let fs = self.files.lock();
-    //   trace!(
-    //     target: "eval::entry",
-    //     "{}:{}\n  {}",
-    //     fs.name(e.span.file_id).to_string_lossy(),
-    //     fs.location(e.span.file_id, e.span.span.start())?
-    //       .line
-    //       .number(),
-    //     preview(fs.source_slice(e.span.file_id, e.span.span)?)
-    //   );
-    // }
+    if slog_scope::logger().is_trace_enabled() {
+      let fs = self.files.lock();
+      trace!(
+        #"eval::entry",
+        "{}:{}\n  {}",
+        fs.name(e.span.file_id).to_string_lossy(),
+        fs.location(e.span.file_id, e.span.span.start()).unwrap()
+          .line
+          .number(),
+        preview(fs.source_slice(e.span.file_id, e.span.span).unwrap())
+      );
+    }
     match &self.expr[e.node] {
       Expr::Int(n) => Ok(Value::Int(*n)),
       Expr::Str(Str { body, .. }) | Expr::IndStr(IndStr { body, .. }) => {
@@ -479,24 +477,24 @@ impl Eval {
   fn step_fn(&self, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
     match self.value_of(lhs)? {
       Value::Lambda { lambda, captures } => {
-        trace!(target: "eval::fn", "lambda");
+        trace!(#"eval::fn", "lambda");
         self.call_lambda(&*lambda.argument, lambda.body, Some(rhs), captures)
       }
       Value::Primop(Primop {
         op: Op::Static(f), ..
       }) => {
-        trace!(target: "eval::fn", "primop");
+        trace!(#"eval::fn", "primop");
         f(self, rhs)
       }
       Value::Primop(Primop {
         op: Op::Dynamic(f), ..
       }) => {
-        trace!(target: "eval::fn", "primop");
+        trace!(#"eval::fn", "primop");
         f(self, rhs)
       }
       Value::AttrSet(a) => {
         if let Some(ftor) = a.get(&Ident::from("__functor")) {
-          trace!(target: "eval::fn", "__functor {:?}", *ftor);
+          trace!(#"eval::fn", "__functor {:?}", *ftor);
           let inter_1 = self.step_fn(*ftor, lhs)?;
           let inter_id = self.new_value(inter_1);
           self.step_fn(inter_id, rhs)
@@ -517,16 +515,16 @@ impl Eval {
   ) -> Result<Value> {
     let mut fn_body_scope = StaticScope::new();
 
-    if log_enabled!(target: "eval::lambda", Level::Trace) {
+    if slog_scope::logger().is_trace_enabled() {
       let fs = self.files.lock();
       trace!(
-        target: "eval::lambda",
+        #"eval::lambda",
         "{}:{}\n  {}",
         fs.name(body.span.file_id).to_string_lossy(),
-        fs.location(body.span.file_id, body.span.span.start())?
+        fs.location(body.span.file_id, body.span.span.start()).unwrap()
           .line
           .number(),
-        preview(fs.source_slice(body.span.file_id, body.span.span)?)
+        preview(fs.source_slice(body.span.file_id, body.span.span).unwrap())
       );
     }
 

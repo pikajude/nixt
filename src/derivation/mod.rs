@@ -109,7 +109,7 @@ impl Derivation {
   }
 
   pub fn get<S: Store + ?Sized, P: Borrow<StorePath>>(store: &S, path: P) -> Result<Self> {
-    let mut drv_lock = DERIVATIONS.try_lock().unwrap();
+    let mut drv_lock = DERIVATIONS.lock();
     let path = path.borrow();
     if let Some(x) = drv_lock.get(&path.hash) {
       Ok(x.clone())
