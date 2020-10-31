@@ -122,6 +122,8 @@ pub fn derivation_strict(eval: &Eval, args: ThunkId) -> Result<Value> {
     }
   }
 
+  debug!("full path context: {:?}", context);
+
   for path in &context {
     if let Some(p) = path.strip_prefix('=') {
       let mut refs = Default::default();

@@ -105,7 +105,14 @@ pub trait Store: Send + Sync + Debug {
     path.starts_with(self.store_path())
   }
 
-  fn register_valid_path(&self, path_info: ValidPathInfo) -> Result<()>;
+  fn register_valid_paths<I: IntoIterator<Item = ValidPathInfo>>(
+    &self,
+    path_infos: I,
+  ) -> Result<()>;
+
+  fn register_valid_path(&self, path_info: ValidPathInfo) -> Result<()> {
+    self.register_valid_paths(std::iter::once(path_info))
+  }
 
   fn add_temp_root(&self, _path: &StorePath) -> Result<()> {
     bail!("not supported by this store backend")

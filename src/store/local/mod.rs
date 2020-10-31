@@ -53,7 +53,7 @@ impl Store for LocalStore {
     let dest_path = self.make_text_path(name, &hash, references_set.clone())?;
 
     debug!(
-      "adding path {} to store with references: {:#?}",
+      "adding path {} to store with references: {:?}",
       name, references_set
     );
 
@@ -118,9 +118,12 @@ impl Store for LocalStore {
     Ok(())
   }
 
-  fn register_valid_path(&self, path_info: ValidPathInfo) -> Result<()> {
+  fn register_valid_paths<I: IntoIterator<Item = ValidPathInfo>>(
+    &self,
+    path_info: I,
+  ) -> Result<()> {
     let mut sql = self.db.lock();
-    db::insert_valid_paths(&mut sql, self, iter::once(&path_info))?;
+    db::insert_valid_paths(&mut sql, self, path_info.into_iter().collect())?;
     Ok(())
   }
 

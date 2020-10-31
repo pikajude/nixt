@@ -664,7 +664,12 @@ impl Settings {
 
   fn get_default_sandbox_paths() -> HashSet<String> {
     if cfg!(target_os = "linux") {
-      std::iter::once(format!("/bin/sh={}", "/bin/sh")).collect()
+      warn!("using bash from the store. fix this later");
+      std::iter::once(format!(
+        "/bin/sh={}",
+        "/tmp/rix-store/nix/store/j4rrv880iymgp4asajpp6a3yj9nnx9wk-bootstrap-tools/bin/sh?"
+      ))
+      .collect()
     } else if cfg!(target_os = "macos") {
       "/System/Library/Frameworks /System/Library/PrivateFrameworks /bin/sh /bin/bash /private/tmp \
        /private/var/tmp /usr/lib"

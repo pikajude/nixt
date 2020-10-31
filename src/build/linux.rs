@@ -114,6 +114,13 @@ pub(super) fn exec_builder<S: Store>(
   }
 
   let chroot_root_dir = store.to_real_path(path)?.with_extension("drv.chroot");
+
+  let _ = RunOnDrop::new(|| {
+    if let Err(e) = rm_rf(&chroot_root_dir) {
+      warn!("unable to cleanup chroot directory: {:?}", e);
+    }
+  });
+
   rm_rf(&chroot_root_dir)?;
   debug!(
     "setting up chroot environment in {}",
@@ -297,7 +304,7 @@ pub(super) fn exec_builder<S: Store>(
   progress.set_message("registering outputs");
 
   // Register the build outputs.
-  let mut referenceable_paths = HashSet::<StorePath>::new();
+  let mut referenceable_paths = input_paths;
 
   for out in drv.outputs.values() {
     referenceable_paths.insert(out.path.clone());
@@ -310,13 +317,15 @@ pub(super) fn exec_builder<S: Store>(
     }
   }
 
+  let mut pathinfos = vec![];
+
   for output in drv.outputs.values() {
     let out_path = store.print_store_path(&output.path);
 
     canonicalise_path_metadata(&out_path, None)?;
 
     let mut path_hash = crate::hash::Sink::new(HashType::SHA256);
-    let mut scanner = crate::archive::RefsScanner::new(referenceable_paths.iter().map(|p| p.hash));
+    let mut scanner = crate::archive::RefsScanner::new(referenceable_paths.iter().cloned());
 
     debug!("dumping {}", out_path);
 
@@ -327,11 +336,18 @@ pub(super) fn exec_builder<S: Store>(
     )?;
 
     let (path_hash, _) = path_hash.finish();
+    let found_refs = scanner.finish();
 
     debug!("output has hash {}", path_hash.encode(Encoding::Base32));
+    debug!("output refers to paths: {:?}", found_refs);
 
-    store.register_valid_path(ValidPathInfo::new(output.path.clone(), path_hash))?;
+    let mut valid_path = ValidPathInfo::new(output.path.clone(), path_hash);
+    valid_path.references = found_refs;
+
+    pathinfos.push(valid_path);
   }
+
+  store.register_valid_paths(pathinfos)?;
 
   progress.finish_and_clear();
   Ok(Some(FinishedChild(pid as _)))
@@ -390,8 +406,6 @@ fn try_run_child<S: Store>(
 
   let mut result = move || {
     common_child_init()?;
-
-    eprintln!("{:?}", dirs_in_chroot);
 
     // wait for (mount) namespace initialization
     user_ns_ok
@@ -488,11 +502,11 @@ fn try_run_child<S: Store>(
     }
 
     let do_bind = |source: &Path, target: &Path, optional: bool| -> Result<()> {
-      println!(
-        "bind mounting `{}` to `{}`",
-        source.display(),
-        target.display()
-      );
+      // println!(
+      //   "bind mounting `{}` to `{}`",
+      //   source.display(),
+      //   target.display()
+      // );
       if optional && !source.exists() {
         return Ok(());
       }

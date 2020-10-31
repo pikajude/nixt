@@ -124,7 +124,7 @@ pub fn download_tarball<S: Store>(
   Ok(new_path)
 }
 
-pub fn fetchurl(derivation: &Derivation, progress: &ProgressBar) -> Result<()> {
+pub fn fetchurl(derivation: &Derivation, progress: &ProgressBar) -> Result<Hash> {
   let store_path = derivation.get_env("out")?;
   let main_url = derivation.get_env("url")?;
   let unpack = derivation.env.get("unpack").map_or(false, |x| x == "1");
@@ -178,13 +178,14 @@ pub fn fetchurl(derivation: &Derivation, progress: &ProgressBar) -> Result<()> {
       fs::set_permissions(store_path, fs::Permissions::from_mode(0o755))?;
     }
 
-    if let Some(e) = expected_hash {
-      let actual_hash = if unpack {
-        panic!("TODO: hash an archive")
-      } else {
-        Hash::hash_file(store_path, HashType::SHA256)?.0
-      };
+    debug!("computing hash of fetched file(s)");
+    let actual_hash = if unpack {
+      panic!("TODO: hash an archive")
+    } else {
+      Hash::hash_file(store_path, HashType::SHA256)?.0
+    };
 
+    if let Some(e) = expected_hash {
       if actual_hash != e {
         bail!(
           "hash mismatch in file downloaded from {}:\n  wanted {:?}, got {:?}",
@@ -195,7 +196,7 @@ pub fn fetchurl(derivation: &Derivation, progress: &ProgressBar) -> Result<()> {
       }
     }
 
-    Ok(())
+    Ok(actual_hash)
   })
   .unwrap()
 }

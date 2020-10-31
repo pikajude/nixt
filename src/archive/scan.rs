@@ -1,22 +1,32 @@
 use crate::prelude::*;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub struct RefsScanner {
+  paths_map: HashMap<Vec<u8>, StorePath>,
   hashes: HashSet<Vec<u8>>,
   pub seen: HashSet<Vec<u8>>,
   tail: Vec<u8>,
 }
 
 impl RefsScanner {
-  pub fn new(hashes: impl IntoIterator<Item = PathHash>) -> Self {
+  pub fn new(hashes: impl Iterator<Item = StorePath>) -> Self {
+    let paths_map = hashes
+      .map(|h| (h.hash.to_string().as_bytes().to_vec(), h))
+      .collect::<HashMap<Vec<u8>, StorePath>>();
     Self {
-      hashes: hashes
-        .into_iter()
-        .map(|h| h.to_string().as_bytes().to_vec())
-        .collect(),
+      hashes: paths_map.keys().cloned().collect(),
+      paths_map,
       seen: HashSet::new(),
       tail: vec![],
     }
+  }
+
+  pub fn finish(mut self) -> BTreeSet<StorePath> {
+    let mut items = BTreeSet::new();
+    for x in self.seen.drain() {
+      items.insert(self.paths_map.remove(&x).unwrap());
+    }
+    items
   }
 }
 

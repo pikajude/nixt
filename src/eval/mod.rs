@@ -280,18 +280,19 @@ impl Eval {
   }
 
   fn step_eval_impl(&self, e: ExprRef, context: Context) -> Result<Value> {
-    if log_enabled!(target: "eval::entry", Level::Trace) {
-      let fs = self.files.lock();
-      trace!(
-        target: "eval::entry",
-        "{}:{}\n  {}",
-        fs.name(e.span.file_id).to_string_lossy(),
-        fs.location(e.span.file_id, e.span.span.start())?
-          .line
-          .number(),
-        preview(fs.source_slice(e.span.file_id, e.span.span)?)
-      );
-    }
+    // trace!();
+    // if log_enabled!(target: "eval::entry", Level::Trace) {
+    //   let fs = self.files.lock();
+    //   trace!(
+    //     target: "eval::entry",
+    //     "{}:{}\n  {}",
+    //     fs.name(e.span.file_id).to_string_lossy(),
+    //     fs.location(e.span.file_id, e.span.span.start())?
+    //       .line
+    //       .number(),
+    //     preview(fs.source_slice(e.span.file_id, e.span.span)?)
+    //   );
+    // }
     match &self.expr[e.node] {
       Expr::Int(n) => Ok(Value::Int(*n)),
       Expr::Str(Str { body, .. }) | Expr::IndStr(IndStr { body, .. }) => {

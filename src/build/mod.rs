@@ -314,11 +314,11 @@ fn exec_builtin<S: Store>(
   progress.set_prefix(&drv.name);
 
   if drv.builder.to_str() == Some("builtin:fetchurl") {
-    crate::fetch::fetchurl(&drv, &progress)?;
+    let fetched_hash = crate::fetch::fetchurl(&drv, &progress)?;
 
     store.register_valid_path(ValidPathInfo::new(
       drv.outputs["out"].path.clone(),
-      Hash::hash_str("foobar", HashType::SHA256),
+      fetched_hash,
     ))?;
 
     progress.finish_and_clear();
