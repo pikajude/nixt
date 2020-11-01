@@ -664,10 +664,10 @@ impl Settings {
 
   fn get_default_sandbox_paths() -> HashSet<String> {
     if cfg!(target_os = "linux") {
-      warn!("using bash from the store. fix this later");
+      eprintln!("warning: using the bash-static hack");
       std::iter::once(format!(
         "/bin/sh={}",
-        "/tmp/rix-store/nix/store/j4rrv880iymgp4asajpp6a3yj9nnx9wk-bootstrap-tools/bin/sh?"
+        concat!(env!("OUT_DIR"), "/bash-static")
       ))
       .collect()
     } else if cfg!(target_os = "macos") {

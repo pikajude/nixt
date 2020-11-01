@@ -236,13 +236,13 @@ impl<'a, S: Store> Worker<'a, S> {
     );
 
     let p2 = Arc::clone(&self.progress);
-    crate::logger::Logger::set(all_jobs.clone());
+    crate::logger::set(all_jobs.clone());
 
     crossbeam::thread::scope(move |scope| {
       scope.spawn(move |_| p2.join_and_clear());
 
       let result = self.drain(scope, all_jobs);
-      crate::logger::Logger::reset();
+      crate::logger::reset();
       result
     })
     .expect("child thread shouldn't panic")

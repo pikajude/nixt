@@ -33,7 +33,7 @@ fn get_derivation(eval: &Eval) -> Result<String> {
   let expr = eval.load_inline(
     "(import <nixpkgs> {
     overlays = [];
-  }).stdenv.outPath",
+  }).rustc.outPath",
   )?;
   match eval.value_with_context_of(expr) {
     Ok((_, ctx)) => {

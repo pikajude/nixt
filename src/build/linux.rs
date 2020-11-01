@@ -143,7 +143,7 @@ pub(super) fn exec_builder<S: Store>(
     chroot_root_dir.join("etc/group"),
     format!("root:x:0:\nnixbld:!:{}:\nnogroup:x:65534:\n", SANDBOX_GID),
   )?;
-  if !drv.is_builtin() {
+  if !drv.is_fixed_output() {
     fs::write(
       chroot_root_dir.join("etc/hosts"),
       "127.0.0.1 localhost\n::1 localhost\n",
@@ -484,7 +484,7 @@ fn try_run_child<S: Store>(
       symlink("/proc/self/fd/2", chroot_root_dir.join("dev/stderr"))?;
     }
 
-    if drv.is_builtin() {
+    if drv.is_fixed_output() {
       ss.push("/etc/resolv.conf");
       fs::write(
         chroot_root_dir.join("etc/nsswitch.conf"),
@@ -506,9 +506,9 @@ fn try_run_child<S: Store>(
 
     let do_bind = |source: &Path, target: &Path, optional: bool| -> Result<()> {
       // println!(
-      //   "bind mounting `{}` to `{}`",
+      //   "adding mount: `{}` => `{}`",
+      //   target.display(),
       //   source.display(),
-      //   target.display()
       // );
       if optional && !source.exists() {
         return Ok(());

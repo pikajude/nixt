@@ -40,6 +40,7 @@ serde = "1.0.116"
 serde_json = "1.0.57"
 slog = { version = "2.5.2", features = ["max_level_trace"] }
 slog-async = "2.5.0"
+slog-atomic = "3.0.0"
 slog-envlogger = "2.2.0"
 slog-json = "2.3.0"
 slog-scope = "4.3.0"
