@@ -2,8 +2,6 @@ use crate::prelude::*;
 use std::env;
 
 pub fn init() -> Result<()> {
-  let _ = settings();
-
   // ctrlc::set_handler(move || {
   //   println!("received ctrl-c");
   // })?;

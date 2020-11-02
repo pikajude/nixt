@@ -1,6 +1,7 @@
 #![allow(unused_doc_comments)] // false positive
 
-use once_cell::sync::Lazy;
+pub use cli::CliOptions;
+use once_cell::sync::OnceCell;
 use std::{
   borrow::Borrow,
   cmp,
@@ -15,11 +16,7 @@ mod cli;
 
 static NIXOS_CACHE_PUBKEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
 
-static SETTINGS: Lazy<Settings> = Lazy::new(|| {
-  let mut settings = Settings::default();
-  settings.parse();
-  settings
-});
+static SETTINGS: OnceCell<Settings> = OnceCell::new();
 
 #[derive(Debug, Clone)]
 pub struct Paths {
@@ -572,7 +569,25 @@ pub enum SandboxMode {
 
 impl Settings {
   pub fn get() -> &'static Self {
-    &*SETTINGS
+    SETTINGS
+      .get()
+      .expect("internal error: call rix::Settings::init")
+  }
+
+  pub fn init_with<F: FnOnce(&mut Settings)>(f: F) {
+    let mut s = Settings::default();
+    f(&mut s);
+    if SETTINGS.set(s).is_err() {
+      panic!("internal error: rix::Settings::init has already been called")
+    }
+  }
+
+  pub fn init_with_args(s: CliOptions) {
+    Self::init_with(|set| set.apply_overrides(s))
+  }
+
+  pub fn init() {
+    Self::init_with(|_| {})
   }
 
   pub fn has_experimental_feature<B: Borrow<str>>(&self, feature: &B) -> bool {
@@ -664,7 +679,7 @@ impl Settings {
 
   fn get_default_sandbox_paths() -> HashSet<String> {
     if cfg!(target_os = "linux") {
-      eprintln!("warning: using the bash-static hack");
+      warn!("using a bundled static bash");
       std::iter::once(format!(
         "/bin/sh={}",
         concat!(env!("OUT_DIR"), "/bash-static")

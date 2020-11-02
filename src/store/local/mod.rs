@@ -244,8 +244,6 @@ impl Store for LocalStore {
 
 impl LocalStore {
   pub fn open() -> Result<Self> {
-    crate::globals::init()?;
-
     let settings = settings();
 
     let db_dir = settings.paths.nix_state_dir.join("db");

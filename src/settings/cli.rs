@@ -2,7 +2,7 @@ use super::*;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
-struct CliSettings {
+pub struct CliOptions {
   #[structopt(
     short = "j",
     long = "build-max-jobs",
@@ -10,7 +10,7 @@ struct CliSettings {
     help = "Maximum number of parallel build jobs. \"auto\" means use number of cores.",
     parse(try_from_str = parse_jobs)
   )]
-  build_max_jobs: Option<usize>,
+  pub build_max_jobs: Option<usize>,
 }
 
 fn parse_jobs(s: &str) -> Result<usize, <usize as std::str::FromStr>::Err> {
@@ -22,14 +22,13 @@ fn parse_jobs(s: &str) -> Result<usize, <usize as std::str::FromStr>::Err> {
 }
 
 impl Settings {
-  pub(super) fn parse(&mut self) {
+  pub(super) fn apply_overrides(&mut self, f: CliOptions) {
     if cfg!(test) {
       // this stuff confuses libtest, and we set options in tests manually anyway
       return;
     }
 
-    let CliSettings { build_max_jobs, .. } = CliSettings::from_args();
-    if let Some(b) = build_max_jobs {
+    if let Some(b) = f.build_max_jobs {
       self.max_build_jobs = b;
     }
   }

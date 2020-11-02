@@ -20,8 +20,9 @@ impl Drain for ProgressLogger {
   fn log(&self, record: &Record, _: &OwnedKVList) -> std::result::Result<Self::Ok, Self::Err> {
     self.0.println(
       format!(
-        "{} {} {}",
+        "{} \x1b[3{}m{}\x1b[0m \x1b[1m{}\x1b[0m",
         record.module(),
+        slog_term::TermDecorator::level_to_color(record.level()),
         record.level().as_short_str(),
         record.msg()
       )

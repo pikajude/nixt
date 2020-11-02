@@ -231,7 +231,7 @@ pub(super) fn exec_builder<S: Store>(
       | CloneFlags::CLONE_NEWIPC
       | CloneFlags::CLONE_NEWUTS
       | CloneFlags::CLONE_PARENT;
-    if !drv.is_fixed_output() {
+    if !drv.is_impure() {
       clone_flags |= CloneFlags::CLONE_NEWNET;
     }
 
@@ -414,6 +414,23 @@ fn try_run_child<S: Store>(
     user_ns_ok
       .recv()
       .map_err(|_| anyhow!("unable to initialize user namespace"))?;
+
+    if !drv.is_impure() {
+      use unix::sys::socket::*;
+      let sock = socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::empty(),
+        None,
+      )?;
+
+      // create a new loopback interface
+      netdevice::set_flags(
+        sock,
+        "lo",
+        &(netdevice::IFF_UP | netdevice::IFF_LOOPBACK | netdevice::IFF_RUNNING),
+      )?;
+    }
 
     unistd::sethostname("localhost")?;
     unsafe {
