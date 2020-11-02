@@ -71,6 +71,8 @@ impl<'a, S: Store> Worker<'a, S> {
     }
   }
 
+  // FIXME: This method produces a dependency queue of X objects (i.e. the entire
+  // dependency tree) even if everything has already been built.
   pub fn add_needed(&mut self, path: &StorePath) -> Result<()> {
     let drv = Derivation::get(&*self.store, path)?;
     let deps_iter = drv
@@ -185,7 +187,7 @@ impl<'a, S: Store> Worker<'a, S> {
         }
         match result {
           Ok(x) => {
-            debug!("finished {}:{:?}", thingy, outputs);
+            debug!("build finished"; "path" => %thingy, "outputs" => ?outputs);
             all_jobs.inc(1);
             if let Some(pid) = x {
               self.active_pids.remove(&*pid);

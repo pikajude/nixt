@@ -1,6 +1,6 @@
 use crate::prelude::Result;
 use indicatif::ProgressBar;
-use slog::{Discard, Drain, FnValue, OwnedKVList, Record};
+use slog::{Discard, Drain, FnValue, OwnedKVList, Record, KV};
 use slog_atomic::{AtomicSwitch, AtomicSwitchCtrl};
 use std::sync::Mutex;
 
@@ -12,22 +12,36 @@ lazy_static! {
 
 struct ProgressLogger(ProgressBar);
 
+struct ProgressFormatter<'a> {
+  buf: &'a mut String,
+}
+
+impl<'a> slog::Serializer for ProgressFormatter<'a> {
+  fn emit_arguments(&mut self, key: &'static str, val: &std::fmt::Arguments) -> slog::Result {
+    self
+      .buf
+      .push_str(&format!(", \x1b[1m{}:\x1b[0m {}", key, val));
+    Ok(())
+  }
+}
+
 impl Drain for ProgressLogger {
   // actually Never, but this is more convenient
   type Err = std::io::Error;
   type Ok = ();
 
   fn log(&self, record: &Record, _: &OwnedKVList) -> std::result::Result<Self::Ok, Self::Err> {
-    self.0.println(
-      format!(
-        "{} \x1b[3{}m{}\x1b[0m \x1b[1m{}\x1b[0m",
-        record.module(),
-        slog_term::TermDecorator::level_to_color(record.level()),
-        record.level().as_short_str(),
-        record.msg()
-      )
-      .as_str(),
+    let mut msg = format!(
+      "{} \x1b[3{}m{}\x1b[0m \x1b[1m{}\x1b[0m",
+      record.module(),
+      slog_term::TermDecorator::level_to_color(record.level()),
+      record.level().as_short_str(),
+      record.msg()
     );
+    record
+      .kv()
+      .serialize(record, &mut ProgressFormatter { buf: &mut msg })?;
+    self.0.println(msg.as_str());
     Ok(())
   }
 }
