@@ -729,8 +729,8 @@ impl Default for Paths {
       nix_user_conf_files: get_user_config_files(),
       nix_bin_dir: env_fallback("/usr/local/bin", &["NIX_BIN_DIR"]),
       nix_man_dir: env_fallback("/usr/local/share/man", &[]),
-      nix_daemon_socket_file: env::var_os("NIX_DAEMON_SOCKET_PATH").map_or_else(
-        || nix_state_dir.join("daemon-socket").join("socket"),
+      nix_daemon_socket_file: env::var_os("NIX_DAEMON_SOCKET_PATH").map_or(
+        nix_state_dir.join("daemon-socket").join("socket"),
         PathBuf::from,
       ),
       nix_store,

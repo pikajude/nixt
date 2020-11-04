@@ -255,7 +255,7 @@ impl<'a, S: Store> Worker<'a, S> {
     self.next_id += 1;
     assert!(self.active.insert(id, path.clone()).is_none());
 
-    debug!("attempting to build {}", path);
+    debug!("starting build"; "path" => %path);
 
     let messages = Arc::clone(&self.messages);
     let pog = Arc::clone(&self.progress);

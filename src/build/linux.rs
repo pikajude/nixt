@@ -54,7 +54,7 @@ pub(super) fn exec_builder<S: Store>(
     store.compute_closure(src, &mut input_paths, ClosureOpts::default())?;
   }
 
-  debug!("added input paths: {:?}", input_paths);
+  debug!("added input paths"; "paths" => ?input_paths);
 
   let lock_files = drv
     .out_paths()
@@ -341,8 +341,8 @@ pub(super) fn exec_builder<S: Store>(
     let (path_hash, _) = path_hash.finish();
     let found_refs = scanner.finish();
 
-    debug!("output has hash {}", path_hash.encode(Encoding::Base32));
-    debug!("output refers to paths: {:?}", found_refs);
+    debug!("calculated hash"; "path" => %output.path, "hash" => path_hash.encode(Encoding::Base32));
+    debug!("calculated refs"; "refs" => ?found_refs);
 
     let mut valid_path = ValidPathInfo::new(output.path.clone(), path_hash);
     valid_path.references = found_refs;
