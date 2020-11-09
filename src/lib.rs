@@ -23,6 +23,7 @@ pub mod arena;
 pub mod build;
 pub mod derivation;
 pub mod eval;
+pub mod eval2;
 pub mod fetch;
 pub mod globals;
 pub mod hash;

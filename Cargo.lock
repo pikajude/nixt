@@ -482,6 +482,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derivative"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb582b60359da160a9477ee80f15c8d784c477e69c217ef2cdd4169c24ea380f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "derive_more"
 version = "0.99.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1178,6 +1189,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba7ae1a2180ed02ddfdb5ab70c70d596a26dd642e097bb6fe78b1bde8588ed97"
+
+[[package]]
 name = "path_abs"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1504,6 +1521,7 @@ dependencies = [
  "crossbeam",
  "ctrlc",
  "curl",
+ "derivative",
  "derive_more",
  "dirs-next",
  "dns-lookup",
@@ -1525,6 +1543,7 @@ dependencies = [
  "num_cpus",
  "once_cell",
  "parking_lot",
+ "paste",
  "path_abs",
  "prctl",
  "proptest",

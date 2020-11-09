@@ -46,28 +46,34 @@ pub enum Token<'a> {
   Any(char),
 }
 
-lazy_static! {
-  pub static ref ID: Regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_'-]*").unwrap();
-  static ref INT: Regex = Regex::new(r"^[0-9]+").unwrap();
-  static ref FLOAT: Regex =
-    Regex::new(r"^(([1-9][0-9]*\.[0-9]*)|(0?\.[0-9]+))([Ee][+-]?[0-9]+)?").unwrap();
-  static ref PATH: Regex = Regex::new(r"^[a-zA-Z0-9\._\-\+]*(/[a-zA-Z0-9\._\-\+]+)+/?").unwrap();
-  static ref HPATH: Regex = Regex::new(r"^\~(/[a-zA-Z0-9\._\-\+]+)+/?").unwrap();
-  static ref SPATH: Regex = Regex::new(r"^<[a-zA-Z0-9\._\-\+]+(/[a-zA-Z0-9\._\-\+]+)*>").unwrap();
-  static ref URI: Regex =
-    Regex::new(r"^[a-zA-Z][a-zA-Z0-9\+\-\.]*:[a-zA-Z0-9%/\?:@\&=\+\$,\-_\.!\~\*']+").unwrap();
-  static ref OPER: Regex = Regex::new(r"^(\.\.\.|==|!=|<=|>=|&&|\|\||->|//|\+\+)").unwrap();
-  static ref STRING_INNER_0: Regex =
-    Regex::new(r#"^([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)*\$/""#).unwrap();
-  static ref STRING_INNER_1: Regex =
-    Regex::new(r#"^([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)+"#).unwrap();
-  static ref STRING_END_INVALID: Regex = Regex::new(r"^(\$|\\|\$\\)").unwrap();
-  static ref IND_STRING_START: Regex = Regex::new(r"^''( *\n)?").unwrap();
-  static ref IND_STRING_INNER: Regex = Regex::new(r"^([^\$']|\$[^\{']|'[^'\$])+").unwrap();
-  static ref IND_STRING_ANY: Regex = Regex::new(r"^''\\(?s).").unwrap();
-  static ref WHITESPACE: Regex = Regex::new(r"^[ \t\r\n]+").unwrap();
-  static ref COMMENT_SINGLE: Regex = Regex::new(r"^#[^\r\n]*").unwrap();
-  static ref COMMENT_MULTI: Regex = Regex::new(r"^/\*([^*]|\*+[^*/])*\*+/").unwrap();
+macro_rules! tokendefs {
+  ($($name:ident $regex:literal),+) => {
+    lazy_static! {
+      $(pub static ref $name: Regex = Regex::new(concat!("^", $regex)).unwrap();)+
+    }
+  }
+}
+
+tokendefs! {
+  INT     "[0-9]+",
+  ID      "[a-zA-Z_][a-zA-Z0-9_'-]*",
+  FLOAT   r"(([1-9][0-9]*\.[0-9]*)|(0?\.[0-9]+))([Ee][+-]?[0-9]+)?",
+  PATH    r"[a-zA-Z0-9\._\-\+]*(/[a-zA-Z0-9\._\-\+]+)+/?",
+  HPATH   r"\~(/[a-zA-Z0-9\._\-\+]+)+/?",
+  SPATH   r"<[a-zA-Z0-9\._\-\+]+(/[a-zA-Z0-9\._\-\+]+)*>",
+  URI     r"[a-zA-Z][a-zA-Z0-9\+\-\.]*:[a-zA-Z0-9%/\?:@\&=\+\$,\-_\.!\~\*']+",
+  OPER    r"(\.\.\.|==|!=|<=|>=|&&|\|\||->|//|\+\+)",
+
+  STRING_INNER_0      r#"([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)*\$/""#,
+  STRING_INNER_1      r#"([^\$"\\]|\$[^\{"\\]|\\(?s).|\$\\(?s).)+"#,
+  STRING_END_INVALID  r"(\$|\\|\$\\)",
+  IND_STRING_START    r"''( *\n)?",
+  IND_STRING_INNER    r"([^\$']|\$[^\{']|'[^'\$])+",
+  IND_STRING_ANY      r"''\\(?s).",
+
+  WHITESPACE      r"[ \t\r\n]+",
+  COMMENT_SINGLE  r"#[^\r\n]*",
+  COMMENT_MULTI   r"/\*([^*]|\*+[^*/])*\*+/"
 }
 
 #[derive(Clone, Copy, Debug)]
