@@ -19,7 +19,23 @@ fn test_rec_order() -> Result<()> {
 #[test]
 fn test_foldl() -> Result<()> {
   let e = Eval::new();
-  let expr = e.load_inline(r#"foldl' (x: y: "${x}-${y}") "foo" ["bar" "baz" "qux"]"#)?;
+  let expr = e.load_inline(r#"builtins.foldl' (x: y: "${x}-${y}") "foo" ["bar" "baz" "qux"]"#)?;
   assert_eq!(&*e.value_string_of(&expr)?, "foo-bar-baz-qux");
+  Ok(())
+}
+
+#[test]
+fn test_unindent() -> Result<()> {
+  let e = Eval::new();
+  let expr = e.load_inline(
+    r#"
+      ''
+            foo
+            bar
+            baz
+      ''
+    "#,
+  )?;
+  assert_eq!(&*e.value_string_of(&expr)?, "foo\nbar\nbaz\n");
   Ok(())
 }

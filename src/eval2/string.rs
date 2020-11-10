@@ -35,7 +35,7 @@ impl Eval {
   pub fn coerce_to_string(
     &self,
     v: &ValueRef,
-    context: &mut OrdSet<String>,
+    context: &mut BTreeSet<String>,
     opts: CoerceOpts,
   ) -> Result<String> {
     Ok(match &*self.value(v)? {
@@ -66,7 +66,7 @@ impl Eval {
         }
       }
       Value::String(StringCtx { s, context: ctx }) => {
-        context.extend(ctx.iter());
+        context.extend(ctx.iter().cloned());
         s.clone()
       }
       v => bail!("cannot convert {} to a string", v.typename()),

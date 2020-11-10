@@ -49,3 +49,34 @@ macro_rules! op2 {
     ))
   };
 }
+
+#[macro_export]
+macro_rules! op3 {
+  ($name:literal, $op:expr) => {
+    ::std::sync::Arc::new(::parking_lot::RwLock::new(
+      $crate::eval2::value::Value::Primop($crate::eval2::primop::Primop {
+        name: $name,
+        fun: $crate::eval2::primop::PrimopFn::Static(move |_, t1| {
+          let t1 = Arc::clone(t1);
+          Ok(::std::sync::Arc::new(::parking_lot::RwLock::new(
+            $crate::eval2::value::Value::Primop($crate::eval2::primop::Primop {
+              name: concat!($name, "-app"),
+              fun: $crate::eval2::primop::PrimopFn::Dynamic(Arc::new(move |_, t2| {
+                let t1 = Arc::clone(&t1);
+                let t2 = Arc::clone(t2);
+                Ok(::std::sync::Arc::new(::parking_lot::RwLock::new(
+                  $crate::eval2::value::Value::Primop($crate::eval2::primop::Primop {
+                    name: concat!($name, "-app"),
+                    fun: $crate::eval2::primop::PrimopFn::Dynamic(Arc::new(move |eval, t3| {
+                      $op(eval, &t1, &t2, t3)
+                    })),
+                  }),
+                )))
+              })),
+            }),
+          )))
+        }),
+      }),
+    ))
+  };
+}

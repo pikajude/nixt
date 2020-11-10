@@ -1,7 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+  collections::{BTreeSet, HashMap},
+  sync::Arc,
+};
 
 use self::{
   context::{Context, Scope, StaticScope},
+  primop::{Primop, PrimopFn},
   string::CoerceOpts,
   value::{arc, StringCtx, Value, ValueRef},
 };
@@ -10,7 +14,6 @@ use crate::{
   syntax::expr::{self, AttrList, AttrName, Binding, Expr, ExprRef, InheritFrom, StrPart},
 };
 use codespan::Files;
-use im::OrdSet;
 use itertools::{Either, Itertools};
 use parking_lot::{MappedRwLockReadGuard, Mutex, RwLockReadGuard, RwLockUpgradableReadGuard};
 
@@ -24,6 +27,7 @@ pub mod value;
 pub struct Eval {
   expr: crate::arena::Arena<Expr>,
   files: Mutex<Files<String>>,
+  builtins: ValueRef,
   parse_cache: Mutex<HashMap<PathBuf, ExprRef>>,
 }
 
@@ -35,11 +39,20 @@ impl Default for Eval {
 
 impl Eval {
   pub fn new() -> Self {
-    Self {
+    let eval = Self {
       expr: crate::arena::Arena::new(),
       files: Mutex::new(Files::new()),
       parse_cache: Default::default(),
-    }
+      builtins: arc(Value::Blackhole),
+    };
+    let mut builtins = StaticScope::new();
+    builtins.insert(Ident::from("builtins"), Arc::clone(&eval.builtins));
+    builtins.insert(
+      Ident::from("foldl'"),
+      crate::op3!("foldl'", Self::foldl_strict),
+    );
+    *eval.builtins.write() = Value::Attrs(builtins);
+    eval
   }
 
   pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<ValueRef> {
@@ -70,6 +83,10 @@ impl Eval {
       Expr::Int(i) => Value::Int(*i),
       Expr::Float(f) => Value::Float(*f),
       Expr::List(items) => Value::List(items.elems.iter().map(|e| self.defer(*e, c)).collect()),
+      Expr::Lambda(l) => Value::Lambda {
+        fun: l.clone(),
+        captures: Box::new(c.clone()),
+      },
       _ => Value::Thunk(e, c.clone()),
     })
   }
@@ -115,9 +132,9 @@ impl Eval {
 
   fn eval(&self, id: ExprRef, context: &Context) -> Result<ValueRef> {
     match &self.expr[id.node] {
-      Expr::Str(expr::Str { body, .. }) => {
+      Expr::Str(expr::Str { body, .. }) | Expr::IndStr(expr::IndStr { body, .. }) => {
         let mut buf = String::new();
-        let mut path_context = OrdSet::new();
+        let mut path_context = BTreeSet::new();
         for item in body {
           match item {
             StrPart::Plain(s) => {
@@ -156,6 +173,9 @@ impl Eval {
               }
             }
           }
+        }
+        if let Some(y) = self.value_attrs_of(&self.builtins)?.get(x) {
+          return Ok(Arc::clone(y));
         }
         for item in &context.with {
           let scope = self.value_attrs_of(item)?;
@@ -199,6 +219,10 @@ impl Eval {
         self.defer(*lhs, context),
         self.defer(*rhs, context),
       ))),
+      Expr::Lambda(l) => Ok(arc(Value::Lambda {
+        fun: l.clone(),
+        captures: Box::new(context.clone()),
+      })),
       e => bail!("unhandled expression: {:#?}", e),
     }
   }
@@ -208,6 +232,14 @@ impl Eval {
       Value::Lambda { fun, captures } => {
         self.call_lambda(&*fun.argument, fun.body, Some(rhs), &captures)
       }
+      Value::Primop(Primop {
+        fun: PrimopFn::Static(f),
+        ..
+      }) => f(self, rhs),
+      Value::Primop(Primop {
+        fun: PrimopFn::Dynamic(f),
+        ..
+      }) => f(self, rhs),
       v => bail!("not a function: {:?}", v.typename()),
     }
   }
@@ -442,6 +474,25 @@ impl Eval {
       _ => None,
     })
   }
+
+  fn foldl_strict(&self, oper: &ValueRef, seed: &ValueRef, list: &ValueRef) -> Result<ValueRef> {
+    let items = self.value_list_of(list)?;
+    if items.is_empty() {
+      Ok(Arc::clone(seed))
+    } else {
+      let mut cur_item = Arc::clone(seed);
+      for (i, thunk) in items.iter().enumerate() {
+        let acc_fn = self.apply_function(oper, &cur_item)?;
+        let next_item = self.apply_function(&acc_fn, thunk)?;
+        if i + 1 == items.len() {
+          return Ok(next_item);
+        } else {
+          cur_item = Arc::clone(&next_item);
+        }
+      }
+      unreachable!()
+    }
+  }
 }
 
 macro_rules! type_accessor {
@@ -476,3 +527,4 @@ type_accessor!(
   }
 );
 type_accessor!(with_context, "string with context", StringCtx, Value::String(s) => s);
+type_accessor!(list, "list", [ValueRef], Value::List(l) => l.as_slice());

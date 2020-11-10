@@ -1,9 +1,13 @@
 use super::context::{Context, StaticScope};
 use crate::syntax::expr::{self, ExprRef};
 use derivative::Derivative;
-use im::{OrdSet, Vector};
 use parking_lot::RwLock;
-use std::{cell::RefCell, collections::HashSet, fmt::Debug, sync::Arc};
+use std::{
+  cell::RefCell,
+  collections::{BTreeSet, HashSet},
+  fmt::Debug,
+  sync::Arc,
+};
 
 pub type ValueRef = Arc<RwLock<Value>>;
 
@@ -14,7 +18,7 @@ pub(super) fn arc<T>(x: T) -> Arc<RwLock<T>> {
 #[derive(Clone, Debug)]
 pub struct StringCtx {
   pub s: String,
-  pub context: OrdSet<String>,
+  pub context: BTreeSet<String>,
 }
 
 #[derive(Clone, Derivative)]
@@ -23,7 +27,7 @@ pub enum Value {
   Bool(bool),
   Int(i64),
   Float(f64),
-  List(Vector<ValueRef>),
+  List(Vec<ValueRef>),
   Attrs(StaticScope),
   String(StringCtx),
   Lambda {
