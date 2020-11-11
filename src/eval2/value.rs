@@ -6,6 +6,7 @@ use std::{
   cell::RefCell,
   collections::{BTreeSet, HashSet},
   fmt::Debug,
+  path::PathBuf,
   sync::Arc,
 };
 
@@ -13,12 +14,6 @@ pub type ValueRef = Arc<RwLock<Value>>;
 
 pub(super) fn arc<T>(x: T) -> Arc<RwLock<T>> {
   Arc::new(RwLock::new(x))
-}
-
-#[derive(Clone, Debug)]
-pub struct StringCtx {
-  pub s: String,
-  pub context: BTreeSet<String>,
 }
 
 #[derive(Clone, Derivative)]
@@ -29,7 +24,9 @@ pub enum Value {
   Float(f64),
   List(Vec<ValueRef>),
   Attrs(StaticScope),
-  String(StringCtx),
+  Path(PathBuf),
+  // don't change this, it makes it easier to return a mapped RwLockReadGuard
+  String((String, BTreeSet<String>)),
   Lambda {
     fun: expr::Lambda,
     captures: Box<Context>,
@@ -58,6 +55,7 @@ impl Value {
       Value::Float(_) => "float",
       Value::List(_) => "list",
       Value::Attrs(_) => "attrs",
+      Value::Path(_) => "path",
       Value::String(_) => "string",
       Value::Lambda { .. } => "lambda",
       Value::Primop(_) => "primop",
@@ -137,7 +135,8 @@ impl Debug for DebugValue<'_> {
         }
         f.finish()
       }
-      Value::String(StringCtx { s, .. }) => s.fmt(f),
+      Value::Path(p) => p.display().fmt(f),
+      Value::String((s, _)) => s.fmt(f),
       Value::Lambda { fun, .. } => write!(f, "lambda @ {:?}", fun.argument.span),
       Value::Primop(p) => p.fmt(f),
     }

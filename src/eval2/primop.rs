@@ -20,11 +20,11 @@ impl Debug for Primop {
 }
 
 impl Primop {
-  pub fn one(name: &'static str, f: fn(&Eval, &ValueRef) -> Result<ValueRef>) -> Value {
-    Value::Primop(Self {
+  pub fn one(name: &'static str, f: fn(&Eval, &ValueRef) -> Result<ValueRef>) -> ValueRef {
+    arc(Value::Primop(Self {
       name,
       fun: PrimopFn::Static(f),
-    })
+    }))
   }
 }
 

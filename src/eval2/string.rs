@@ -39,7 +39,18 @@ impl Eval {
     opts: CoerceOpts,
   ) -> Result<String> {
     Ok(match &*self.value(v)? {
-      Value::Null if opts.extended => String::new(),
+      Value::Path(p) => {
+        if opts.copy_to_store {
+          bail!("copy to store")
+        } else {
+          p.display().to_string()
+        }
+      }
+      Value::String((s, ctx)) => {
+        context.extend(ctx.iter().cloned());
+        s.clone()
+      }
+      Value::Int(i) => i.to_string(),
       Value::Bool(b) if opts.extended => {
         if *b {
           "1".into()
@@ -47,7 +58,7 @@ impl Eval {
           "".into()
         }
       }
-      Value::Int(i) => i.to_string(),
+      Value::Null if opts.extended => String::new(),
       Value::List(l) if opts.extended => {
         let mut output = String::new();
         for (i, item) in l.iter().enumerate() {
@@ -65,11 +76,17 @@ impl Eval {
           bail!("cannot coerce a set to a string unless it has an `outPath` attribute")
         }
       }
-      Value::String(StringCtx { s, context: ctx }) => {
-        context.extend(ctx.iter().cloned());
-        s.clone()
-      }
       v => bail!("cannot convert {} to a string", v.typename()),
     })
+  }
+
+  pub fn coerce_new_string(
+    &self,
+    obj: &ValueRef,
+    opts: CoerceOpts,
+  ) -> Result<(BTreeSet<String>, String)> {
+    let mut p = BTreeSet::new();
+    let s = self.coerce_to_string(obj, &mut p, opts)?;
+    Ok((p, s))
   }
 }

@@ -25,6 +25,18 @@ fn test_foldl() -> Result<()> {
 }
 
 #[test]
+fn test_replace() -> Result<()> {
+  let e = Eval::new();
+  let expr = e.load_inline(
+    r#"
+      builtins.replaceStrings ["-" "."] ["_" "_"] "x86_64-unknown-linux-gnu"
+    "#,
+  )?;
+  assert_eq!(&*e.value_string_of(&expr)?, "x86_64_unknown_linux_gnu");
+  Ok(())
+}
+
+#[test]
 fn test_unindent() -> Result<()> {
   let e = Eval::new();
   let expr = e.load_inline(
@@ -37,5 +49,16 @@ fn test_unindent() -> Result<()> {
     "#,
   )?;
   assert_eq!(&*e.value_string_of(&expr)?, "foo\nbar\nbaz\n");
+  Ok(())
+}
+
+#[test]
+fn nixpkgs_evaluates() -> Result<()> {
+  let e = Eval::new();
+  let expr = e.load_inline("with import <nixpkgs> {}; stdenv.outPath")?;
+  match e.value_with_context_of(&expr) {
+    Ok(c) => assert!(!c.1.is_empty()),
+    Err(f) => e.print_error(f)?,
+  }
   Ok(())
 }

@@ -1,23 +1,29 @@
-use std::{
-  collections::{BTreeSet, HashMap},
-  sync::Arc,
-};
-
 use self::{
+  builtins::AssertionFailure,
   context::{Context, Scope, StaticScope},
   primop::{Primop, PrimopFn},
   string::CoerceOpts,
-  value::{arc, StringCtx, Value, ValueRef},
+  value::{arc, Value, ValueRef},
 };
 use crate::{
   prelude::*,
   syntax::expr::{self, AttrList, AttrName, Binding, Expr, ExprRef, InheritFrom, StrPart},
 };
 use codespan::Files;
+use codespan_reporting::{
+  diagnostic::{Diagnostic, Label, LabelStyle},
+  term::emit,
+};
 use itertools::{Either, Itertools};
 use parking_lot::{MappedRwLockReadGuard, Mutex, RwLockReadGuard, RwLockUpgradableReadGuard};
+use std::{
+  collections::{BTreeSet, HashMap},
+  sync::{atomic::AtomicU8, Arc},
+};
 
+mod builtins;
 pub mod context;
+mod operators;
 mod primop;
 mod string;
 pub mod value;
@@ -28,7 +34,9 @@ pub struct Eval {
   expr: crate::arena::Arena<Expr>,
   files: Mutex<Files<String>>,
   builtins: ValueRef,
+  frames: Mutex<Vec<FileSpan>>,
   parse_cache: Mutex<HashMap<PathBuf, ExprRef>>,
+  inline_counter: AtomicU8,
 }
 
 impl Default for Eval {
@@ -43,13 +51,113 @@ impl Eval {
       expr: crate::arena::Arena::new(),
       files: Mutex::new(Files::new()),
       parse_cache: Default::default(),
+      frames: Mutex::new(vec![]),
       builtins: arc(Value::Blackhole),
+      inline_counter: AtomicU8::new(0),
     };
     let mut builtins = StaticScope::new();
     builtins.insert(Ident::from("builtins"), Arc::clone(&eval.builtins));
+    builtins.insert(Ident::from("__nixPath"), arc(self::builtins::mk_nix_path()));
+
+    builtins.insert("null".into(), arc(Value::Null));
+    builtins.insert("true".into(), arc(Value::Bool(true)));
+    builtins.insert("false".into(), arc(Value::Bool(false)));
+
+    builtins.insert(
+      Ident::from("abort"),
+      Primop::one("abort", |eval, msg| {
+        let (msg, _) = &*eval.value_with_context_of(msg)?;
+        bail!("evaluation aborted with message: {}", msg)
+      }),
+    );
+    builtins.insert(
+      Ident::from("attrNames"),
+      Primop::one("attrNames", Self::attrnames_prim),
+    );
+    builtins.insert(
+      Ident::from("compareVersions"),
+      crate::op2!("compareVersions", Self::compare_versions),
+    );
     builtins.insert(
       Ident::from("foldl'"),
       crate::op3!("foldl'", Self::foldl_strict),
+    );
+    builtins.insert(
+      Ident::from("genList"),
+      crate::op2!("genList", Self::gen_list),
+    );
+    builtins.insert(Ident::from("getEnv"), Primop::one("getEnv", Self::get_env));
+    builtins.insert(Ident::from("import"), Primop::one("import", Self::import));
+    builtins.insert(
+      Ident::from("intersectAttrs"),
+      crate::op2!("intersectAttrs", Self::intersect_attrs),
+    );
+    builtins.insert(
+      Ident::from("isAttrs"),
+      Primop::one("isAttrs", |eval, val| {
+        Ok(arc(Value::Bool(matches!(
+          &*eval.value(val)?,
+          Value::Attrs(_)
+        ))))
+      }),
+    );
+    builtins.insert(
+      Ident::from("isFunction"),
+      Primop::one("isFunction", |eval, val| {
+        Ok(arc(Value::Bool(matches!(
+          &*eval.value(val)?,
+          Value::Lambda {..} | Value::Primop {..}
+        ))))
+      }),
+    );
+    builtins.insert(
+      Ident::from("isString"),
+      Primop::one("isString", |eval, val| {
+        Ok(arc(Value::Bool(matches!(
+          &*eval.value(val)?,
+          Value::String(_)
+        ))))
+      }),
+    );
+    builtins.insert(
+      Ident::from("length"),
+      Primop::one("length", |e, i| {
+        Ok(arc(Value::Int(e.value_list_of(i)?.len() as _)))
+      }),
+    );
+    builtins.insert(
+      Ident::from("listToAttrs"),
+      Primop::one("listToAttrs", Self::list_to_attrs),
+    );
+    builtins.insert(
+      Ident::from("nixVersion"),
+      arc(Value::String(("2.3.7".into(), Default::default()))),
+    );
+    builtins.insert(Ident::from("map"), crate::op2!("map", Self::map_list));
+    builtins.insert(
+      Ident::from("removeAttrs"),
+      crate::op2!("removeAttrs", Self::remove_attrs),
+    );
+    builtins.insert(
+      Ident::from("replaceStrings"),
+      crate::op3!("replaceStrings", Self::replace_strings),
+    );
+    builtins.insert(
+      Ident::from("toString"),
+      Primop::one("toString", |eval, val| {
+        let mut ctx = BTreeSet::new();
+        Ok(arc(Value::String((
+          eval.coerce_to_string(
+            val,
+            &mut ctx,
+            CoerceOpts {
+              extended: true,
+              copy_to_store: false,
+            },
+          )?,
+          ctx,
+        ))))
+      }),
     );
     *eval.builtins.write() = Value::Attrs(builtins);
     eval
@@ -73,7 +181,15 @@ impl Eval {
 
   pub fn load_inline<S: Into<String>>(&self, src: S) -> Result<ValueRef> {
     let mut f = self.files.lock();
-    let id = f.add("<inline>", src.into());
+    let id = f.add(
+      format!(
+        "<inline-{}>",
+        self
+          .inline_counter
+          .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+      ),
+      src.into(),
+    );
     let e = crate::syntax::parse(id, &self.expr, f.source(id))?;
     Ok(self.defer(e, &Default::default()))
   }
@@ -87,6 +203,9 @@ impl Eval {
         fun: l.clone(),
         captures: Box::new(c.clone()),
       },
+      Expr::Path(expr::Path::Plain(p)) if Path::new(p).is_absolute() => {
+        Value::Path(PathBuf::from(p))
+      }
       _ => Value::Thunk(e, c.clone()),
     })
   }
@@ -112,7 +231,12 @@ impl Eval {
 
       let thunk = std::mem::replace(&mut *lock, Value::Blackhole);
       let new_vref = match thunk {
-        Value::Thunk(e, c) => self.eval(e, &c)?,
+        Value::Thunk(e, c) => {
+          self.frames.lock().push(e.span);
+          let e = self.eval(e, &c)?;
+          self.frames.lock().pop();
+          e
+        }
         Value::Apply(lhs, rhs) => self.apply_function(&lhs, &rhs)?,
         _ => unreachable!(),
       };
@@ -126,7 +250,7 @@ impl Eval {
 
   fn forced(&self, e: ExprRef, c: &Context) -> Result<ValueRef> {
     let v = self.defer(e, c);
-    self.force(&v)?;
+    while self.force(&v)? {}
     Ok(v)
   }
 
@@ -153,11 +277,33 @@ impl Eval {
             }
           }
         }
-        Ok(arc(Value::String(StringCtx {
-          s: buf,
-          context: path_context,
-        })))
+        Ok(arc(Value::String((buf, path_context))))
       }
+      Expr::Path(p) => match p {
+        expr::Path::Plain(p) => {
+          let pb = Path::new(p);
+          if pb.is_absolute() {
+            Ok(arc(Value::Path(pb.into())))
+          } else {
+            let files = self.files.lock();
+            let filename = files.name(id.span.file_id);
+            let dest = if filename.to_str().unwrap().starts_with("<inline-") {
+              std::env::current_dir()?.join(pb)
+            } else {
+              PathBuf::from(filename).parent().unwrap().join(pb)
+            };
+            let thing = path_abs::PathAbs::new(dest)?;
+            Ok(arc(Value::Path(thing.as_path().to_path_buf())))
+          }
+        }
+        expr::Path::Home(_) => todo!(),
+        expr::Path::Nix { path, .. } => {
+          let nixpath = self.synthetic_variable(id.span, Ident::from("__nixPath"), &context);
+          Ok(arc(Value::Path(
+            self.find_file(&nixpath, &path[1..path.len() - 1])?,
+          )))
+        }
+      },
       Expr::Var(x) => {
         for layer in &context.scopes {
           match &**layer {
@@ -183,7 +329,7 @@ impl Eval {
             return Ok(Arc::clone(r));
           }
         }
-        bail!("unbound variable: {:?}", x)
+        bail!("unbound variable `{}'", x)
       }
       Expr::AttrSet(attrs) => self.build_attrs(attrs.rec.is_some(), &attrs.attrs, context),
       Expr::Select(sel) => {
@@ -215,6 +361,47 @@ impl Eval {
         let with_scope = self.defer(*env, context);
         self.eval(*expr, &context.add_with(with_scope))
       }
+      Expr::Assert(expr::Assert { cond, expr, .. }) => {
+        let cond_ = self.defer(*cond, context);
+        if self.value_bool_of(&cond_)? {
+          self.eval(*expr, context)
+        } else {
+          bail!(AssertionFailure(format!(
+            "assertion failed at {:?}",
+            cond.span
+          )))
+        }
+      }
+      Expr::Let(expr::Let { binds, rhs, .. }) => {
+        let scope = self.build_attrs(true, &*binds, context)?;
+        self.eval(*rhs, &context.prepend(Scope::Dynamic(scope)))
+      }
+      Expr::If(expr::If {
+        cond, rhs1, rhs2, ..
+      }) => {
+        let cond = self.defer(*cond, context);
+        if self.value_bool_of(&cond)? {
+          self.eval(*rhs1, context)
+        } else {
+          self.eval(*rhs2, context)
+        }
+      }
+      Expr::Binary(b) => self.binary(b, context),
+      Expr::Unary(u) => self.unary(u, context),
+      Expr::Member(expr::Member { lhs, path, .. }) => {
+        let mut lhs = self.defer(*lhs, context);
+
+        for path_item in &path.0 {
+          let attr = self.attrname_nonnull(path_item, context)?;
+          if let Some(item) = self.sel(&lhs, &attr)? {
+            lhs = item;
+          } else {
+            return Ok(arc(Value::Bool(false)));
+          }
+        }
+
+        Ok(arc(Value::Bool(true)))
+      }
       Expr::Apply(expr::Apply { lhs, rhs }) => Ok(arc(Value::Apply(
         self.defer(*lhs, context),
         self.defer(*rhs, context),
@@ -223,7 +410,7 @@ impl Eval {
         fun: l.clone(),
         captures: Box::new(context.clone()),
       })),
-      e => bail!("unhandled expression: {:#?}", e),
+      e => bail!("unhandled expression: {:?}", e),
     }
   }
 
@@ -445,7 +632,7 @@ impl Eval {
       }
       AttrName::Dynamic { quote, .. } => match &*self.forced(*quote, context)?.read() {
         Value::Null => Ok(None),
-        Value::String(StringCtx { s: string, context }) => {
+        Value::String((string, context)) => {
           if context.is_empty() {
             Ok(Some(Ident::from(string.as_str())))
           } else {
@@ -475,23 +662,48 @@ impl Eval {
     })
   }
 
-  fn foldl_strict(&self, oper: &ValueRef, seed: &ValueRef, list: &ValueRef) -> Result<ValueRef> {
-    let items = self.value_list_of(list)?;
-    if items.is_empty() {
-      Ok(Arc::clone(seed))
-    } else {
-      let mut cur_item = Arc::clone(seed);
-      for (i, thunk) in items.iter().enumerate() {
-        let acc_fn = self.apply_function(oper, &cur_item)?;
-        let next_item = self.apply_function(&acc_fn, thunk)?;
-        if i + 1 == items.len() {
-          return Ok(next_item);
-        } else {
-          cur_item = Arc::clone(&next_item);
-        }
+  fn value_path_of(&self, value: &ValueRef) -> Result<PathBuf> {
+    match &*self.value(value)? {
+      Value::Path(p) => Ok(p.clone()),
+      Value::String((string, _)) => Ok(PathBuf::from(string)),
+      Value::Attrs(a) if a.contains_key(&Ident::from("outPath")) => {
+        self.value_path_of(&a[&Ident::from("outPath")])
       }
-      unreachable!()
+      v => bail!("wrong type: expected path, got {}", v.typename()),
     }
+  }
+
+  pub fn print_error(&self, e: Error) -> Result<()> {
+    let files = self.files.lock();
+    let trace = self.frames.lock();
+    let diagnostic = Diagnostic::error()
+      .with_message(format!("{:?}", e))
+      .with_labels(
+        trace
+          .iter()
+          .rev()
+          .enumerate()
+          .map(|(i, span)| {
+            Label::new(
+              if i == 0 {
+                LabelStyle::Primary
+              } else {
+                LabelStyle::Secondary
+              },
+              span.file_id,
+              span.span,
+            )
+            .with_message("while evaluating this expression")
+          })
+          .collect(),
+      );
+    emit(
+      &mut termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto),
+      &Default::default(),
+      &*files,
+      &diagnostic,
+    )?;
+    Ok(())
   }
 }
 
@@ -515,16 +727,39 @@ macro_rules! type_accessor {
   };
 }
 
+macro_rules! type_accessor_copy {
+  ($(#[$m:meta])? $shortname:ident, $longname:literal, $output:ty, $($lhs:pat => $rhs:expr),+) => {
+    impl Eval {
+      paste::paste! {
+        $(#[$m])?
+        pub fn [< value_ $shortname _of >]<'v>(
+          &self,
+          v: &'v ValueRef,
+        ) -> Result<$output> {
+          match &*self.value(v)? {
+            $($lhs => Ok($rhs),)+
+            v => bail!("unexpected type; expected {}, got {}", $longname, v.typename())
+          }
+        }
+      }
+    }
+  };
+}
+
 type_accessor!(attrs, "attrset", StaticScope, Value::Attrs(a) => a);
 type_accessor!(
   string,
   "string without context",
   String,
-  Value::String(StringCtx { s, context }) => if context.is_empty() {
+  Value::String((s, context)) => if context.is_empty() {
     s
   } else {
     return None
   }
 );
-type_accessor!(with_context, "string with context", StringCtx, Value::String(s) => s);
+type_accessor!(with_context, "string with context", (String, BTreeSet<String>), Value::String(s) => s);
 type_accessor!(list, "list", [ValueRef], Value::List(l) => l.as_slice());
+
+type_accessor_copy!(bool, "boolean", bool, Value::Bool(b) => *b);
+type_accessor_copy!(int, "integer", i64, Value::Int(i) => *i);
+type_accessor_copy!(float, "float", f64, Value::Float(i) => *i);
