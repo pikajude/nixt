@@ -200,9 +200,7 @@ fn plus_operator(eval: &Eval, lhs: ThunkId, rhs: ThunkId) -> Result<Value> {
   match eval.value_of(lhs)? {
     Value::Path(p) => {
       let pathstr = eval.value_string_of(rhs)?;
-      Ok(Value::Path(
-        p.join(pathstr.strip_prefix("/").unwrap_or(&pathstr)),
-      ))
+      Ok(Value::Path(concat_paths(p, pathstr)))
     }
     Value::Int(i) => match eval.value_of(rhs)? {
       Value::Int(i2) => Ok(Value::Int(i + i2)),

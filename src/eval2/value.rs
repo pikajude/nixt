@@ -63,6 +63,10 @@ impl Value {
       Value::Blackhole | Value::Thunk(_, _) | Value::Apply(_, _) => unreachable!(),
     }
   }
+
+  pub fn string<S: Into<String>>(s: S) -> ValueRef {
+    arc(Self::String((s.into(), Default::default())))
+  }
 }
 
 struct DebugRef<'v> {

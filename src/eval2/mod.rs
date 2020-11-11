@@ -79,6 +79,17 @@ impl Eval {
       crate::op2!("compareVersions", Self::compare_versions),
     );
     builtins.insert(
+      Ident::from("concatLists"),
+      Primop::one("concatLists", Self::concat_lists),
+    );
+    builtins.insert(Ident::from("currentSystem"), Value::string("x86_64-linux"));
+    builtins.insert(Ident::from("elem"), crate::op2!("elem", Self::elem));
+    builtins.insert(Ident::from("elemAt"), crate::op2!("elemAt", Self::elem_at));
+    builtins.insert(
+      Ident::from("filter"),
+      crate::op2!("filter", Self::map_filter),
+    );
+    builtins.insert(
       Ident::from("foldl'"),
       crate::op3!("foldl'", Self::foldl_strict),
     );
@@ -87,6 +98,7 @@ impl Eval {
       crate::op2!("genList", Self::gen_list),
     );
     builtins.insert(Ident::from("getEnv"), Primop::one("getEnv", Self::get_env));
+    builtins.insert(Ident::from("head"), Primop::one("head", Self::head));
     builtins.insert(Ident::from("import"), Primop::one("import", Self::import));
     builtins.insert(
       Ident::from("intersectAttrs"),
@@ -111,11 +123,20 @@ impl Eval {
       }),
     );
     builtins.insert(
+      Ident::from("isList"),
+      Primop::one("isList", |eval, val| {
+        Ok(arc(Value::Bool(matches!(
+          &*eval.value(val)?,
+          Value::List {..}
+        ))))
+      }),
+    );
+    builtins.insert(
       Ident::from("isString"),
       Primop::one("isString", |eval, val| {
         Ok(arc(Value::Bool(matches!(
           &*eval.value(val)?,
-          Value::String(_)
+          Value::String {..}
         ))))
       }),
     );
@@ -129,11 +150,12 @@ impl Eval {
       Ident::from("listToAttrs"),
       Primop::one("listToAttrs", Self::list_to_attrs),
     );
-    builtins.insert(
-      Ident::from("nixVersion"),
-      arc(Value::String(("2.3.7".into(), Default::default()))),
-    );
+    builtins.insert(Ident::from("nixVersion"), Value::string("2.3.7"));
     builtins.insert(Ident::from("map"), crate::op2!("map", Self::map_list));
+    builtins.insert(
+      Ident::from("pathExists"),
+      Primop::one("pathExists", Self::path_exists),
+    );
     builtins.insert(
       Ident::from("removeAttrs"),
       crate::op2!("removeAttrs", Self::remove_attrs),
@@ -142,6 +164,20 @@ impl Eval {
       Ident::from("replaceStrings"),
       crate::op3!("replaceStrings", Self::replace_strings),
     );
+    builtins.insert(Ident::from("split"), crate::op2!("split", Self::split));
+    builtins.insert(
+      Ident::from("stringLength"),
+      Primop::one("stringLength", |eval, val| {
+        Ok(arc(Value::Int(
+          eval.value_with_context_of(val)?.0.len() as _
+        )))
+      }),
+    );
+    builtins.insert(
+      Ident::from("substring"),
+      crate::op3!("substring", Self::substring),
+    );
+    builtins.insert(Ident::from("tail"), Primop::one("tail", Self::tail));
     builtins.insert(
       Ident::from("toString"),
       Primop::one("toString", |eval, val| {
@@ -158,6 +194,10 @@ impl Eval {
           ctx,
         ))))
       }),
+    );
+    builtins.insert(
+      Ident::from("unsafeDiscardStringContext"),
+      Primop::one("unsafeDiscardStringContext", Self::discard_string_context),
     );
     *eval.builtins.write() = Value::Attrs(builtins);
     eval
@@ -180,6 +220,7 @@ impl Eval {
   }
 
   pub fn load_inline<S: Into<String>>(&self, src: S) -> Result<ValueRef> {
+    trace!("load inline");
     let mut f = self.files.lock();
     let id = f.add(
       format!(
@@ -255,6 +296,11 @@ impl Eval {
   }
 
   fn eval(&self, id: ExprRef, context: &Context) -> Result<ValueRef> {
+    trace!("eval: {:?}", {
+      let fs = self.files.lock();
+      let fname = fs.name(id.span.file_id);
+      fname.to_os_string()
+    });
     match &self.expr[id.node] {
       Expr::Str(expr::Str { body, .. }) | Expr::IndStr(expr::IndStr { body, .. }) => {
         let mut buf = String::new();
@@ -332,6 +378,13 @@ impl Eval {
         bail!("unbound variable `{}'", x)
       }
       Expr::AttrSet(attrs) => self.build_attrs(attrs.rec.is_some(), &attrs.attrs, context),
+      Expr::List(expr::List { elems, .. }) => Ok(arc(Value::List(
+        elems
+          .iter()
+          .copied()
+          .map(|x| self.defer(x, context))
+          .collect(),
+      ))),
       Expr::Select(sel) => {
         let mut lhs = self.defer(sel.lhs, context);
         let mut failed = None;
@@ -573,7 +626,7 @@ impl Eval {
         self.defer(rhs, context)
       } else {
         let mut next_scope = match scope.get(&key1) {
-          Some(i) => unreachable!("{:?}", i), // self.value_attrs_of(*i)?.clone(),
+          Some(i) => self.value_attrs_of(i)?.clone(),
           None => StaticScope::new(),
         };
         self.push_binding(&mut next_scope, keyrest, rhs, context)?;
@@ -682,6 +735,7 @@ impl Eval {
         trace
           .iter()
           .rev()
+          .take(1)
           .enumerate()
           .map(|(i, span)| {
             Label::new(

@@ -3,7 +3,7 @@ pub use fs::*;
 pub use io::*;
 pub use pid::show_status;
 use std::{
-  path::Path,
+  path::{Path, PathBuf},
   str::pattern::{Pattern, Searcher},
 };
 
@@ -25,6 +25,12 @@ pub fn decode_context(string: &str) -> (&Path, &str) {
   } else {
     (Path::new(string.strip_prefix('/').unwrap_or(string)), "")
   }
+}
+
+pub fn concat_paths<P: AsRef<Path>, Q: AsRef<Path>>(path1: P, path2: Q) -> PathBuf {
+  let path1 = path1.as_ref();
+  let path2 = path2.as_ref();
+  path1.join(path2.strip_prefix("/").unwrap_or(path2))
 }
 
 pub trait OptionalExt<T> {

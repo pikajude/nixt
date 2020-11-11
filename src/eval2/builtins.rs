@@ -1,3 +1,5 @@
+use regex::Regex;
+
 use super::*;
 use std::cmp::Ordering;
 
@@ -11,7 +13,7 @@ impl Eval {
       self
         .value_attrs_of(attrs)?
         .keys()
-        .map(|k| arc(Value::String((k.to_string(), Default::default()))))
+        .map(|x| Value::string(x.to_string()))
         .collect(),
     )))
   }
@@ -23,6 +25,43 @@ impl Eval {
       Ordering::Greater => 1,
       Ordering::Equal => 0,
     })))
+  }
+
+  pub fn concat_lists(&self, list: &ValueRef) -> Result<ValueRef> {
+    let mut all = vec![];
+    for list in self.value_list_of(list)?.iter() {
+      for item in self.value_list_of(list)?.iter() {
+        all.push(Arc::clone(item));
+      }
+    }
+    Ok(arc(Value::List(all)))
+  }
+
+  pub fn discard_string_context(&self, v: &ValueRef) -> Result<ValueRef> {
+    let (s, c) = &*self.value_with_context_of(v)?;
+    if c.is_empty() {
+      Ok(Arc::clone(v))
+    } else {
+      Ok(Value::string(s))
+    }
+  }
+
+  pub fn elem(&self, thing: &ValueRef, list: &ValueRef) -> Result<ValueRef> {
+    for item in self.value_list_of(list)?.iter() {
+      if self.equals(thing, item)? {
+        return Ok(arc(Value::Bool(true)));
+      }
+    }
+    Ok(arc(Value::Bool(false)))
+  }
+
+  pub fn elem_at(&self, list: &ValueRef, index: &ValueRef) -> Result<ValueRef> {
+    let ix = self.value_int_of(index)?;
+    let list = &*self.value_list_of(list)?;
+    if ix < 0 || ix >= list.len() as i64 {
+      bail!("list index {} is out of bounds", ix);
+    }
+    Ok(Arc::clone(&list[ix as usize]))
   }
 
   pub fn find_file(&self, path: &ValueRef, filename: &str) -> Result<PathBuf> {
@@ -120,10 +159,16 @@ impl Eval {
 
   pub fn get_env(&self, var: &ValueRef) -> Result<ValueRef> {
     let v = self.value_string_of(var)?;
-    Ok(arc(Value::String((
-      std::env::var(&*v).unwrap_or_default(),
-      Default::default(),
-    ))))
+    Ok(Value::string(std::env::var(&*v).unwrap_or_default()))
+  }
+
+  pub fn head(&self, list: &ValueRef) -> Result<ValueRef> {
+    Ok(Arc::clone(
+      self
+        .value_list_of(list)?
+        .first()
+        .ok_or_else(|| anyhow!("builtins.head: empty list"))?,
+    ))
   }
 
   pub fn import(&self, path: &ValueRef) -> Result<ValueRef> {
@@ -164,6 +209,25 @@ impl Eval {
     Ok(arc(Value::Attrs(attrs)))
   }
 
+  pub fn map_filter(&self, pred: &ValueRef, list: &ValueRef) -> Result<ValueRef> {
+    let items = self.value_list_of(list)?;
+    let mut out = vec![];
+    for item in items.iter() {
+      match &*self.apply_function(pred, item)?.read() {
+        Value::Bool(b) => {
+          if *b {
+            out.push(Arc::clone(item));
+          }
+        }
+        v => bail!(
+          "unexpected type returned from `filter' predicate: expected bool, got {}",
+          v.typename()
+        ),
+      }
+    }
+    Ok(arc(Value::List(out)))
+  }
+
   pub fn map_list(&self, op: &ValueRef, value: &ValueRef) -> Result<ValueRef> {
     let items = self.value_list_of(value)?;
     Ok(arc(Value::List(
@@ -172,6 +236,14 @@ impl Eval {
         .map(|x| arc(Value::Apply(Arc::clone(op), Arc::clone(x))))
         .collect(),
     )))
+  }
+
+  pub fn path_exists(&self, path: &ValueRef) -> Result<ValueRef> {
+    Ok(arc(Value::Bool(match &*self.value(path)? {
+      Value::String((string, _)) => std::fs::metadata(string).is_ok(),
+      Value::Path(p) => p.exists(),
+      _ => false,
+    })))
   }
 
   pub fn remove_attrs(&self, attrs: &ValueRef, remove: &ValueRef) -> Result<ValueRef> {
@@ -232,6 +304,56 @@ impl Eval {
       rhs_context,
     ))))
   }
+
+  pub fn split(&self, pattern: &ValueRef, string: &ValueRef) -> Result<ValueRef> {
+    let pattern = self.value_string_of(pattern)?;
+    let pattern = make_regex(&*pattern)?;
+    let (haystack, _) = &*self.value_with_context_of(string)?;
+    let mut items = vec![];
+    for (i, match_) in pattern.split(haystack).enumerate() {
+      if i > 0 {
+        items.push(arc(Value::List(vec![])));
+      }
+      items.push(Value::string(match_));
+    }
+    Ok(arc(Value::List(items)))
+  }
+
+  pub fn substring(&self, start: &ValueRef, len: &ValueRef, string: &ValueRef) -> Result<ValueRef> {
+    let (ctx, s) = self.coerce_new_string(string, Default::default())?;
+    let start = self.value_int_of(start)?;
+    if start < 0 {
+      bail!("first argument to `substring' must be >= 0");
+    }
+    let start = start as usize;
+    let len = self.value_int_of(len)?;
+    let actual_end = std::cmp::min(start + (std::cmp::max(0, len) as usize), s.len());
+    Ok(arc(Value::String((s[start..actual_end].to_string(), ctx))))
+  }
+
+  pub fn tail(&self, list: &ValueRef) -> Result<ValueRef> {
+    let ls = &*self.value_list_of(list)?;
+    if ls.is_empty() {
+      bail!("builtins.tail: empty list")
+    } else {
+      Ok(arc(Value::List(ls[1..].to_vec())))
+    }
+  }
+}
+
+lazy_static! {
+  static ref REGEX_CACHE: Mutex<HashMap<String, Arc<Regex>>> = Default::default();
+}
+
+fn make_regex(s: &str) -> Result<Arc<Regex>> {
+  let mut m = REGEX_CACHE.lock();
+  match m.get(s) {
+    Some(x) => Ok(Arc::clone(x)),
+    None => {
+      m.insert(s.into(), Arc::new(Regex::new(s)?));
+      Ok(Arc::clone(&m[s]))
+    }
+  }
 }
 
 pub fn mk_nix_path() -> Value {
@@ -248,14 +370,8 @@ pub fn mk_nix_path() -> Value {
       None => ("", first),
     };
     let mut entry_attr = StaticScope::new();
-    entry_attr.insert(
-      "path".into(),
-      arc(Value::String((path.into(), Default::default()))),
-    );
-    entry_attr.insert(
-      "prefix".into(),
-      arc(Value::String((prefix.into(), Default::default()))),
-    );
+    entry_attr.insert("path".into(), Value::string(path));
+    entry_attr.insert("prefix".into(), Value::string(prefix));
     entries.push(arc(Value::Attrs(entry_attr)));
   }
   Value::List(entries)

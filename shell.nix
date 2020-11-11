@@ -3,7 +3,7 @@ mkShell {
   name = "rix";
   buildInputs = [
     rustup cargo-udeps libarchive pkg-config sqlite openssl
-    linuxPackages.perf evcxr rlwrap
+    linuxPackages.perf evcxr rlwrap cargo-flamegraph
   ];
   # RUST_LIB_BACKTRACE = true;
   PKG_CONFIG_ALLOW_CROSS = true;

@@ -26,6 +26,15 @@ impl Eval {
       }
       BinaryOp::Eq => Ok(arc(Value::Bool(self.equals(v!(bin.lhs), v!(bin.rhs))?))),
       BinaryOp::Neq => Ok(arc(Value::Bool(!self.equals(v!(bin.lhs), v!(bin.rhs))?))),
+
+      BinaryOp::Add => self.operator_add(v!(bin.lhs), v!(bin.rhs)),
+      BinaryOp::Sub => self.operator_sub(v!(bin.lhs), v!(bin.rhs)),
+
+      BinaryOp::Ge => Ok(arc(Value::Bool(self.less_than(v!(bin.rhs), v!(bin.lhs))?))),
+      BinaryOp::Geq => Ok(arc(Value::Bool(!self.less_than(v!(bin.lhs), v!(bin.rhs))?))),
+      BinaryOp::Le => Ok(arc(Value::Bool(self.less_than(v!(bin.lhs), v!(bin.rhs))?))),
+      BinaryOp::Leq => Ok(arc(Value::Bool(!self.less_than(v!(bin.rhs), v!(bin.lhs))?))),
+
       BinaryOp::Impl => {
         let lhs = self.value_bool_of(v!(bin.lhs))?;
         Ok(arc(Value::Bool(!lhs || self.value_bool_of(v!(bin.rhs))?)))
@@ -125,6 +134,74 @@ impl Eval {
       (Value::Lambda { .. } | Value::Primop(_), _)
       | (_, Value::Lambda { .. } | Value::Primop(_)) => false,
       (x, y) => bail!("cannot compare {} with {}", x.typename(), y.typename()),
+    })
+  }
+
+  fn operator_add(&self, lhs: &ValueRef, rhs: &ValueRef) -> Result<ValueRef> {
+    match (&*self.value(lhs)?, &*self.value(rhs)?) {
+      (Value::Path(p), Value::Path(p2)) => Ok(arc(Value::Path(concat_paths(p, p2)))),
+      (Value::Path(p), Value::String((string, ctx))) => {
+        if ctx.is_empty() {
+          Ok(arc(Value::Path(concat_paths(p, string))))
+        } else {
+          bail!("a string that refers to store paths cannot be appended to a path")
+        }
+      }
+
+      (Value::Int(i), Value::Int(i2)) => Ok(arc(Value::Int(i + i2))),
+      (Value::Int(i), Value::Float(f)) => Ok(arc(Value::Float(*i as f64 + f))),
+      (Value::Int(_), v) => bail!("cannot add a value of type {} to an integer", v.typename()),
+
+      (Value::Float(f), Value::Int(i2)) => Ok(arc(Value::Float(f + (*i2 as f64)))),
+      (Value::Float(f), Value::Float(f2)) => Ok(arc(Value::Float(f + f2))),
+      (Value::Float(_), v) => bail!("cannot add a value of type {} to a float", v.typename()),
+
+      (v, _) => {
+        let lhs_is_string = matches!(v, Value::String {..});
+        let mut ctx = Default::default();
+        let mut buf = String::new();
+        buf.push_str(&self.coerce_to_string(
+          lhs,
+          &mut ctx,
+          CoerceOpts {
+            extended: false,
+            copy_to_store: lhs_is_string,
+          },
+        )?);
+        buf.push_str(&self.coerce_to_string(
+          rhs,
+          &mut ctx,
+          CoerceOpts {
+            extended: false,
+            copy_to_store: lhs_is_string,
+          },
+        )?);
+        Ok(arc(Value::String((buf, ctx))))
+      }
+    }
+  }
+
+  fn operator_sub(&self, lhs: &ValueRef, rhs: &ValueRef) -> Result<ValueRef> {
+    Ok(arc(match (&*self.value(lhs)?, &*self.value(rhs)?) {
+      (Value::Float(f1), Value::Float(f2)) => Value::Float(f1 - f2),
+      (Value::Float(f1), Value::Int(f2)) => Value::Float(*f1 - *f2 as f64),
+      (Value::Int(f1), Value::Float(f2)) => Value::Float(*f1 as f64 - *f2),
+      (Value::Int(f1), Value::Int(f2)) => Value::Int(f1 - f2),
+      (Value::Float(_), v) => bail!("expected a float, got {}", v.typename()),
+      (Value::Int(_), v) => bail!("expected an integer, got {}", v.typename()),
+      (v, _) => bail!("expected an integer, got {}", v.typename()),
+    }))
+  }
+
+  fn less_than(&self, lhs: &ValueRef, rhs: &ValueRef) -> Result<bool> {
+    Ok(match (&*self.value(lhs)?, &*self.value(rhs)?) {
+      (Value::Float(f1), Value::Int(i1)) => *f1 < (*i1 as f64),
+      (Value::Int(i1), Value::Float(f1)) => (*i1 as f64) < *f1,
+      (Value::Int(i1), Value::Int(i2)) => i1 < i2,
+      (Value::Float(f1), Value::Float(f2)) => f1 < f2,
+      (Value::String((s1, _)), Value::String((s2, _))) => s1 < s2,
+      (Value::Path(p1), Value::Path(p2)) => p1 < p2,
+      (v1, v2) => bail!("cannot compare {} with {}", v1.typename(), v2.typename()),
     })
   }
 }

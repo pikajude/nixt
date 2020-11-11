@@ -1,9 +1,9 @@
 use super::*;
 
 macro_rules! assert_eval {
-  ($l:literal, $p:pat) => {{
+  ($l:literal, $p:pat $(if $guard:expr)?) => {{
     let eval = Eval::new();
-    assert_matches::assert_matches!(&*eval.value(&eval.load_inline($l)?)?, $p)
+    assert_matches::assert_matches!(&*eval.value(&eval.load_inline($l)?)?, $p $(if $guard)?)
   }};
 }
 
@@ -37,6 +37,12 @@ fn test_replace() -> Result<()> {
 }
 
 #[test]
+fn test_path_append() -> Result<()> {
+  assert_eval!("/nix + /nix", Value::Path(p) if p == Path::new("/nix/nix"));
+  Ok(())
+}
+
+#[test]
 fn test_unindent() -> Result<()> {
   let e = Eval::new();
   let expr = e.load_inline(
@@ -54,6 +60,8 @@ fn test_unindent() -> Result<()> {
 
 #[test]
 fn nixpkgs_evaluates() -> Result<()> {
+  crate::logger::init()?;
+
   let e = Eval::new();
   let expr = e.load_inline("with import <nixpkgs> {}; stdenv.outPath")?;
   match e.value_with_context_of(&expr) {

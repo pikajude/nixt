@@ -149,8 +149,7 @@ pub(super) fn exec_builder<S: Store>(
       "127.0.0.1 localhost\n::1 localhost\n",
     )?;
   }
-  let chroot_store =
-    chroot_root_dir.join(Path::new(&*store.store_path()).strip_prefix("/").unwrap());
+  let chroot_store = concat_paths(&chroot_root_dir, store.store_path());
   fs::create_dir_all(&chroot_store)?;
 
   for p in &input_paths {
@@ -167,10 +166,7 @@ pub(super) fn exec_builder<S: Store>(
         (Cow::Owned(real_path), false),
       );
     } else {
-      fs::hard_link(
-        &real_path,
-        chroot_root_dir.join(real_path.strip_prefix("/").unwrap()),
-      )?;
+      fs::hard_link(&real_path, concat_paths(&chroot_root_dir, &real_path))?;
     }
   }
 
@@ -313,7 +309,7 @@ pub(super) fn exec_builder<S: Store>(
     referenceable_paths.insert(out.path.clone());
 
     let real_path = store.print_store_path(&out.path);
-    let chroot_path = chroot_root_dir.join(Path::new(&real_path).strip_prefix("/").unwrap());
+    let chroot_path = concat_paths(&chroot_root_dir, &real_path);
     if chroot_path.exists() {
       rm_rf(&real_path)?;
       fs::rename(chroot_path, real_path)?;
@@ -457,8 +453,7 @@ fn try_run_child<S: Store>(
     )
     .with_context(|| "unable to bind mount the chroot directory")?;
 
-    let chroot_store_dir =
-      chroot_root_dir.join(Path::new(&*store.store_path()).strip_prefix("/").unwrap());
+    let chroot_store_dir = concat_paths(&chroot_root_dir, store.store_path());
 
     mount(
       Some(&chroot_store_dir),
@@ -553,9 +548,7 @@ fn try_run_child<S: Store>(
       }
       do_bind(
         from,
-        chroot_root_dir
-          .join(to.strip_prefix("/").unwrap_or(to))
-          .as_path(),
+        concat_paths(&chroot_root_dir, &to).as_path(),
         *optional,
       )?;
     }
