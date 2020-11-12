@@ -2,15 +2,10 @@ use super::context::{Context, StaticScope};
 use crate::syntax::expr::{self, ExprRef};
 use derivative::Derivative;
 use parking_lot::RwLock;
-use std::{
-  cell::RefCell,
-  collections::{BTreeSet, HashSet},
-  fmt::Debug,
-  path::PathBuf,
-  sync::Arc,
-};
+use std::{cell::RefCell, collections::HashSet, fmt::Debug, path::PathBuf, sync::Arc};
 
 pub type ValueRef = Arc<RwLock<Value>>;
+pub type PathSet = HashSet<String>;
 
 pub(super) fn arc<T>(x: T) -> Arc<RwLock<T>> {
   Arc::new(RwLock::new(x))
@@ -26,7 +21,7 @@ pub enum Value {
   Attrs(StaticScope),
   Path(PathBuf),
   // don't change this, it makes it easier to return a mapped RwLockReadGuard
-  String((String, BTreeSet<String>)),
+  String((String, PathSet)),
   Lambda {
     fun: expr::Lambda,
     captures: Box<Context>,

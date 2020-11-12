@@ -8,6 +8,8 @@ use std::{
 };
 
 pub mod base32;
+mod cons_list;
+pub use cons_list::*;
 mod fs;
 mod io;
 pub mod pid;

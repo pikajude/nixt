@@ -3,7 +3,7 @@ use self::{
   context::{Context, Scope, StaticScope},
   primop::{Primop, PrimopFn},
   string::CoerceOpts,
-  value::{arc, Value, ValueRef},
+  value::{arc, PathSet, Value, ValueRef},
 };
 use crate::{
   prelude::*,
@@ -17,7 +17,7 @@ use codespan_reporting::{
 use itertools::{Either, Itertools};
 use parking_lot::{MappedRwLockReadGuard, Mutex, RwLockReadGuard, RwLockUpgradableReadGuard};
 use std::{
-  collections::{BTreeSet, HashMap},
+  collections::{HashMap, HashSet},
   sync::{atomic::AtomicU8, Arc},
 };
 
@@ -181,7 +181,7 @@ impl Eval {
     builtins.insert(
       Ident::from("toString"),
       Primop::one("toString", |eval, val| {
-        let mut ctx = BTreeSet::new();
+        let mut ctx = PathSet::new();
         Ok(arc(Value::String((
           eval.coerce_to_string(
             val,
@@ -304,7 +304,7 @@ impl Eval {
     match &self.expr[id.node] {
       Expr::Str(expr::Str { body, .. }) | Expr::IndStr(expr::IndStr { body, .. }) => {
         let mut buf = String::new();
-        let mut path_context = BTreeSet::new();
+        let mut path_context = PathSet::new();
         for item in body {
           match item {
             StrPart::Plain(s) => {
@@ -352,7 +352,7 @@ impl Eval {
       },
       Expr::Var(x) => {
         for layer in &context.scopes {
-          match &**layer {
+          match layer {
             Scope::Static(s) => {
               if let Some(r) = s.get(x) {
                 return Ok(Arc::clone(r));
@@ -811,7 +811,7 @@ type_accessor!(
     return None
   }
 );
-type_accessor!(with_context, "string with context", (String, BTreeSet<String>), Value::String(s) => s);
+type_accessor!(with_context, "string with context", (String, HashSet<String>), Value::String(s) => s);
 type_accessor!(list, "list", [ValueRef], Value::List(l) => l.as_slice());
 
 type_accessor_copy!(bool, "boolean", bool, Value::Bool(b) => *b);

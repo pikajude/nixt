@@ -1,13 +1,13 @@
 use super::value::ValueRef;
 use crate::prelude::*;
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::HashMap;
 
-pub type StaticScope = BTreeMap<Ident, ValueRef>;
+pub type StaticScope = HashMap<Ident, ValueRef>;
 
 #[derive(Clone, Debug, Default)]
 pub struct Context {
-  pub scopes: Vec<Arc<Scope>>,
-  pub with: Vec<ValueRef>,
+  pub scopes: ConsList<Scope>,
+  pub with: ConsList<ValueRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -19,26 +19,22 @@ pub enum Scope {
 impl Context {
   pub fn single(s: Scope) -> Self {
     Self {
-      scopes: vec![Arc::new(s)],
-      with: vec![],
+      scopes: std::iter::once(s).collect(),
+      with: Default::default(),
     }
   }
 
   pub fn prepend(&self, s: Scope) -> Self {
-    let mut scope = self.scopes.clone();
-    scope.insert(0, Arc::new(s));
     Self {
-      scopes: scope,
+      scopes: self.scopes.cons(s),
       with: self.with.clone(),
     }
   }
 
   pub fn add_with(&self, s: ValueRef) -> Self {
-    let mut w = self.with.clone();
-    w.insert(0, s);
     Self {
       scopes: self.scopes.clone(),
-      with: w,
+      with: self.with.cons(s),
     }
   }
 }

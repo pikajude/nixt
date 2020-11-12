@@ -9,12 +9,12 @@ pub struct AssertionFailure(pub String);
 
 impl Eval {
   pub fn attrnames_prim(&self, attrs: &ValueRef) -> Result<ValueRef> {
+    let attrs = self.value_attrs_of(attrs)?;
+    let mut ks = attrs.keys().collect_vec();
+    ks.sort_unstable();
+
     Ok(arc(Value::List(
-      self
-        .value_attrs_of(attrs)?
-        .keys()
-        .map(|x| Value::string(x.to_string()))
-        .collect(),
+      ks.into_iter().map(|x| Value::string(x.as_ref())).collect(),
     )))
   }
 
@@ -84,7 +84,7 @@ impl Eval {
       let kv = self.value_attrs_of(entry)?;
       let path = self.value_string_of(kv.get(&Ident::from("path")).unwrap())?;
 
-      let (_context, prefix) = self.coerce_new_string(
+      let (prefix, _context) = self.coerce_new_string(
         kv.get(&Ident::from("prefix")).unwrap(),
         CoerceOpts {
           extended: false,
@@ -184,9 +184,7 @@ impl Eval {
   pub fn intersect_attrs(&self, lhs: &ValueRef, rhs: &ValueRef) -> Result<ValueRef> {
     let attrs = self.value_attrs_of(lhs)?;
     let mut attrs2 = self.value_attrs_of(rhs)?.clone();
-    attrs2
-      .drain_filter(|key, _| !attrs.contains_key(key))
-      .last();
+    attrs2.retain(|key, _| attrs.contains_key(key));
     Ok(arc(Value::Attrs(attrs2)))
   }
 
@@ -320,7 +318,7 @@ impl Eval {
   }
 
   pub fn substring(&self, start: &ValueRef, len: &ValueRef, string: &ValueRef) -> Result<ValueRef> {
-    let (ctx, s) = self.coerce_new_string(string, Default::default())?;
+    let (s, ctx) = self.coerce_new_string(string, Default::default())?;
     let start = self.value_int_of(start)?;
     if start < 0 {
       bail!("first argument to `substring' must be >= 0");

@@ -1,4 +1,4 @@
-use super::*;
+use super::{value::PathSet, *};
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub struct CoerceOpts {
@@ -35,7 +35,7 @@ impl Eval {
   pub fn coerce_to_string(
     &self,
     v: &ValueRef,
-    context: &mut BTreeSet<String>,
+    context: &mut PathSet,
     opts: CoerceOpts,
   ) -> Result<String> {
     Ok(match &*self.value(v)? {
@@ -80,13 +80,9 @@ impl Eval {
     })
   }
 
-  pub fn coerce_new_string(
-    &self,
-    obj: &ValueRef,
-    opts: CoerceOpts,
-  ) -> Result<(BTreeSet<String>, String)> {
-    let mut p = BTreeSet::new();
+  pub fn coerce_new_string(&self, obj: &ValueRef, opts: CoerceOpts) -> Result<(String, PathSet)> {
+    let mut p = PathSet::new();
     let s = self.coerce_to_string(obj, &mut p, opts)?;
-    Ok((p, s))
+    Ok((s, p))
   }
 }
