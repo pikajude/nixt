@@ -79,30 +79,30 @@ pub Expr = expr;
 expr = expr_function;
 
 expr_function: Expr = {
-  S<(<ID> ":" <expr_function>)> => Expr::Lambda {
+  S<(<ID> ":" <expr_function>)> => Expr::Lambda(Lambda {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Plain(<>.v.0),
     body: writable(<>.v.1)
-  },
-  S<(<formals> ":" <expr_function>)> => Expr::Lambda {
+  }),
+  S<(<formals> ":" <expr_function>)> => Expr::Lambda(Lambda {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Formals { name: None, formals: <>.v.0 },
     body: writable(<>.v.1)
-  },
-  S<(<formals> "@" <ID> ":" <expr_function>)> => Expr::Lambda {
+  }),
+  S<(<formals> "@" <ID> ":" <expr_function>)> => Expr::Lambda(Lambda {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Formals { name: Some(<>.v.1), formals: <>.v.0 },
     body: writable(<>.v.2)
-  },
-  S<(<ID> "@" <formals> ":" <expr_function>)> => Expr::Lambda {
+  }),
+  S<(<ID> "@" <formals> ":" <expr_function>)> => Expr::Lambda(Lambda {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Formals { name: Some(<>.v.0), formals: <>.v.1 },
     body: writable(<>.v.2)
-  },
+  }),
   S<("assert" <expr> ";" <expr_function>)> => Expr::Assert {
     pos: <>.pos,
     cond: writable(<>.v.0),

@@ -31,12 +31,7 @@ pub enum Expr {
     def: Option<ExprRef>,
     path: AttrPath,
   },
-  Lambda {
-    pos: Pos,
-    name: Ident,
-    arg: LambdaArg,
-    body: ExprRef,
-  },
+  Lambda(Lambda),
   List(Vec<Expr>),
   Attrs(Attrs),
   Assert {
@@ -197,6 +192,14 @@ pub enum ParseBinding {
   InheritFrom(Expr, AttrList),
 }
 
+#[derive(Debug)]
+pub struct Lambda {
+  pos: Pos,
+  name: Ident,
+  arg: LambdaArg,
+  body: ExprRef,
+}
+
 #[derive(Debug, Default)]
 pub struct Attrs {
   pub recursive: bool,
@@ -333,7 +336,7 @@ impl Display for Expr {
         }
         Ok(())
       }
-      Expr::Lambda { body, arg, .. } => {
+      Expr::Lambda(Lambda { body, arg, .. }) => {
         write!(f, "(")?;
         match arg {
           LambdaArg::Plain(i) => write!(f, "{}", i)?,
@@ -445,4 +448,13 @@ impl Display for Formals {
       write!(f, " }}")
     }
   }
+}
+
+pub type StaticEnvRef = Writable<StaticEnv>;
+
+#[derive(Default)]
+pub struct StaticEnv {
+  pub is_with: bool,
+  pub up: Option<StaticEnvRef>,
+  pub vars: HashMap<Ident, usize>,
 }

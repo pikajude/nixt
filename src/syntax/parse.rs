@@ -19,6 +19,13 @@ pub struct Located<T> {
 
 pub type Pos = (codespan::FileId, codespan::Span);
 
+pub fn not_located<T>(value: T) -> Located<T> {
+  Located {
+    pos: (unsafe { std::mem::transmute(1) }, codespan::Span::initial()),
+    v: value,
+  }
+}
+
 impl<T: fmt::Debug> fmt::Debug for Located<T> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     self.v.fmt(f)
