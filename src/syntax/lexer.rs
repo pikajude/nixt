@@ -201,7 +201,7 @@ impl<'a> Iterator for Lexer<'a> {
           Ok(i) => i,
           Err(i) =>
             return Err(Located {
-              pos: (self.id, Span::new(start as u32, self.at as u32)),
+              pos: Pos(self.id, Span::new(start as u32, self.at as u32)),
               v: UserError::Lexer(LexError::InvalidInt(i))
             }),
         })));
@@ -209,7 +209,7 @@ impl<'a> Iterator for Lexer<'a> {
           Ok(i) => i,
           Err(i) =>
             return Err(Located {
-              pos: (self.id, Span::new(start as u32, self.at as u32)),
+              pos: Pos(self.id, Span::new(start as u32, self.at as u32)),
               v: UserError::Lexer(LexError::InvalidFloat(i))
             }),
         })));
@@ -278,7 +278,7 @@ impl<'a> Iterator for Lexer<'a> {
     }
 
     Some(Err(Located {
-      pos: (self.id, Span::new(start as u32, self.at as u32)),
+      pos: Pos(self.id, Span::new(start as u32, self.at as u32)),
       v: UserError::Lexer(LexError::UnrecognizedInput),
     }))
   }

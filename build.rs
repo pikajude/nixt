@@ -5,10 +5,7 @@ use std::{
   process::{Command, Stdio},
 };
 
-fn main() {
-  println!("cargo:rerun-if-changed=src/syntax/parse.lalrpop");
-  lalrpop::process_root().unwrap();
-
+fn link_static_bash() {
   let out_dir = env::var("OUT_DIR").unwrap();
   let bash_path = Path::new(&out_dir).join("bash-static");
   println!("cargo:rerun-if-changed={}", bash_path.display());
@@ -31,4 +28,47 @@ fn main() {
   } else {
     panic!("nix-build failed to produce a correct version of bash")
   }
+}
+
+fn main() {
+  println!("cargo:rerun-if-changed=src/syntax/parse.lalrpop");
+  lalrpop::process_root().unwrap();
+
+  string_cache_codegen::AtomType::new("atoms::Ident", "ident!")
+    .atoms(&[
+      "<with>",
+      "outPath",
+      "drvPath",
+      "type",
+      "meta",
+      "name",
+      "value",
+      "system",
+      "__overrides",
+      "outputs",
+      "outputName",
+      "__ignoreNulls",
+      "file",
+      "line",
+      "column",
+      "__functor",
+      "__toString",
+      "right",
+      "wrong",
+      "__structuredAttrs",
+      "builder",
+      "args",
+      "__contentAddressed",
+      "outputHash",
+      "outputHashAlgo",
+      "outputHashMode",
+      "recurseForDerivations",
+      "description",
+      "self",
+      "",
+    ])
+    .write_to_file(&Path::new(&std::env::var("OUT_DIR").unwrap()).join("ident.rs"))
+    .unwrap();
+
+  link_static_bash();
 }

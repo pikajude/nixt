@@ -7,6 +7,7 @@ use crate::syntax::UserError;
 use codespan::{Span, FileId};
 use path_abs::PathAbs;
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 
 grammar<'input>(
   base_path: &Path,
@@ -83,41 +84,42 @@ expr_function: Expr = {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Plain(<>.v.0),
-    body: writable(<>.v.1)
+    body: readable(<>.v.1)
   }),
   S<(<formals> ":" <expr_function>)> => Expr::Lambda(Lambda {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Formals { name: None, formals: <>.v.0 },
-    body: writable(<>.v.1)
+    body: readable(<>.v.1)
   }),
   S<(<formals> "@" <ID> ":" <expr_function>)> => Expr::Lambda(Lambda {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Formals { name: Some(<>.v.1), formals: <>.v.0 },
-    body: writable(<>.v.2)
+    body: readable(<>.v.2)
   }),
   S<(<ID> "@" <formals> ":" <expr_function>)> => Expr::Lambda(Lambda {
     pos: <>.pos,
     name: Ident::from("<none>"),
     arg: LambdaArg::Formals { name: Some(<>.v.0), formals: <>.v.1 },
-    body: writable(<>.v.2)
+    body: readable(<>.v.2)
   }),
   S<("assert" <expr> ";" <expr_function>)> => Expr::Assert {
     pos: <>.pos,
-    cond: writable(<>.v.0),
-    body: writable(<>.v.1)
+    cond: readable(<>.v.0),
+    body: readable(<>.v.1)
   },
   S<("with" <expr> ";" <expr_function>)> => Expr::With {
     pos: <>.pos,
-    env: writable(<>.v.0),
-    body: writable(<>.v.1)
+    env: readable(<>.v.0),
+    body: readable(<>.v.1),
+    prev_with: AtomicUsize::new(0),
   },
   S<("let" <S<binding>*> "in" <expr_function>)> =>? {
     let attrs = Attrs::collect(<>.pos, <>.v.0, false)?;
     Ok(Expr::Let {
       attrs,
-      body: writable(<>.v.1)
+      body: readable(<>.v.1)
     })
   },
   expr_if
@@ -126,9 +128,9 @@ expr_function: Expr = {
 expr_if: Expr = {
   S<("if" <expr> "then" <expr> "else" <expr>)> => Expr::If {
     pos: <>.pos,
-    cond: writable(<>.v.0),
-    rhs1: writable(<>.v.1),
-    rhs2: writable(<>.v.2),
+    cond: readable(<>.v.0),
+    rhs1: readable(<>.v.1),
+    rhs2: readable(<>.v.2),
   },
   expr_op
 }
@@ -158,10 +160,10 @@ expr_op_11: Expr = {
 }
 
 expr_op_10: Expr = {
-  S<(<expr_op_10> "<" <expr_op_9>)> => Expr::bin(Le, <>),
-  S<(<expr_op_10> "<=" <expr_op_9>)> => Expr::bin(Leq, <>),
-  S<(<expr_op_10> ">" <expr_op_9>)> => Expr::bin(Ge, <>),
-  S<(<expr_op_10> ">=" <expr_op_9>)> => Expr::bin(Geq, <>),
+  S<(<expr_op_10> "<" <expr_op_9>)> => Expr::lt(<>, false),
+  S<(<expr_op_10> "<=" <expr_op_9>)> => Expr::lt(swap(<>), true),
+  S<(<expr_op_10> ">" <expr_op_9>)> => Expr::lt(swap(<>), false),
+  S<(<expr_op_10> ">=" <expr_op_9>)> => Expr::lt(<>, true),
   expr_op_9
 }
 
@@ -171,7 +173,7 @@ expr_op_9: Expr = {
 }
 
 expr_op_8: Expr = {
-  "!" <expr_op_8> => Expr::Not(writable(<>)),
+  "!" <expr_op_8> => Expr::Not(readable(<>)),
   expr_op_7
 }
 
@@ -193,42 +195,53 @@ expr_op_5: Expr = {
 }
 
 expr_op_4: Expr = {
-  <lhs:expr_op_4> "?" <path:attrpath> => Expr::HasAttr { lhs: writable(lhs), path },
+  <lhs:expr_op_4> "?" <path:attrpath> => Expr::HasAttr { lhs: readable(lhs), path },
   expr_op_3
 }
 
 expr_op_3: Expr = {
-  "-" <expr_op_3> => Expr::Negate(writable(<>)),
+  S<("-" <expr_op_3>)> => {
+    Expr::apply(Located {
+      pos: <>.pos,
+      v: (
+        Expr::apply(Located {
+          pos: <>.pos,
+          v: (
+            Expr::Var(Var::new(<>.pos, "__sub".into())),
+            Expr::Int { n: 0 },
+          )
+        }),
+        <>.v
+      )
+    })
+  },
   expr_app
 }
 
 // ====================== all done =============================================
 
 expr_app: Expr = {
-  S<(expr_app expr_select)> => Expr::bin(Apply, <>),
+  S<(expr_app expr_select)> => Expr::apply(<>),
   expr_select
 }
 
 expr_select: Expr = {
   S<(<expr_simple> "." <attrpath>)> => Expr::Select {
     pos: <>.pos,
-    lhs: writable(<>.v.0),
+    lhs: readable(<>.v.0),
     path: <>.v.1,
     def: None,
   },
   S<(<expr_simple> "." <attrpath> "or" <expr_select>)> => Expr::Select {
     pos: <>.pos,
-    lhs: writable(<>.v.0),
+    lhs: readable(<>.v.0),
     path: <>.v.1,
-    def: Some(writable(<>.v.2)),
+    def: Some(readable(<>.v.2)),
   },
-  S<(expr_simple S<"or">)> => Expr::bin(
-    Apply,
-    Located {
-      pos: <>.pos,
-      v: (<>.v.0, Expr::Var(Var::new(<>.v.1.pos, Ident::from("or"))))
-    },
-  ),
+  S<(expr_simple S<"or">)> => Expr::apply(Located {
+    pos: <>.pos,
+    v: (<>.v.0, Expr::Var(Var::new(<>.v.1.pos, Ident::from("or"))))
+  }),
   expr_simple
 }
 
@@ -245,38 +258,30 @@ expr_simple: Expr = {
   quote <string_parts> quote,
   ind_open <ind_string_parts> ind_close,
 
-  S<Path> =>? Ok(Expr::Path {
-    path: PathAbs::new(base_path.join(<>.v))
+  S<Path> =>? Ok(Expr::path(
+    PathAbs::new(base_path.join(<>.v))
       .map_err(|p| Located { pos: <>.pos, v: UserError::PathResolution(p) })?
       .as_path()
       .to_path_buf()
-  }),
-  HPath => Expr::Path {
-    path: homedir().join(<>.strip_prefix("~/").unwrap())
-  },
+  )),
+  HPath => Expr::path(homedir().join(<>.strip_prefix("~/").unwrap())),
   S<NPath> => {
     let real_path = <>.v.strip_prefix("<").unwrap().strip_suffix(">").unwrap();
-    Expr::bin(
-      Apply,
-      Located {
-        pos: <>.pos,
-        v: (
-          Expr::bin(
-            Apply,
-            Located {
-              pos: <>.pos,
-              v: (
-                Expr::Var(Var::new(<>.pos, "__findFile".into())),
-                Expr::Var(Var::new(<>.pos, "__nixPath".into()))
-              )
-            }
-          ),
-          Expr::String { s: real_path.to_string() }
-        )
-      }
-    )
+    Expr::apply(Located {
+      pos: <>.pos,
+      v: (
+        Expr::apply(Located {
+          pos: <>.pos,
+          v: (
+            Expr::Var(Var::new(<>.pos, "__findFile".into())),
+            Expr::Var(Var::new(<>.pos, "__nixPath".into()))
+          )
+        }),
+        Expr::string(real_path)
+      )
+    })
   },
-  Uri => Expr::String { s: <>.to_string() },
+  Uri => Expr::string(<>),
 
   "(" <expr> ")",
 
@@ -285,7 +290,7 @@ expr_simple: Expr = {
     attrs.recursive = true;
     Ok(Expr::Select {
       pos: <>.pos,
-      lhs: writable(Expr::Attrs(attrs)),
+      lhs: readable(Expr::Attrs(attrs)),
       def: None,
       path: vec![AttrName::Static(Ident::from("body"))]
     })
@@ -302,27 +307,27 @@ expr_simple: Expr = {
 
 ind_string_parts: Expr = {
   S<ind_string_part*> => if <>.v.is_empty() {
-    Expr::String { s: String::new() }
+    Expr::string("")
   } else {
     Expr::ConcatStrings { pos: <>.pos, force_string: true, parts: <>.v }
   }
 }
 
 ind_string_part: Expr = {
-  <s:IndStr> => Expr::String { s },
+  <s:IndStr> => Expr::string(s),
   "${" <expr> "}",
 }
 
 string_parts: Expr = {
   S<string_part*> => if <>.v.is_empty() {
-    Expr::String { s: String::new() }
+    Expr::string("")
   } else {
     Expr::ConcatStrings { pos: <>.pos, force_string: true, parts: <>.v }
   }
 }
 
 string_part: Expr = {
-  <s:Str> => Expr::String { s },
+  <s:Str> => Expr::string(s),
   "${" <expr> "}",
 }
 
@@ -337,8 +342,8 @@ attrpath: AttrPath = {
 attr: AttrName = {
   ID => AttrName::Static(<>),
   "or" => AttrName::Static(Ident::from("or")),
-  quote <string_parts> quote => AttrName::Dynamic(writable(<>)),
-  "${" <expr> "}" => AttrName::Dynamic(writable(<>))
+  quote <string_parts> quote => AttrName::Dynamic(readable(<>)),
+  "${" <expr> "}" => AttrName::Dynamic(readable(<>))
 }
 
 formals: Formals = {
@@ -354,7 +359,7 @@ formals: Formals = {
 
 formal: Formal = {
   S<ID> => Formal { pos: <>.pos, name: <>.v, def: None },
-  S<(<ID> "?" <expr>)> => Formal { pos: <>.pos, name: <>.v.0, def: Some(writable(<>.v.1)) }
+  S<(<ID> "?" <expr>)> => Formal { pos: <>.pos, name: <>.v.0, def: Some(readable(<>.v.1)) }
 }
 
 binding: ParseBinding = {
@@ -366,7 +371,7 @@ binding: ParseBinding = {
 #[inline]
 S<T>: Located<T> = {
   <start:@L> <item:T> <end:@R> => Located {
-    pos: (file_id, Span::new(start as u32, end as u32)),
+    pos: Pos(file_id, Span::new(start as u32, end as u32)),
     v: item,
   }
 }

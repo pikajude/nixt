@@ -3,16 +3,27 @@ use super::{
   UserError,
 };
 use crate::prelude::*;
-use std::{collections::HashMap, fmt, fmt::Display, path::PathBuf};
+use std::{
+  collections::HashMap,
+  fmt,
+  fmt::Display,
+  path::PathBuf,
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+  },
+};
 
-pub type ExprRef = Writable<Expr>;
+pub type ExprRef = Readable<Expr>;
+
+type ParseOk = Result<(), Located<UserError>>;
 
 #[derive(Debug, EnumAsInner)]
 pub enum Expr {
   Pos {
     pos: Pos,
   },
-  Var(Var),
+  Var(Writable<Var>),
   Int {
     n: i64,
   },
@@ -43,6 +54,7 @@ pub enum Expr {
     pos: Pos,
     env: ExprRef,
     body: ExprRef,
+    prev_with: AtomicUsize,
   },
   Let {
     attrs: Attrs,
@@ -65,22 +77,177 @@ pub enum Expr {
     lhs: ExprRef,
     rhs: ExprRef,
   },
+  Apply {
+    pos: Pos,
+    lhs: ExprRef,
+    rhs: ExprRef,
+  },
   HasAttr {
     lhs: ExprRef,
     path: AttrPath,
   },
   Not(ExprRef),
-  Negate(ExprRef),
+}
+
+pub fn swap<A, B>(x: Located<(A, B)>) -> Located<(B, A)> {
+  Located {
+    pos: x.pos,
+    v: (x.v.1, x.v.0),
+  }
 }
 
 impl Expr {
+  pub fn bind_vars(&self, env: &StaticEnvRef) -> ParseOk {
+    match self {
+      Expr::Pos { .. }
+      | Expr::Int { .. }
+      | Expr::Float { .. }
+      | Expr::String { .. }
+      | Expr::Path { .. } => {}
+      Expr::Var(v) => v.write().bind_vars(env.clone())?,
+      Expr::Select { lhs, def, path, .. } => {
+        lhs.bind_vars(env)?;
+        def.as_ref().map(|x| x.bind_vars(env)).transpose()?;
+        for attr in path {
+          attr.as_dynamic().map(|x| x.bind_vars(env)).transpose()?;
+        }
+      }
+      Expr::HasAttr { lhs, path } => {
+        lhs.bind_vars(env)?;
+        for attr in path {
+          attr.as_dynamic().map(|x| x.bind_vars(env)).transpose()?;
+        }
+      }
+      Expr::Attrs(a) => a.bind_vars(env.clone())?,
+      Expr::Lambda(l) => l.bind_vars(env)?,
+      Expr::List(l) => {
+        for thing in l {
+          thing.bind_vars(env)?;
+        }
+      }
+      Expr::Assert { cond, body, .. } => {
+        cond.bind_vars(env)?;
+        body.bind_vars(env)?;
+      }
+      Expr::With {
+        env: attrs,
+        body,
+        prev_with,
+        ..
+      } => {
+        let mut cur_env = env.clone();
+
+        for level in 1.. {
+          let ce = cur_env.read();
+          if ce.is_with {
+            prev_with.store(level, Ordering::Release);
+            break;
+          }
+
+          match ce.up {
+            Some(ref x) => {
+              let new_thing = x.clone();
+              drop(ce);
+              cur_env = new_thing;
+            }
+            None => break,
+          }
+        }
+
+        attrs.bind_vars(env)?;
+        let new_env = writable(StaticEnv {
+          up: Some(env.clone()),
+          is_with: true,
+          vars: Default::default(),
+        });
+        body.bind_vars(&new_env)?;
+      }
+      Expr::Let { attrs, body } => {
+        let new_env = writable(StaticEnv {
+          is_with: false,
+          up: Some(env.clone()),
+          vars: Default::default(),
+        });
+
+        for (i, (k, v)) in attrs.attrs.iter().enumerate() {
+          v.displ.fetch_add(1, Ordering::Acquire);
+          new_env.write().vars.insert(k.clone(), i);
+        }
+
+        for v in attrs.attrs.values() {
+          v.rhs.bind_vars(if v.inherited { &env } else { &new_env })?;
+        }
+
+        body.bind_vars(&new_env)?;
+      }
+      Expr::ConcatStrings { parts, .. } => {
+        for part in parts {
+          part.bind_vars(env)?;
+        }
+      }
+      Expr::If {
+        cond, rhs1, rhs2, ..
+      } => {
+        cond.bind_vars(env)?;
+        rhs1.bind_vars(env)?;
+        rhs2.bind_vars(env)?;
+      }
+      Expr::Op { lhs, rhs, .. } => {
+        lhs.bind_vars(env)?;
+        rhs.bind_vars(env)?;
+      }
+      Expr::Apply { lhs, rhs, .. } => {
+        lhs.bind_vars(env)?;
+        rhs.bind_vars(env)?;
+      }
+      Expr::Not(e) => e.bind_vars(env)?,
+    }
+    Ok(())
+  }
+
   pub fn bin(operator: Bin, args: Located<(Self, Self)>) -> Self {
     Self::Op {
       bin: operator,
       pos: args.pos,
-      lhs: writable(args.v.0),
-      rhs: writable(args.v.1),
+      lhs: readable(args.v.0),
+      rhs: readable(args.v.1),
     }
+  }
+
+  pub fn lt(args: Located<(Self, Self)>, invert: bool) -> Self {
+    let inner = Self::apply(Located {
+      pos: args.pos,
+      v: (
+        Self::apply(Located {
+          pos: args.pos,
+          v: (Self::Var(Var::new(args.pos, "__lessThan".into())), args.v.0),
+        }),
+        args.v.1,
+      ),
+    });
+    if invert {
+      Self::Not(readable(inner))
+    } else {
+      inner
+    }
+  }
+
+  pub fn apply(args: Located<(Self, Self)>) -> Self {
+    Self::Apply {
+      pos: args.pos,
+      lhs: readable(args.v.0),
+      rhs: readable(args.v.1),
+    }
+  }
+
+  pub fn string<S: Into<String>>(s: S) -> Self {
+    let s = s.into();
+    Self::String { s }
+  }
+
+  pub fn path<P: Into<PathBuf>>(p: P) -> Self {
+    let p = p.into();
+    Self::Path { path: p }
   }
 }
 
@@ -91,7 +258,7 @@ fn show_attrpath(f: &mut fmt::Formatter, path: &[AttrName]) -> fmt::Result {
     }
     match attr {
       AttrName::Static(k) => k.fmt(f)?,
-      AttrName::Dynamic(e) => write!(f, "\"${{{}}}\"", e.read())?,
+      AttrName::Dynamic(e) => write!(f, "\"${{{}}}\"", e)?,
     }
   }
   Ok(())
@@ -99,8 +266,6 @@ fn show_attrpath(f: &mut fmt::Formatter, path: &[AttrName]) -> fmt::Result {
 
 #[derive(Debug, Display)]
 pub enum Bin {
-  #[display(fmt = "")]
-  Apply,
   #[display(fmt = "==")]
   Eq,
   #[display(fmt = "!=")]
@@ -115,14 +280,6 @@ pub enum Bin {
   Update,
   #[display(fmt = "++")]
   ConcatLists,
-  #[display(fmt = "<")]
-  Le,
-  #[display(fmt = "<=")]
-  Leq,
-  #[display(fmt = ">")]
-  Ge,
-  #[display(fmt = ">=")]
-  Geq,
   #[display(fmt = "+")]
   Add,
   #[display(fmt = "-")]
@@ -136,7 +293,7 @@ pub enum Bin {
 pub type AttrPath = Vec<AttrName>;
 pub type AttrList = Vec<AttrName>;
 
-#[derive(Debug)]
+#[derive(Debug, EnumAsInner)]
 pub enum AttrName {
   Static(Ident),
   Dynamic(ExprRef),
@@ -146,19 +303,78 @@ pub enum AttrName {
 pub struct Var {
   pub pos: Pos,
   pub name: Ident,
-  pub from_with: bool,
-  pub level: usize,
-  pub displ: usize,
+  pub displ: Displacement,
+}
+
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
+pub enum Displacement {
+  Static { level: usize, offset: usize },
+  Dynamic { level: usize },
+  Unknown,
+}
+
+impl Displacement {
+  pub fn level(self) -> Option<usize> {
+    match self {
+      Self::Static { level, .. } | Self::Dynamic { level } => Some(level),
+      Self::Unknown => None,
+    }
+  }
 }
 
 impl Var {
-  pub fn new(pos: Pos, name: Ident) -> Self {
-    Self {
+  pub fn new(pos: Pos, name: Ident) -> Writable<Self> {
+    writable(Self {
       pos,
       name,
-      from_with: false,
-      level: 0,
-      displ: 0,
+      displ: Displacement::Unknown,
+    })
+  }
+
+  pub fn bind_vars(&mut self, mut env: StaticEnvRef) -> ParseOk {
+    let mut with_level = None;
+
+    for level in 0.. {
+      let guard = env.read();
+
+      if guard.is_with {
+        if with_level.is_none() {
+          with_level = Some(level);
+        }
+      } else if let Some(displ) = guard.vars.get(&self.name) {
+        trace!(
+          "{} resolves to {} @ {}, within {:?}",
+          self.name,
+          displ,
+          level,
+          guard.vars
+        );
+        self.displ = Displacement::Static {
+          level,
+          offset: *displ,
+        };
+        return Ok(());
+      }
+
+      match guard.up {
+        Some(ref x) => {
+          let new = x.clone();
+          drop(guard);
+          env = new;
+        }
+        None => break,
+      }
+    }
+
+    match with_level {
+      None => Err(Located {
+        pos: self.pos,
+        v: UserError::UndefinedVariable(self.name.clone()),
+      }),
+      Some(w) => {
+        self.displ = Displacement::Dynamic { level: w };
+        Ok(())
+      }
     }
   }
 }
@@ -194,10 +410,47 @@ pub enum ParseBinding {
 
 #[derive(Debug)]
 pub struct Lambda {
-  pos: Pos,
-  name: Ident,
-  arg: LambdaArg,
-  body: ExprRef,
+  pub pos: Pos,
+  pub name: Ident,
+  pub arg: LambdaArg,
+  pub body: ExprRef,
+}
+
+impl Lambda {
+  fn bind_vars(&self, env: &StaticEnvRef) -> ParseOk {
+    let new_env = writable(StaticEnv {
+      up: Some(env.clone()),
+      is_with: false,
+      vars: Default::default(),
+    });
+
+    let mut displ = 0;
+
+    let arg = match &self.arg {
+      LambdaArg::Plain(n) => Some(n),
+      LambdaArg::Formals { name, .. } => name.as_ref(),
+    };
+
+    if let Some(a) = arg {
+      new_env.write().vars.insert(a.clone(), displ);
+      displ += 1;
+    }
+
+    if let LambdaArg::Formals { ref formals, .. } = self.arg {
+      for f in &formals.formals {
+        new_env.write().vars.insert(f.name.clone(), displ);
+        displ += 1;
+      }
+
+      for f in &formals.formals {
+        if let Some(d) = &f.def {
+          d.bind_vars(&new_env)?;
+        }
+      }
+    }
+
+    self.body.bind_vars(&new_env)
+  }
 }
 
 #[derive(Debug, Default)]
@@ -233,12 +486,49 @@ impl Attrs {
     }
   }
 
-  fn add_attr(&mut self, pos: Pos, path: &[AttrName], rhs: Expr) -> Result<(), Located<UserError>> {
+  fn bind_vars(&self, env: StaticEnvRef) -> ParseOk {
+    let mut dynamic_env = &env;
+    let new_env = writable(StaticEnv {
+      is_with: false,
+      up: Some(env.clone()),
+      vars: Default::default(),
+    });
+
+    if self.recursive {
+      dynamic_env = &new_env;
+
+      for (i, (name, value)) in self.attrs.iter().enumerate() {
+        value.displ.store(i, Ordering::Release);
+        new_env.write().vars.insert(name.clone(), i);
+      }
+
+      for val in self.attrs.values() {
+        val
+          .rhs
+          .bind_vars(if val.inherited { &env } else { &new_env })?;
+      }
+    } else {
+      for val in self.attrs.values() {
+        val.rhs.bind_vars(&env)?;
+      }
+    }
+
+    for val in &self.dyn_attrs {
+      val.name.bind_vars(&dynamic_env)?;
+      val.value.bind_vars(&dynamic_env)?;
+    }
+
+    Ok(())
+  }
+
+  fn add_attr(&mut self, pos: Pos, path: &[AttrName], rhs: Expr) -> ParseOk {
     match path {
       [] => panic!("invariant violation: empty attrpath produced by parser"),
       [AttrName::Static(i)] => {
-        if let Some(x) = self.attrs.get(i) {
-          if let (Expr::Attrs(ae), Some(j)) = (rhs, x.rhs.write().as_attrs_mut()) {
+        if let Some(x) = self.attrs.get_mut(i) {
+          if let (Expr::Attrs(ae), Some(j)) =
+            (rhs, Arc::get_mut(&mut x.rhs).unwrap().as_attrs_mut())
+          {
             for (ad, av) in ae.attrs {
               if j.attrs.insert(ad, av).is_some() {
                 panic!("duplicate attribute");
@@ -253,8 +543,8 @@ impl Attrs {
             AttrDef {
               pos,
               inherited: false,
-              rhs: writable(rhs),
-              displ: 0,
+              rhs: readable(rhs),
+              displ: AtomicUsize::new(0),
             },
           );
         }
@@ -262,14 +552,13 @@ impl Attrs {
       [AttrName::Dynamic(e)] => self.dyn_attrs.push(DynAttrDef {
         pos,
         name: e.clone(),
-        value: writable(rhs),
+        value: readable(rhs),
       }),
       [AttrName::Static(i), rest @ ..] => {
-        if let Some(j) = self.attrs.get(i) {
+        if let Some(j) = self.attrs.get_mut(i) {
           if !j.inherited {
-            return j
-              .rhs
-              .write()
+            return Arc::get_mut(&mut j.rhs)
+              .unwrap()
               .as_attrs_mut()
               .expect("duplicate attribute")
               .add_attr(pos, rest, rhs);
@@ -284,8 +573,8 @@ impl Attrs {
             AttrDef {
               pos,
               inherited: false,
-              rhs: writable(Expr::Attrs(new_attrs)),
-              displ: 0,
+              rhs: readable(Expr::Attrs(new_attrs)),
+              displ: AtomicUsize::new(0),
             },
           );
         }
@@ -296,7 +585,7 @@ impl Attrs {
         self.dyn_attrs.push(DynAttrDef {
           pos,
           name: e.clone(),
-          value: writable(Expr::Attrs(new_attrs)),
+          value: readable(Expr::Attrs(new_attrs)),
         });
       }
     }
@@ -309,7 +598,7 @@ pub struct AttrDef {
   pub pos: Pos,
   pub inherited: bool,
   pub rhs: ExprRef,
-  pub displ: usize,
+  pub displ: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -323,16 +612,16 @@ impl Display for Expr {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     match self {
       Expr::Pos { .. } => write!(f, "__curPos"),
-      Expr::Var(n) => n.name.fmt(f),
-      Expr::Int { n } => n.fmt(f),
-      Expr::Float { f: g } => g.fmt(f),
-      Expr::String { s } => write!(f, "{:?}", s),
-      Expr::Path { path } => path.display().fmt(f),
+      Expr::Var(n) => n.read().name.fmt(f),
+      Expr::Int { n, .. } => n.fmt(f),
+      Expr::Float { f: g, .. } => g.fmt(f),
+      Expr::String { s, .. } => write!(f, "{:?}", s),
+      Expr::Path { path, .. } => path.display().fmt(f),
       Expr::Select { lhs, def, path, .. } => {
-        write!(f, "({}).", lhs.read())?;
+        write!(f, "({}).", lhs)?;
         show_attrpath(f, path)?;
         if let Some(x) = def {
-          write!(f, " or ({})", x.read())?;
+          write!(f, " or ({})", x)?;
         }
         Ok(())
       }
@@ -349,7 +638,7 @@ impl Display for Expr {
             formals,
           } => write!(f, "{}", formals)?,
         }
-        write!(f, ": {}", body.read())?;
+        write!(f, ": {}", body)?;
         write!(f, ")")
       }
       Expr::List(l) => {
@@ -365,9 +654,9 @@ impl Display for Expr {
         }
         write!(f, "{{{}}}", a)
       }
-      Expr::Assert { cond, body, .. } => write!(f, "assert {}; {}", cond.read(), body.read()),
-      Expr::With { env, body, .. } => write!(f, "(with {}; {})", env.read(), body.read()),
-      Expr::Let { attrs, body } => write!(f, "(let {} in {})", attrs, body.read()),
+      Expr::Assert { cond, body, .. } => write!(f, "assert {}; {}", cond, body),
+      Expr::With { env, body, .. } => write!(f, "(with {}; {})", env, body),
+      Expr::Let { attrs, body } => write!(f, "(let {} in {})", attrs, body),
       Expr::ConcatStrings { parts, .. } => {
         write!(f, "(")?;
         for (i, elem) in parts.iter().enumerate() {
@@ -380,27 +669,15 @@ impl Display for Expr {
       }
       Expr::If {
         cond, rhs1, rhs2, ..
-      } => write!(
-        f,
-        "(if {} then {} else {})",
-        cond.read(),
-        rhs1.read(),
-        rhs2.read()
-      ),
-      Expr::Op {
-        bin: Bin::Apply,
-        lhs,
-        rhs,
-        ..
-      } => write!(f, "({} {})", lhs.read(), rhs.read()),
-      Expr::Op { bin, lhs, rhs, .. } => write!(f, "({} {} {})", lhs.read(), bin, rhs.read()),
+      } => write!(f, "(if {} then {} else {})", cond, rhs1, rhs2),
+      Expr::Apply { lhs, rhs, .. } => write!(f, "({} {})", lhs, rhs),
+      Expr::Op { bin, lhs, rhs, .. } => write!(f, "({} {} {})", lhs, bin, rhs),
       Expr::HasAttr { lhs, path } => {
-        write!(f, "(({}) ? ", lhs.read())?;
+        write!(f, "(({}) ? ", lhs)?;
         show_attrpath(f, path)?;
         f.write_str(")")
       }
-      Expr::Not(e) => write!(f, "(!{})", e.read()),
-      Expr::Negate(e) => write!(f, "(-{})", e.read()),
+      Expr::Not(e) => write!(f, "(!{})", e),
     }
   }
 }
@@ -414,7 +691,7 @@ impl Display for Attrs {
       if val.inherited {
         write!(f, "inherit {};", key)?;
       } else {
-        write!(f, "{} = {};", key, val.rhs.read())?;
+        write!(f, "{} = {};", key, val.rhs)?;
       }
     }
     Ok(())
@@ -432,7 +709,7 @@ impl Display for Formals {
       first = false;
       write!(f, "{}", item.name)?;
       if let Some(e) = &item.def {
-        write!(f, " ? {}", e.read())?;
+        write!(f, " ? {}", e)?;
       }
     }
     if self.ellipsis {
