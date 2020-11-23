@@ -264,7 +264,7 @@ fn show_attrpath(f: &mut fmt::Formatter, path: &[AttrName]) -> fmt::Result {
   Ok(())
 }
 
-#[derive(Debug, Display)]
+#[derive(Debug, Display, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum Bin {
   #[display(fmt = "==")]
   Eq,

@@ -16,8 +16,10 @@ use std::{
 pub type ValueRef = Writable<Value>;
 pub type EnvRef = Writable<Env>;
 pub type PathSet = BTreeSet<String>;
+pub type Attrs = HashMap<Ident, Located<ValueRef>>;
 
-#[derive(Debug, EnumAsInner, Clone)]
+#[derive(Derivative, EnumAsInner, Clone)]
+#[derivative(Debug)]
 pub enum Value {
   Null,
   Bool(bool),
@@ -25,14 +27,26 @@ pub enum Value {
   Float(f64),
   String(Str),
   Path(PathBuf),
-  Attrs(Writable<HashMap<Ident, Located<ValueRef>>>),
-  List1(ValueRef),
-  List2(ValueRef, ValueRef),
+  Attrs(Readable<Attrs>),
   List(Readable<Vec<ValueRef>>),
   Apply(ValueRef, ValueRef),
-  Thunk(EnvRef, ExprRef),
+  Thunk(Thunk),
   Lambda(EnvRef, Readable<Lambda>),
   Primop(Primop, Vec<ValueRef>),
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct Thunk {
+  #[derivative(Debug = "ignore")]
+  pub env: EnvRef,
+  pub expr: ExprRef,
+}
+
+impl Clone for Thunk {
+  fn clone(&self) -> Self {
+    panic!("thunks may not be cloned")
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -51,21 +65,31 @@ impl Value {
       Value::String { .. } => "string",
       Value::Path { .. } => "path",
       Value::Attrs { .. } => "attrset",
-      Value::List1 { .. } | Value::List2 { .. } | Value::List { .. } => "list",
+      Value::List { .. } => "list",
       Value::Lambda { .. } => "lambda",
-      Value::Primop { .. } => "primop",
+      Value::Primop(_, args) => {
+        if args.is_empty() {
+          "primop"
+        } else {
+          "primop-app"
+        }
+      }
       Value::Thunk { .. } => "thunk",
       Value::Apply { .. } => "function application",
     }
+  }
+
+  pub fn thunk(env: EnvRef, expr: ExprRef) -> Self {
+    Self::Thunk(Thunk { env, expr })
   }
 }
 
 #[derive(Debug)]
 pub struct Env {
-  pub up: Option<EnvRef>,
   pub prev_with: Option<u8>,
   pub values: Vec<ValueRef>,
   pub env_type: EnvType,
+  pub up: Option<EnvRef>,
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
