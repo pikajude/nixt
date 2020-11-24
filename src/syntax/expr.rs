@@ -214,6 +214,19 @@ impl Expr {
     }
   }
 
+  pub fn app2(name: &str, args: Located<(Self, Self)>) -> Self {
+    Self::apply(Located {
+      pos: args.pos,
+      v: (
+        Self::apply(Located {
+          pos: args.pos,
+          v: (Self::Var(Var::new(args.pos, name.into())), args.v.0),
+        }),
+        args.v.1,
+      ),
+    })
+  }
+
   pub fn lt(args: Located<(Self, Self)>, invert: bool) -> Self {
     let inner = Self::apply(Located {
       pos: args.pos,
@@ -280,14 +293,6 @@ pub enum Bin {
   Update,
   #[display(fmt = "++")]
   ConcatLists,
-  #[display(fmt = "+")]
-  Add,
-  #[display(fmt = "-")]
-  Sub,
-  #[display(fmt = "*")]
-  Mul,
-  #[display(fmt = "/")]
-  Div,
 }
 
 pub type AttrPath = Vec<Located<AttrName>>;

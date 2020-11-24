@@ -178,14 +178,18 @@ expr_op_8: Expr = {
 }
 
 expr_op_7: Expr = {
-  S<(<expr_op_7> "+" <expr_op_6>)> => Expr::bin(Add, <>),
-  S<(<expr_op_7> "-" <expr_op_6>)> => Expr::bin(Sub, <>),
+  S<(<expr_op_7> "+" <expr_op_6>)> => Expr::ConcatStrings {
+    pos: <>.pos,
+    force_string: false,
+    parts: vec![<>.v.0, <>.v.1]
+  },
+  S<(<expr_op_7> "-" <expr_op_6>)> => Expr::app2("__sub", <>),
   expr_op_6
 }
 
 expr_op_6: Expr = {
-  S<(<expr_op_6> "*" <expr_op_5>)> => Expr::bin(Mul, <>),
-  S<(<expr_op_6> "/" <expr_op_5>)> => Expr::bin(Div, <>),
+  S<(<expr_op_6> "*" <expr_op_5>)> => Expr::app2("__mul", <>),
+  S<(<expr_op_6> "/" <expr_op_5>)> => Expr::app2("__div", <>),
   expr_op_5
 }
 
