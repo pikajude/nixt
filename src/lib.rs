@@ -1,5 +1,7 @@
 #![feature(map_first_last)]
+#![feature(min_const_generics)]
 #![feature(trait_alias)]
+#![feature(btree_drain_filter)]
 
 #[macro_use] extern crate slog_scope;
 #[macro_use] extern crate derivative;
@@ -13,6 +15,13 @@ mod atoms {
   #![allow(unused)]
   include!(concat!(env!("OUT_DIR"), "/ident.rs"));
 }
+
+#[cfg(not(feature = "trace-evaluator"))]
+pub mod lock {
+  pub use parking_lot::RwLock;
+}
+
+#[cfg(feature = "trace-evaluator")] pub mod lock;
 
 pub mod error;
 pub mod eval;

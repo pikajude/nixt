@@ -292,7 +292,7 @@ expr_simple: Expr = {
       pos: <>.pos,
       lhs: readable(Expr::Attrs(attrs)),
       def: None,
-      path: vec![AttrName::Static(Ident::from("body"))]
+      path: vec![Located { pos: <>.pos, v: AttrName::Static(Ident::from("body")) }]
     })
   },
   "rec" <S<("{" <S<binding>*> "}")>> =>? {
@@ -302,12 +302,15 @@ expr_simple: Expr = {
   },
   S<("{" <S<binding>*> "}")> =>? Ok(Expr::Attrs(Attrs::collect(<>.pos, <>.v, true)?)),
 
-  "[" <expr_select*> "]" => Expr::List(<>)
+  "[" <expr_select*> "]" => Expr::List(<>.into_iter().map(readable).collect())
 }
 
 ind_string_parts: Expr = {
   S<ind_string_part*> => if <>.v.is_empty() {
     Expr::string("")
+  } else if <>.v.len() == 1 {
+    let mut x = <>.v;
+    x.pop().unwrap()
   } else {
     Expr::ConcatStrings { pos: <>.pos, force_string: true, parts: <>.v }
   }
@@ -321,6 +324,9 @@ ind_string_part: Expr = {
 string_parts: Expr = {
   S<string_part*> => if <>.v.is_empty() {
     Expr::string("")
+  } else if <>.v.len() == 1 {
+    let mut x = <>.v;
+    x.pop().unwrap()
   } else {
     Expr::ConcatStrings { pos: <>.pos, force_string: true, parts: <>.v }
   }
@@ -339,11 +345,11 @@ attrpath: AttrPath = {
   }
 }
 
-attr: AttrName = {
-  ID => AttrName::Static(<>),
-  "or" => AttrName::Static(Ident::from("or")),
-  quote <string_parts> quote => AttrName::Dynamic(readable(<>)),
-  "${" <expr> "}" => AttrName::Dynamic(readable(<>))
+attr: Located<AttrName> = {
+  S<ID> => <>.map(|v|AttrName::Static(v)),
+  S<"or"> => <>.map(|_|AttrName::Static(Ident::from("or"))),
+  S<(quote <string_parts> quote)> => <>.map(|v|AttrName::Dynamic(readable(v))),
+  S<("${" <expr> "}")> => <>.map(|v|AttrName::Dynamic(readable(v)))
 }
 
 formals: Formals = {

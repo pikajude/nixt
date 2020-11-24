@@ -1,10 +1,11 @@
+use crate::lock::RwLock;
 pub use crate::{
   atoms::Ident,
   error::*,
   syntax::parse::{not_located, Located, Pos},
+  throw,
 };
 pub use anyhow::{anyhow, bail, ensure, Result};
-use parking_lot::RwLock;
 use std::sync::Arc;
 
 pub type Readable<T> = Arc<T>;

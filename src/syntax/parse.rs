@@ -21,6 +21,15 @@ pub struct Located<T> {
   pub v: T,
 }
 
+impl<T> Located<T> {
+  pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Located<U> {
+    Located {
+      pos: self.pos,
+      v: f(self.v),
+    }
+  }
+}
+
 #[derive(Ord, PartialOrd, Eq, PartialEq, Clone, Copy, Hash)]
 pub struct Pos(pub codespan::FileId, pub codespan::Span);
 

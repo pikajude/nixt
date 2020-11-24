@@ -43,7 +43,7 @@ pub enum Expr {
     path: AttrPath,
   },
   Lambda(Lambda),
-  List(Vec<Expr>),
+  List(Vec<ExprRef>),
   Attrs(Attrs),
   Assert {
     pos: Pos,
@@ -109,13 +109,13 @@ impl Expr {
         lhs.bind_vars(env)?;
         def.as_ref().map(|x| x.bind_vars(env)).transpose()?;
         for attr in path {
-          attr.as_dynamic().map(|x| x.bind_vars(env)).transpose()?;
+          attr.v.as_dynamic().map(|x| x.bind_vars(env)).transpose()?;
         }
       }
       Expr::HasAttr { lhs, path } => {
         lhs.bind_vars(env)?;
         for attr in path {
-          attr.as_dynamic().map(|x| x.bind_vars(env)).transpose()?;
+          attr.v.as_dynamic().map(|x| x.bind_vars(env)).transpose()?;
         }
       }
       Expr::Attrs(a) => a.bind_vars(env.clone())?,
@@ -251,12 +251,12 @@ impl Expr {
   }
 }
 
-fn show_attrpath(f: &mut fmt::Formatter, path: &[AttrName]) -> fmt::Result {
+fn show_attrpath(f: &mut fmt::Formatter, path: &[Located<AttrName>]) -> fmt::Result {
   for (i, attr) in path.iter().enumerate() {
     if i > 0 {
       f.write_str(".")?;
     }
-    match attr {
+    match &attr.v {
       AttrName::Static(k) => k.fmt(f)?,
       AttrName::Dynamic(e) => write!(f, "\"${{{}}}\"", e)?,
     }
@@ -290,8 +290,8 @@ pub enum Bin {
   Div,
 }
 
-pub type AttrPath = Vec<AttrName>;
-pub type AttrList = Vec<AttrName>;
+pub type AttrPath = Vec<Located<AttrName>>;
+pub type AttrList = Vec<Located<AttrName>>;
 
 #[derive(Debug, EnumAsInner)]
 pub enum AttrName {
@@ -342,13 +342,13 @@ impl Var {
           with_level = Some(level);
         }
       } else if let Some(displ) = guard.vars.get(&self.name) {
-        trace!(
-          "{} resolves to {} @ {}, within {:?}",
-          self.name,
-          displ,
-          level,
-          guard.vars
-        );
+        // trace!(
+        // "{} resolves to {} @ {}, within {:?}",
+        // self.name,
+        // displ,
+        // level,
+        // guard.vars
+        // );
         self.displ = Displacement::Static {
           level,
           offset: *displ,
@@ -379,7 +379,7 @@ impl Var {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LambdaArg {
   Plain(Ident),
   Formals {
@@ -388,13 +388,13 @@ pub enum LambdaArg {
   },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Formals {
   pub formals: Vec<Formal>,
   pub ellipsis: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Formal {
   pub pos: Pos,
   pub name: Ident,
@@ -408,7 +408,7 @@ pub enum ParseBinding {
   InheritFrom(Expr, AttrList),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Lambda {
   pub pos: Pos,
   pub name: Ident,
@@ -462,7 +462,7 @@ pub struct Attrs {
 
 impl Attrs {
   pub fn collect<I: IntoIterator<Item = Located<ParseBinding>>>(
-    pos: Pos,
+    attrs_pos: Pos,
     bindings: I,
     allow_dyn: bool,
   ) -> Result<Self, Located<UserError>> {
@@ -472,13 +472,74 @@ impl Attrs {
         ParseBinding::Plain(path, rhs) => {
           this.add_attr(item.pos, &*path, rhs)?;
         }
-        ParseBinding::Inherit(_) => {}
-        ParseBinding::InheritFrom(_, _) => {}
+        ParseBinding::Inherit(items) => {
+          for Located { pos, v: item } in items {
+            if let AttrName::Static(name) = item {
+              if this.attrs.contains_key(&name) {
+                return Err(Located {
+                  pos,
+                  v: UserError::Other(format!("attribute `{}' already defined", name)),
+                });
+              } else {
+                this.attrs.insert(
+                  name.clone(),
+                  AttrDef {
+                    pos,
+                    inherited: false,
+                    rhs: readable(Expr::Var(Var::new(pos, name))),
+                    displ: AtomicUsize::new(0),
+                  },
+                );
+              }
+            } else {
+              return Err(Located {
+                pos,
+                v: UserError::Other("dynamic attributes not allowed here".into()),
+              });
+            }
+          }
+        }
+        ParseBinding::InheritFrom(from, items) => {
+          let f = readable(from);
+          for Located { pos, v: item } in items {
+            if let AttrName::Static(name) = item {
+              if this.attrs.contains_key(&name) {
+                return Err(Located {
+                  pos,
+                  v: UserError::Other(format!("attribute `{}' already defined", name)),
+                });
+              } else {
+                this.attrs.insert(
+                  name.clone(),
+                  AttrDef {
+                    pos,
+                    inherited: false,
+                    rhs: readable(Expr::Select {
+                      pos,
+                      lhs: f.clone(),
+                      def: None,
+                      path: vec![Located {
+                        v: AttrName::Static(name),
+                        pos,
+                      }],
+                    }),
+                    displ: AtomicUsize::new(0),
+                  },
+                );
+              }
+            } else {
+              return Err(Located {
+                pos,
+                v: UserError::Other("dynamic attributes not allowed here".into()),
+              });
+            }
+          }
+        }
       }
     }
     if !allow_dyn && !this.dyn_attrs.is_empty() {
       Err(Located {
-        pos,
+        pos: attrs_pos,
         v: UserError::Other("dynamic attributes not allowed here".into()),
       })
     } else {
@@ -521,10 +582,13 @@ impl Attrs {
     Ok(())
   }
 
-  fn add_attr(&mut self, pos: Pos, path: &[AttrName], rhs: Expr) -> ParseOk {
+  fn add_attr(&mut self, pos: Pos, path: &[Located<AttrName>], rhs: Expr) -> ParseOk {
     match path {
       [] => panic!("invariant violation: empty attrpath produced by parser"),
-      [AttrName::Static(i)] => {
+      [Located {
+        v: AttrName::Static(i),
+        ..
+      }] => {
         if let Some(x) = self.attrs.get_mut(i) {
           if let (Expr::Attrs(ae), Some(j)) =
             (rhs, Arc::get_mut(&mut x.rhs).unwrap().as_attrs_mut())
@@ -549,12 +613,18 @@ impl Attrs {
           );
         }
       }
-      [AttrName::Dynamic(e)] => self.dyn_attrs.push(DynAttrDef {
+      [Located {
+        v: AttrName::Dynamic(e),
+        ..
+      }] => self.dyn_attrs.push(DynAttrDef {
         pos,
         name: e.clone(),
         value: readable(rhs),
       }),
-      [AttrName::Static(i), rest @ ..] => {
+      [Located {
+        v: AttrName::Static(i),
+        ..
+      }, rest @ ..] => {
         if let Some(j) = self.attrs.get_mut(i) {
           if !j.inherited {
             return Arc::get_mut(&mut j.rhs)
@@ -579,7 +649,10 @@ impl Attrs {
           );
         }
       }
-      [AttrName::Dynamic(e), rest @ ..] => {
+      [Located {
+        v: AttrName::Dynamic(e),
+        ..
+      }, rest @ ..] => {
         let mut new_attrs = Attrs::default();
         new_attrs.add_attr(pos, rest, rhs)?;
         self.dyn_attrs.push(DynAttrDef {
