@@ -4,7 +4,7 @@ use crate::{
   value::{Attrs, *},
 };
 use itertools::Either;
-use parking_lot::Mutex;
+use parking_lot::{MappedRwLockReadGuard, Mutex, RwLockReadGuard};
 use std::{
   collections::HashMap,
   num::NonZeroU8,
@@ -106,7 +106,7 @@ impl Eval {
           let vguard = vtmp;
           if let Some(vguard2) = vguard.as_attrs() {
             if let Some(subattrs) = vguard2.get(&name) {
-              let tmp_value = subattrs.v.read().clone();
+              let tmp_value = self.clone_value(&subattrs.v, item.pos)?;
               drop(vguard);
               vtmp = tmp_value;
               continue;
@@ -171,6 +171,11 @@ impl Eval {
     }
   }
 
+  fn clone_value(&self, v: &ValueRef, pos: Pos) -> Result<Value> {
+    self.force_value(&mut v.write(), pos)?;
+    Ok(v.read().clone())
+  }
+
   fn eval_concat(
     &self,
     pos: Pos,
@@ -199,9 +204,9 @@ impl Eval {
       Value::Int(i) => ConcatTy::Int(i),
       Value::Float(f) => ConcatTy::Float(f),
       Value::Path(p) => ConcatTy::Path(p),
-      mut x => ConcatTy::String(self.coerce_to_string(
+      x => ConcatTy::String(self.coerce_to_string(
         pos,
-        &mut x,
+        &writable(x),
         &mut ctx,
         CoerceOpts {
           coerce_more: false,
@@ -219,10 +224,10 @@ impl Eval {
         (ConcatTy::Float(f0), Value::Int(f1)) => ConcatTy::Float(f0 + (f1 as f64)),
         (ConcatTy::Float(f0), Value::Float(f1)) => ConcatTy::Float(f0 + f1),
         (ConcatTy::Float(_), x) => throw!(pos, "cannot add {} to a float", x.typename()),
-        (ConcatTy::Path(p), mut x) => {
+        (ConcatTy::Path(p), x) => {
           let s = self.coerce_to_string(
             pos,
-            &mut x,
+            &writable(x),
             &mut ctx,
             CoerceOpts {
               coerce_more: false,
@@ -237,10 +242,10 @@ impl Eval {
           }
           ConcatTy::Path(p.join(s.strip_prefix('/').unwrap_or(&s)))
         }
-        (ConcatTy::String(mut s0), mut x) => {
+        (ConcatTy::String(mut s0), x) => {
           let s = self.coerce_to_string(
             pos,
-            &mut x,
+            &writable(x),
             &mut ctx,
             CoerceOpts {
               coerce_more: false,
@@ -345,9 +350,9 @@ impl Eval {
     match attr {
       AttrName::Static(s) => Ok(s.clone()),
       AttrName::Dynamic(e) => {
-        let mut v = self.eval(env, &*e)?;
-        let name_str = self.force_string_no_context(&mut v, Pos::none())?;
-        Ok(Ident::from(name_str))
+        let v = writable(self.eval(env, &*e)?);
+        let name_str = self.force_string_no_context(&v, Pos::none())?;
+        Ok(Ident::from(&*name_str))
       }
     }
   }
@@ -393,8 +398,7 @@ impl Eval {
     let mut attrs_used = 0;
 
     if let LambdaArg::Formals { name, formals } = &lam.arg {
-      let mut arg_value = arg.write();
-      let fs = self.force_attrs(&mut arg_value, pos)?;
+      let fs = self.force_attrs(&arg, pos)?;
 
       // trace!("lambda argument: {:?}", fs);
 
@@ -450,7 +454,7 @@ impl Eval {
         if no_eval {
           return Ok(None);
         }
-        self.force_attrs(&mut env_.values[0].write(), Pos::none())?;
+        let _ = self.force_attrs(&env_.values[0], Pos::none())?;
         env_.env_type = EnvType::HasWithAttrs;
       }
       if let Some(j) = env_.values[0].read().as_attrs() {
@@ -578,10 +582,11 @@ impl Eval {
         continue;
       }
 
-      let namestr = self.force_string_no_context(&mut name, val.pos)?;
+      let name = writable(name);
+      let namestr = self.force_string_no_context(&name, val.pos)?;
       if new_attrs
         .insert(
-          Ident::from(namestr),
+          Ident::from(&*namestr),
           Located {
             pos: val.pos,
             v: self.maybe_thunk(val.value.clone(), dynamic_env.clone())?,
@@ -612,17 +617,16 @@ impl Eval {
       if let Some(x) = def {
         self.force_value(&mut vtmp, pos2)?;
         if let Some(x) = vtmp.as_attrs().and_then(|x| x.get(&name)) {
-          self.force_value(&mut x.v.write(), pos)?;
-          let n2 = x.v.read().clone();
+          let n2 = self.clone_value(&x.v, pos)?;
           vtmp = n2;
           continue;
         }
         return self.eval(env, x);
       } else {
-        let tmp2 = self.force_attrs(&mut vtmp, pos2)?;
+        let vtmp_ = writable(vtmp);
+        let tmp2 = self.force_attrs(&vtmp_, pos2)?;
         if let Some(x) = tmp2.get(&name) {
-          self.force_value(&mut x.v.write(), pos)?;
-          let n = x.v.read().clone();
+          let n = self.clone_value(&x.v, pos)?;
           pos2 = x.pos;
           vtmp = n;
         } else {
@@ -636,7 +640,9 @@ impl Eval {
   }
 
   fn eval_bool(&self, env: &EnvRef, e: &Expr) -> Result<bool> {
-    match self.eval(env, e)? {
+    let mut v = self.eval(env, e)?;
+    self.force_value(&mut v, Pos::none())?;
+    match v {
       Value::Bool(b) => Ok(b),
       q => bail!("expected bool, got {}", q.typename()),
     }
@@ -646,6 +652,13 @@ impl Eval {
     match self.eval(env, e)? {
       Value::Attrs(attrs) => Ok(attrs),
       q => bail!("expected attrset, got {}", q.typename()),
+    }
+  }
+
+  fn eval_list(&self, env: &EnvRef, e: &Expr) -> Result<Readable<Vec<ValueRef>>> {
+    match self.eval(env, e)? {
+      Value::List(l) => Ok(l),
+      q => bail!("expected list, got {}", q.typename()),
     }
   }
 
@@ -694,7 +707,12 @@ impl Eval {
           Value::Attrs(attrs1)
         }
       }
-      b => throw!(pos, "unhandled operator type {}", b),
+      Bin::ConcatLists => {
+        let mut l1 = self.eval_list(env, lhs)?;
+        let mut l2 = self.eval_list(env, rhs)?;
+        Arc::make_mut(&mut l1).append(Arc::make_mut(&mut l2));
+        Value::List(l1)
+      }
     })
   }
 
@@ -736,7 +754,19 @@ impl Eval {
 
         true
       }
-      (Value::List { .. }, Value::List { .. }) => todo!(),
+      (Value::List(l1), Value::List(l2)) => {
+        if l1.len() != l2.len() {
+          false
+        } else {
+          for (i, v) in l1.iter().enumerate() {
+            if !self.values_equal(&mut v.write(), &mut l2[i].write(), pos)? {
+              return Ok(false);
+            }
+          }
+
+          true
+        }
+      }
       (Value::Lambda { .. }, _) => false,
       (Value::Primop { .. }, _) => false,
 
@@ -744,42 +774,47 @@ impl Eval {
     })
   }
 
-  fn force_string<'v>(&self, v: &'v mut Value, pos: Pos) -> Result<&'v Str> {
-    self.force_value(v, pos)?;
-    v.as_string()
-      .ok_or_else(|| anyhow!("expected string, got {}", v.typename()))
+  fn force_string<'v>(&self, v: &'v ValueRef, pos: Pos) -> Result<MappedRwLockReadGuard<'v, Str>> {
+    self.force_value(&mut v.write(), pos)?;
+    RwLockReadGuard::try_map(v.read(), Value::as_string)
+      .map_err(|e| err!(pos, "expected a string, got {}", e.typename()))
   }
 
-  fn force_string_no_context<'v>(&self, v: &'v mut Value, pos: Pos) -> Result<&'v str> {
+  fn force_string_no_context<'v>(
+    &self,
+    v: &'v ValueRef,
+    pos: Pos,
+  ) -> Result<MappedRwLockReadGuard<'v, str>> {
     let guard = self.force_string(v, pos)?;
-    if guard.context.is_empty() {
-      Ok(guard.s.as_str())
-    } else {
-      throw!(
-        pos,
-        "the string '{}' is not allowed to refer to a store path, such as `{}'",
-        guard.s,
-        guard.context.first().unwrap()
-      );
-    }
+    MappedRwLockReadGuard::try_map(guard, |s| {
+      if s.context.is_empty() {
+        Some(s.s.as_str())
+      } else {
+        None
+      }
+    })
+    .map_err(|s| err!(pos, "the string `{}' may not refer to a store path", s.s))
   }
 
-  fn force_attrs<'v>(&self, v: &'v mut Value, pos: Pos) -> Result<&'v Attrs> {
-    self.force_value(v, pos)?;
-    v.as_attrs()
-      .ok_or_else(|| anyhow!("expected attrset, got {}", v.typename()))
-      .map(|x| &**x)
+  fn force_attrs<'v>(&self, v: &'v ValueRef, pos: Pos) -> Result<MappedRwLockReadGuard<'v, Attrs>> {
+    self.force_value(&mut v.write(), pos)?;
+    RwLockReadGuard::try_map(v.read(), |v| v.as_attrs().map(|x| &**x))
+      .map_err(|e| err!(pos, "expected attrset, got {}", e.typename()))
   }
 
-  fn force_list<'v>(&self, v: &'v mut Value, pos: Pos) -> Result<&'v [ValueRef]> {
-    self.force_value(v, pos)?;
-    v.as_list()
-      .ok_or_else(|| anyhow!("expected list, got {}", v.typename()))
-      .map(|x| x.as_slice())
+  fn force_list<'v>(
+    &self,
+    v: &'v ValueRef,
+    pos: Pos,
+  ) -> Result<MappedRwLockReadGuard<'v, [ValueRef]>> {
+    self.force_value(&mut v.write(), pos)?;
+    RwLockReadGuard::try_map(v.read(), |v| v.as_list().map(|x| x.as_slice()))
+      .map_err(|e| err!(pos, "expected list, got {}", e.typename()))
   }
 
-  fn force_int(&self, v: &mut Value, pos: Pos) -> Result<i64> {
-    self.force_value(v, pos)?;
+  fn force_int(&self, v: &ValueRef, pos: Pos) -> Result<i64> {
+    self.force_value(&mut v.write(), pos)?;
+    let v = v.read();
     v.as_int()
       .copied()
       .ok_or_else(|| anyhow!("expected int, got {}", v.typename()))

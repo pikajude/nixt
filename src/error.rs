@@ -23,16 +23,25 @@ pub struct SomeLocatedError(pub Box<dyn LocatedError>);
 #[macro_export]
 macro_rules! throw {
   ($pos:expr, $e:expr) => {
-    return Err(
-      $crate::error::LocatedStdError {
-        pos: $pos,
-        err: $e.into(),
-      }
-      .erased(),
-    );
+    return Err($crate::err!($pos, $e));
   };
   ($pos:expr, $l:literal, $($t:tt)+) => {
     $crate::throw!($pos, format!($l, $($t)+))
+  }
+}
+
+#[macro_export]
+macro_rules! err {
+  ($pos:expr, $e:expr) => {
+    $crate::error::LocatedStdError {
+      pos: $pos,
+      err: $e.into(),
+    }
+    .erased()
+  };
+
+  ($pos:expr, $l:literal, $($t:tt)+) => {
+    $crate::err!($pos, format!($l, $($t)+))
   }
 }
 

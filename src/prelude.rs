@@ -1,6 +1,7 @@
 use crate::lock::RwLock;
 pub use crate::{
   atoms::Ident,
+  err,
   error::*,
   syntax::parse::{not_located, Located, Pos},
   throw,

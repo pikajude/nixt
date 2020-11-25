@@ -60,31 +60,40 @@ pub struct Str {
 }
 
 impl Value {
-  pub fn typename(&self) -> &'static str {
+  pub fn typename(&self) -> String {
     match self {
-      Value::Null => "null",
-      Value::Bool { .. } => "bool",
-      Value::Int { .. } => "int",
-      Value::Float { .. } => "float",
-      Value::String { .. } => "string",
-      Value::Path { .. } => "path",
-      Value::Attrs { .. } => "attrset",
-      Value::List { .. } => "list",
-      Value::Lambda { .. } => "lambda",
+      Value::Null => "null".to_string(),
+      Value::Bool { .. } => "bool".to_string(),
+      Value::Int { .. } => "int".to_string(),
+      Value::Float { .. } => "float".to_string(),
+      Value::String { .. } => "string".to_string(),
+      Value::Path { .. } => "path".to_string(),
+      Value::Attrs { .. } => "attrset".to_string(),
+      Value::List { .. } => "list".to_string(),
+      Value::Lambda { .. } => "lambda".to_string(),
       Value::Primop(_, args) => {
         if args.is_empty() {
-          "primop"
+          "primop".to_string()
         } else {
-          "primop-app"
+          "primop-app".to_string()
         }
       }
-      Value::Thunk { .. } => "thunk",
-      Value::Apply { .. } => "function application",
+      Value::Thunk(Thunk { expr, .. }) => format!("thunk @ {}", expr),
+      Value::Apply(lhs, rhs) => {
+        format!("App({:?}\n  {:?})", lhs.read().debug(), rhs.read().debug())
+      }
     }
   }
 
   pub fn thunk(env: EnvRef, expr: ExprRef) -> Self {
     Self::Thunk(Thunk { env, expr })
+  }
+
+  pub fn string_bare<S: Into<String>>(s: S) -> Self {
+    Self::String(Str {
+      s: s.into(),
+      context: Default::default(),
+    })
   }
 
   #[allow(clippy::needless_lifetimes)] // false positive

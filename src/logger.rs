@@ -60,6 +60,10 @@ pub fn reset() {
 pub fn init() -> Result<()> {
   self::reset();
 
+  better_panic::Settings::auto()
+    .most_recent_first(false)
+    .install();
+
   let term_drain = DRAIN_SWITCH.drain();
 
   // #[cfg(debug_assertions)]
