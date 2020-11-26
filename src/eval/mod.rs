@@ -1,3 +1,4 @@
+use self::error::Catchable;
 use crate::{
   prelude::*,
   syntax::expr::{self, *},
@@ -18,6 +19,8 @@ use std::{
 };
 
 mod builtins;
+mod derivation;
+pub mod error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct CoerceOpts {
@@ -64,8 +67,7 @@ impl Eval {
         let v2 = self
           .lookup_var(env.clone(), &*n.read(), false)?
           .expect("internal error");
-        let x = Ok(self.force_value(&v2, Pos::none())?.clone());
-        x
+        self.clone_value(&v2, Pos::none())
       }
       Expr::Let { attrs, body } => {
         let mut new_env = Env::default();
@@ -162,7 +164,7 @@ impl Eval {
         if self.eval_bool(env, cond)? {
           self.eval(env, body)
         } else {
-          throw!(*pos, "assertion failed")
+          bail!(Catchable::AssertionFailure(*pos))
         }
       }
       Expr::List(items) => {
@@ -334,7 +336,9 @@ impl Eval {
   }
 
   fn force_value<'v>(&self, m: &'v ValueRef, pos: Pos) -> Result<RwLockReadGuard<'v, Value>> {
-    let readable = m.upgradable_read();
+    let readable = m
+      .try_upgradable_read()
+      .ok_or_else(|| err!(pos, "recursion detected"))?;
     if readable.needs_eval() {
       let mut upgraded = RwLockUpgradableReadGuard::upgrade(readable);
       let old_value = std::mem::replace(&mut *upgraded, Value::Blackhole);
@@ -690,12 +694,12 @@ impl Eval {
         let mut attrs1 = self.eval_attrs(env, lhs)?;
         let mut attrs2 = self.eval_attrs(env, rhs)?;
 
-        trace!(
-          "combining {:?} and {:?} at {:?}",
-          attrs1.keys(),
-          attrs2.keys(),
-          pos
-        );
+        // trace!(
+        //   "combining {:?} and {:?} at {:?}",
+        //   attrs1.keys(),
+        //   attrs2.keys(),
+        //   pos
+        // );
 
         if attrs1.is_empty() {
           Value::Attrs(attrs2)
@@ -704,7 +708,7 @@ impl Eval {
         } else {
           Arc::make_mut(&mut attrs1).append(Arc::make_mut(&mut attrs2));
 
-          trace!("...into {:?}", attrs1.keys());
+          // trace!("...into {:?}", attrs1.keys());
 
           Value::Attrs(attrs1)
         }

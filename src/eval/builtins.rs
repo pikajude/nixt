@@ -1,4 +1,4 @@
-use super::{CoerceOpts, Eval};
+use super::{error::Catchable, CoerceOpts, Eval};
 use crate::{prelude::*, syntax::expr::LambdaArg, value::*};
 use itertools::Either;
 use parking_lot::Mutex;
@@ -122,6 +122,19 @@ impl Eval {
     self.add_primop("__split", 2, prim_split)?;
     self.add_primop("__concatStringsSep", 2, prim_concat_strings_sep)?;
     self.add_primop("__toJSON", 1, prim_to_json)?;
+    self.add_primop("__findFile", 2, prim_find_file)?;
+    self.add_constant("__nixPath", writable(mk_nix_path()))?;
+
+    self.add_primop(
+      "derivationStrict",
+      1,
+      super::derivation::prim_derivation_strict,
+    )?;
+    let corepkg_derivation = self.eval_file(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/corepkgs/derivation.nix"
+    ))?;
+    self.add_constant("derivation", writable(corepkg_derivation))?;
 
     Ok(())
   }
@@ -832,16 +845,28 @@ fn prim_abort(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
 
 fn prim_throw(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
   let msg = eval.coerce_new_string(pos, &args[0], CoerceOpts::default())?;
-  bail!("thrown error: {}", msg.s);
+  bail!(Catchable::ThrownError(pos, msg.s))
 }
 
-fn prim_try_eval(_: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+fn prim_try_eval(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
   let mut attrs = Attrs::new();
+
+  let success = match eval.force_value(&args[0], pos) {
+    Err(e) => {
+      if e.downcast_ref::<Catchable>().is_some() {
+        false
+      } else {
+        return Err(e);
+      }
+    }
+    Ok(_) => true,
+  };
+
   attrs.insert(
     Ident::from("success"),
     Located {
       pos,
-      v: writable(Value::Bool(true)),
+      v: writable(Value::Bool(success)),
     },
   );
   attrs.insert(
@@ -852,6 +877,140 @@ fn prim_try_eval(_: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
     },
   );
   Ok(Value::Attrs(readable(attrs)))
+}
+
+fn prim_find_file(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let entries = eval.force_list(&args[0], pos)?;
+  let target = eval.force_string_no_context(&args[1], pos)?;
+  let mut path_parts = Path::new(&*target).components();
+  let search_key = path_parts
+    .next()
+    .expect("there must be at least one item in a filepath")
+    .as_os_str();
+  let has_children = path_parts.as_path().iter().next().is_some();
+  let add_children = move |p: PathBuf| {
+    if has_children {
+      p.join(path_parts.as_path())
+    } else {
+      p
+    }
+  };
+
+  for entry in &*entries {
+    let attrs = eval.force_attrs(entry, pos)?;
+    let path = attrs
+      .get(&Ident::from("path"))
+      .ok_or_else(|| err!(pos, "attribute `path' missing"))?;
+    let path = eval.coerce_new_string(
+      pos,
+      &path.v,
+      CoerceOpts {
+        copy_to_store: false,
+        coerce_more: false,
+      },
+    )?;
+    let prefix = attrs
+      .get(&Ident::from("prefix"))
+      .ok_or_else(|| err!(pos, "attribute `prefix' missing"))?;
+    let prefix = eval.force_string_no_context(&prefix.v, pos)?;
+
+    if search_key == &*prefix {
+      let full = add_children(path.s.into());
+      if full.exists() {
+        return Ok(Value::Path(full));
+      }
+    } else if prefix.is_empty() {
+      if let Ok(iter) = std::fs::read_dir(&*path.s) {
+        for next_item in iter {
+          let next_item = next_item?;
+          if next_item.file_name() == search_key {
+            return Ok(Value::Path(add_children(next_item.path())));
+          }
+        }
+      }
+    }
+  }
+
+  bail!(Catchable::ThrownError(
+    pos,
+    format!(
+      "entry `{}' is not in the Nix search path (try adding it using -I)",
+      target
+    )
+  ))
+}
+
+fn mk_nix_path() -> Value {
+  let mut entries = vec![];
+  for entry in get_nix_path().into_iter().chain(std::iter::once(format!(
+    "nix={}/corepkgs",
+    env!("CARGO_MANIFEST_DIR")
+  ))) {
+    let mut parts = entry.splitn(2, '=');
+    let first = parts.next().unwrap();
+    let second = parts.next();
+    let (prefix, path) = match second {
+      Some(x) => (first, x),
+      None => ("", first),
+    };
+    let mut entry_attr = Attrs::new();
+    entry_attr.insert(
+      "path".into(),
+      not_located(writable(Value::string_bare(path))),
+    );
+    entry_attr.insert(
+      "prefix".into(),
+      not_located(writable(Value::string_bare(prefix))),
+    );
+    entries.push(writable(Value::Attrs(readable(entry_attr))));
+  }
+  Value::List(readable(entries))
+}
+
+fn is_uri(s: &str) -> bool {
+  [
+    "http://",
+    "https://",
+    "file://",
+    "channel:",
+    "channel://",
+    "git://",
+    "s3://",
+    "ssh://",
+  ]
+  .iter()
+  .any(|x| s.starts_with(x))
+}
+
+fn parse_nix_path(n: &str) -> Vec<&str> {
+  let mut strings = vec![];
+  let mut start = 0;
+  let mut prev_colon = 0;
+  for (next_colon, _) in n.match_indices(':') {
+    if let Some(x) = n[prev_colon..next_colon].rfind('=') {
+      if is_uri(&n[prev_colon + x + 1..]) {
+        prev_colon = next_colon;
+        continue;
+      }
+    }
+    strings.push(&n[start..next_colon]);
+    start = next_colon + 1;
+  }
+  if start < n.len() {
+    strings.push(&n[start..]);
+  }
+  strings
+}
+
+fn get_nix_path() -> Vec<String> {
+  if let Ok(n) = std::env::var("NIX_PATH") {
+    parse_nix_path(&n)
+      .into_iter()
+      .map(|x| x.to_string())
+      .collect()
+  } else {
+    vec![]
+  }
 }
 
 fn prim_scoped_import(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {

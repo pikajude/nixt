@@ -16,7 +16,6 @@ mod atoms {
   include!(concat!(env!("OUT_DIR"), "/ident.rs"));
 }
 
-// #[cfg(not(feature = "lock-free"))]
 pub mod lock {
   pub use parking_lot::RwLock;
 }
