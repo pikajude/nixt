@@ -1,0 +1,8 @@
+{
+	"new primop definition": {
+		"prefix": "primop",
+		"body": [
+			"fn prim_$1(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {\n  $2\n}"
+		]
+	}
+}

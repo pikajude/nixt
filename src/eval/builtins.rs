@@ -1,8 +1,9 @@
 use super::{CoerceOpts, Eval};
-use crate::{prelude::*, value::*};
+use crate::{prelude::*, syntax::expr::LambdaArg, value::*};
 use itertools::Either;
 use parking_lot::Mutex;
 use regex::Regex;
+use serde_json::Serializer;
 use std::{
   borrow::Cow,
   cmp,
@@ -31,6 +32,21 @@ impl REGEXES {
   }
 }
 
+macro_rules! checktype {
+  ($s:expr, $name:literal, $( $pattern:pat )|+ $( if $guard: expr )? $(,)?) => {
+    $s.add_primop(
+      concat!("__is", $name),
+      1,
+      |eval: &Self, pos, args: Vec<ValueRef>| {
+        Ok(Value::Bool(matches!(
+          &*eval.force_value(&args[0], pos)?,
+          $($pattern)|+ $(if $guard)?
+        )))
+      },
+    )
+  };
+}
+
 impl Eval {
   pub fn create_base_env(&self) -> Result<()> {
     self.add_constant("builtins", writable(Value::Attrs(readable(Attrs::new()))))?;
@@ -51,630 +67,61 @@ impl Eval {
       })),
     )?;
 
-    self.add_primop("throw", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let msg = eval.coerce_new_string(pos, &args[0], CoerceOpts::default())?;
-      bail!("thrown error: {}", msg.s);
-    })?;
+    let scoped_import = self.add_primop("scopedImport", 2, prim_scoped_import)?;
+    let unscoped_import = writable(Value::Apply(
+      scoped_import,
+      writable(Value::Attrs(Default::default())),
+    ));
+    let _ = self.force_value(&unscoped_import, Pos::none())?;
+    self.add_constant("import", unscoped_import)?;
 
-    let scoped_import = self.add_primop(
-      "scopedImport",
-      2,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let real_path = eval
-          .coerce_new_string(pos, &args[1], CoerceOpts::default())?
-          .s;
-        if !Path::new(&real_path).is_absolute() {
-          bail!("path {} does not represent an absolute path", real_path);
-        }
-        let new_env = eval.force_attrs(&args[0], pos)?;
-        if new_env.is_empty() {
-          drop(new_env);
-          eval.eval_file(real_path)
-        } else {
-          bail!(
-            "scopedImport {:?} {:?}",
-            new_env.keys(),
-            args[1].read().debug()
-          );
-        }
-      },
-    )?;
-    let mut unscoped_import =
-      Value::Apply(scoped_import, writable(Value::Attrs(Default::default())));
-    self.force_value(&mut unscoped_import, Pos::none())?;
-    self.add_constant("import", writable(unscoped_import))?;
+    checktype!(self, "Attrs", Value::Attrs{..})?;
+    checktype!(self, "Bool", Value::Bool{..})?;
+    checktype!(self, "List", Value::List{..})?;
+    checktype!(self, "Function", Value::Primop{..} | Value::Lambda{..})?;
+    checktype!(self, "String", Value::String{..})?;
 
-    self.add_primop("abort", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let msg = eval.coerce_new_string(pos, &args[0], CoerceOpts::default())?;
-      bail!(
-        "evaluation aborted with the following error message: '{}'",
-        msg.s
-      )
-    })?;
-
-    self.add_primop("toString", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let s = eval.coerce_new_string(
-        pos,
-        &args[0],
-        CoerceOpts {
-          coerce_more: true,
-          copy_to_store: false,
-        },
-      )?;
-      Ok(Value::String(s))
-    })?;
-
-    self.add_primop("__isString", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      Ok(Value::Bool(
-        eval
-          .force_value(&mut args[0].write(), pos)?
-          .as_string()
-          .is_some(),
-      ))
-    })?;
-
-    self.add_primop("__isList", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      Ok(Value::Bool(
-        eval
-          .force_value(&mut args[0].write(), pos)?
-          .as_list()
-          .is_some(),
-      ))
-    })?;
-
-    self.add_primop("__isAttrs", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      Ok(Value::Bool(
-        eval
-          .force_value(&mut args[0].write(), pos)?
-          .as_attrs()
-          .is_some(),
-      ))
-    })?;
-
-    self.add_primop(
-      "__isFunction",
-      1,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        Ok(Value::Bool(matches!(
-          eval.force_value(&mut args[0].write(), pos)?,
-          Value::Primop { .. } | Value::Lambda { .. },
-        )))
-      },
-    )?;
-
-    self.add_primop(
-      "__intersectAttrs",
-      2,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let attrs1 = eval.force_attrs(&args[0], pos)?;
-        let mut attrs2 = eval.force_attrs(&args[1], pos)?.clone();
-
-        attrs2.drain_filter(|k, _| !attrs1.contains_key(k));
-
-        Ok(Value::Attrs(readable(attrs2)))
-      },
-    )?;
-
-    self.add_primop("__getEnv", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      Ok(Value::String(Str {
-        s: std::env::var(&*eval.force_string_no_context(&args[0], pos)?).unwrap_or_default(),
-        context: Default::default(),
-      }))
-    })?;
-
-    self.add_primop(
-      "__pathExists",
-      1,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let mut ctx = PathSet::new();
-        let path = eval.coerce_to_path(pos, &args[0], &mut ctx)?;
-        Ok(Value::Bool(path.exists()))
-      },
-    )?;
-
-    self.add_primop(
-      "__compareVersions",
-      2,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let v1 = eval.force_string_no_context(&args[0], pos)?;
-        let v2 = eval.force_string_no_context(&args[1], pos)?;
-        Ok(Value::Int(match compare_versions(&*v1, &*v2) {
-          cmp::Ordering::Less => -1,
-          cmp::Ordering::Equal => 0,
-          cmp::Ordering::Greater => 1,
-        }))
-      },
-    )?;
-
-    self.add_primop("baseNameOf", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut str = eval.coerce_new_string(
-        pos,
-        &args[0],
-        CoerceOpts {
-          copy_to_store: false,
-          coerce_more: false,
-        },
-      )?;
-      str.s = Path::new(&str.s)
-        .file_name()
-        .map_or_else(String::new, |p| p.to_string_lossy().to_string());
-      Ok(Value::String(str))
-    })?;
-
-    self.add_primop("dirOf", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let str = eval.coerce_new_string(
-        pos,
-        &args[0],
-        CoerceOpts {
-          copy_to_store: false,
-          coerce_more: false,
-        },
-      )?;
-      let p = Path::new(&str.s);
-      let parent = p.parent().unwrap_or_else(|| {
-        if p.is_absolute() {
-          Path::new("/")
-        } else {
-          Path::new(".")
-        }
-      });
-      if args[0].read().as_path().is_some() {
-        Ok(Value::Path(parent.to_path_buf()))
-      } else {
-        Ok(Value::String(Str {
-          s: parent.display().to_string(),
-          context: str.context,
-        }))
-      }
-    })?;
-
-    self.add_primop("removeAttrs", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let attrs = eval.force_attrs(&args[0], pos)?;
-      let to_remove = eval.force_list(&args[1], pos)?;
-
-      let mut names = vec![];
-      for item in &*to_remove {
-        let name = eval.force_string_no_context(&item, pos)?;
-        names.push(Ident::from(&*name));
-      }
-
-      let mut new_attrs = Attrs::new();
-
-      for (k, v) in attrs.iter() {
-        if !names.contains(k) {
-          new_attrs.insert(k.clone(), v.clone());
-        }
-      }
-
-      Ok(Value::Attrs(readable(new_attrs)))
-    })?;
-
-    self.add_primop(
-      "__listToAttrs",
-      1,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let items = eval.force_list(&args[0], pos)?;
-
-        let mut seen = HashSet::new();
-        let mut new_attrs = Attrs::new();
-
-        for item in &*items {
-          let attrs = eval.force_attrs(&item, pos)?;
-          let name = if let Some(n) = attrs.get(&ident!("name")).cloned() {
-            Ident::from(&*eval.force_string_no_context(&n.v, pos)?)
-          } else {
-            throw!(pos, "`name' attribute missing in a call to `listToAttrs'")
-          };
-
-          if seen.insert(name.clone()) {
-            let value = if let Some(v) = attrs.get(&ident!("value")).cloned() {
-              v
-            } else {
-              throw!(pos, "`value' attribute missing in a call to `listToAttrs'")
-            };
-            new_attrs.insert(name, value);
-          }
-        }
-
-        Ok(Value::Attrs(readable(new_attrs)))
-      },
-    )?;
-
-    self.add_primop("__length", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      Ok(Value::Int(eval.force_list(&args[0], pos)?.len() as i64))
-    })?;
-
-    self.add_primop(
-      "__stringLength",
-      1,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        Ok(Value::Int(eval.force_string(&args[0], pos)?.s.len() as i64))
-      },
-    )?;
-
-    self.add_primop("__substring", 3, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let start = eval.force_int(&args[0], pos)?;
-      let len = eval.force_int(&args[1], pos)?;
-      let mut s = eval.coerce_new_string(pos, &args[2], CoerceOpts::default())?;
-      if let Ok(start) = start.try_into() {
-        if start < s.s.len() {
-          s.s = s.s.split_off(start);
-          if let Ok(len) = len.try_into() {
-            if len < s.s.len() {
-              s.s.truncate(len);
-            }
-          }
-        }
-        Ok(Value::String(s))
-      } else {
-        throw!(pos, "negative start position in `substring'")
-      }
-    })?;
-
-    self.add_primop("__elemAt", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let ix = eval.force_int(&args[1], pos)?;
-      let list = eval.force_list(&args[0], pos)?;
-      let val = list.get(ix as usize);
-      match val {
-        Some(x) => eval.clone_value(x, pos),
-        None => throw!(pos, "list index {} out of bounds", ix),
-      }
-    })?;
-
-    self.add_primop("__head", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let ix = 0;
-      let list = eval.force_list(&args[0], pos)?;
-      let val = list.get(ix as usize);
-      match val {
-        Some(x) => eval.clone_value(x, pos),
-        None => throw!(pos, "list index {} out of bounds", ix),
-      }
-    })?;
-
-    self.add_primop("__tail", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut val = eval.force_list(&args[0], pos)?.to_vec();
-      if val.is_empty() {
-        throw!(pos, "`tail' called on an empty list");
-      }
-      let val = val.split_off(1);
-      Ok(Value::List(readable(val)))
-    })?;
-
-    self.add_primop("__seq", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      eval.force_value(&mut args[0].write(), pos)?;
-      eval.clone_value(&args[1], pos)
-    })?;
-
-    self.add_primop("__elem", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut v1 = args[0].write();
-      let mut exists = false;
-
-      for item in eval.force_list(&args[1], pos)?.iter() {
-        if eval.values_equal(&mut v1, &mut item.write(), pos)? {
-          exists = true;
-          break;
-        }
-      }
-
-      Ok(Value::Bool(exists))
-    })?;
-
-    self.add_primop(
-      "__genericClosure",
-      1,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let attrs = eval.force_attrs(&args[0], pos)?;
-
-        let s = attrs
-          .get(&Ident::from("startSet"))
-          .ok_or_else(|| err!(pos, "attribute `startSet` required"))?;
-
-        let op = attrs
-          .get(&Ident::from("operator"))
-          .ok_or_else(|| err!(pos, "attribute `operator' required"))?;
-
-        let start_set = eval.force_list(&s.v, pos)?;
-
-        let mut work_set = vec![];
-
-        for item in &*start_set {
-          work_set.push(item.clone());
-        }
-
-        let mut op = op.v.write();
-
-        let mut res = vec![];
-        let mut done_keys = BTreeSet::new();
-
-        while let Some(ws) = work_set.pop() {
-          let e = eval.force_attrs(&ws, pos)?.clone();
-          if let Some(key) = e.get(&Ident::from("key")) {
-            let key = eval.clone_value(&key.v, key.pos)?;
-            if !done_keys.insert(CompareValues(Cow::Owned(key))) {
-              continue;
-            }
-            res.push(ws.clone());
-            let v = eval.call_function(&mut op, &ws, pos)?;
-            let new_values = v
-              .as_list()
-              .ok_or_else(|| err!(pos, "`operator' should return a list, not {}", v.typename()))?;
-
-            for item in new_values.iter() {
-              work_set.push(item.clone());
-            }
-          }
-        }
-
-        Ok(Value::List(readable(res)))
-      },
-    )?;
-
-    self.add_primop(
-      "__concatLists",
-      1,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let items = eval.force_list(&args[0], pos)?;
-
-        let mut new_list = vec![];
-
-        for item in &*items {
-          new_list.extend(eval.force_list(&item, pos)?.iter().cloned());
-        }
-
-        Ok(Value::List(readable(new_list)))
-      },
-    )?;
-
+    self.add_primop("throw", 1, prim_throw)?;
+    self.add_primop("abort", 1, prim_abort)?;
+    self.add_primop("__tryEval", 1, prim_try_eval)?;
+    self.add_primop("toString", 1, prim_to_string)?;
+    self.add_primop("__intersectAttrs", 2, prim_intersect_attrs)?;
+    self.add_primop("__getEnv", 1, prim_get_env)?;
+    self.add_primop("__pathExists", 1, prim_path_exists)?;
+    self.add_primop("__compareVersions", 2, prim_compare_versions)?;
+    self.add_primop("baseNameOf", 1, prim_basename_of)?;
+    self.add_primop("dirOf", 1, prim_dir_of)?;
+    self.add_primop("removeAttrs", 2, prim_remove_attrs)?;
+    self.add_primop("__listToAttrs", 1, prim_list_to_attrs)?;
+    self.add_primop("__length", 1, prim_length)?;
+    self.add_primop("__stringLength", 1, prim_string_length)?;
+    self.add_primop("__substring", 3, prim_substring)?;
+    self.add_primop("__elemAt", 2, prim_elem_at)?;
+    self.add_primop("__head", 1, prim_head)?;
+    self.add_primop("__tail", 1, prim_tail)?;
+    self.add_primop("__seq", 2, prim_seq)?;
+    self.add_primop("__elem", 2, prim_elem)?;
+    self.add_primop("__genericClosure", 1, prim_generic_closure)?;
+    self.add_primop("__concatLists", 1, prim_concat_lists)?;
     self.add_primop(
       "__unsafeDiscardStringContext",
       1,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        Ok(Value::String(Str {
-          s: eval
-            .coerce_new_string(pos, &args[0], CoerceOpts::default())?
-            .s,
-          context: Default::default(),
-        }))
-      },
+      prim_unsafe_discard_string_context,
     )?;
-
-    self.add_primop("__attrNames", 1, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut names = vec![];
-
-      for k in eval.force_attrs(&args[0], pos)?.keys() {
-        names.push(writable(Value::String(Str {
-          s: k.to_string(),
-          context: Default::default(),
-        })));
-      }
-
-      Ok(Value::List(readable(names)))
-    })?;
-
-    self.add_primop("__mapAttrs", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let attrs = eval.force_attrs(&args[1], pos)?;
-
-      let mut new_attrs = Attrs::new();
-
-      for (k, v) in &*attrs {
-        new_attrs.insert(
-          k.clone(),
-          Located {
-            pos,
-            v: writable(Value::Apply(
-              writable(Value::Apply(
-                args[0].clone(),
-                writable(Value::String(Str {
-                  s: k.to_string(),
-                  context: Default::default(),
-                })),
-              )),
-              v.v.clone(),
-            )),
-          },
-        );
-      }
-
-      Ok(Value::Attrs(readable(new_attrs)))
-    })?;
-
-    self.add_primop("__genList", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let len = eval.force_int(&args[1], pos)?;
-      if len < 0 {
-        throw!(pos, "cannot create a list of size {}", len);
-      }
-      let mut newlist = Vec::with_capacity(len as usize);
-      for i in 0..len {
-        newlist.push(writable(Value::Apply(
-          args[0].clone(),
-          writable(Value::Int(i)),
-        )));
-      }
-      Ok(Value::List(readable(newlist)))
-    })?;
-
-    self.add_primop("map", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let items = eval.force_list(&args[1], pos)?.to_vec();
-
-      let mut new_list = vec![];
-
-      for item in items {
-        new_list.push(writable(Value::Apply(args[0].clone(), item)));
-      }
-
-      Ok(Value::List(readable(new_list)))
-    })?;
-
-    self.add_primop("__filter", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut functor = args[0].write();
-      // TODO: why does the lock on args[1] needs to be released before the filter fn
-      // is called?
-      let items = eval.force_list(&args[1], pos)?.to_vec();
-
-      let mut new_list = vec![];
-
-      for item in items {
-        let result = match eval.call_function(&mut functor, &item, pos)? {
-          Value::Bool(b) => b,
-          v => throw!(
-            pos,
-            "closure to `filter' should produce bool, not {}",
-            v.typename()
-          ),
-        };
-        if result {
-          new_list.push(item.clone());
-        }
-      }
-
-      Ok(Value::List(readable(new_list)))
-    })?;
-
-    self.add_primop("__lessThan", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut v1 = args[0].write();
-      let mut v2 = args[1].write();
-
-      let v1 = CompareValues(Cow::Borrowed(eval.force_value(&mut v1, pos)?));
-      let v2 = CompareValues(Cow::Borrowed(eval.force_value(&mut v2, pos)?));
-
-      if let Some(res) = v1.partial_cmp(&v2) {
-        Ok(Value::Bool(res == cmp::Ordering::Less))
-      } else {
-        bail!(
-          "cannot compare {} with {}",
-          v1.0.typename(),
-          v2.0.typename()
-        )
-      }
-    })?;
-
-    self.add_primop("__sub", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut v1 = args[0].write();
-      let mut v2 = args[1].write();
-
-      eval.force_value(&mut v1, pos)?;
-      eval.force_value(&mut v2, pos)?;
-
-      if let Some(pair) = super::numbers(&*v1, &*v2) {
-        Ok(match pair {
-          Either::Left((a, b)) => Value::Int(a - b),
-          Either::Right((a, b)) => Value::Float(a - b),
-        })
-      } else {
-        throw!(
-          pos,
-          "cannot subtract {} from {}",
-          v2.typename(),
-          v1.typename()
-        )
-      }
-    })?;
-
-    self.add_primop("__mul", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut v1 = args[0].write();
-      let mut v2 = args[1].write();
-
-      eval.force_value(&mut v1, pos)?;
-      eval.force_value(&mut v2, pos)?;
-
-      if let Some(pair) = super::numbers(&*v1, &*v2) {
-        Ok(match pair {
-          Either::Left((a, b)) => Value::Int(a * b),
-          Either::Right((a, b)) => Value::Float(a * b),
-        })
-      } else {
-        throw!(
-          pos,
-          "cannot multiply {} and {}",
-          v2.typename(),
-          v1.typename()
-        )
-      }
-    })?;
-
-    self.add_primop("__div", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let mut v1 = args[0].write();
-      let mut v2 = args[1].write();
-
-      eval.force_value(&mut v1, pos)?;
-      eval.force_value(&mut v2, pos)?;
-
-      if let Some(pair) = super::numbers(&*v1, &*v2) {
-        Ok(match pair {
-          Either::Left((a, b)) => {
-            if b == 0 {
-              throw!(pos, "division by zero")
-            }
-            Value::Int(a / b)
-          }
-          Either::Right((a, b)) => {
-            if b == 0.0 {
-              throw!(pos, "division by zero")
-            }
-            Value::Float(a / b)
-          }
-        })
-      } else {
-        throw!(pos, "cannot divide {} and {}", v2.typename(), v1.typename())
-      }
-    })?;
-
-    self.add_primop("__split", 2, |eval: &Self, pos, args: Vec<ValueRef>| {
-      let regex = eval.force_string_no_context(&args[0], pos)?;
-      let reg = REGEXES.get(&&*regex)?;
-
-      let mut items = vec![];
-      let haystack = eval.force_string(&args[1], pos)?;
-
-      let mut prev_end = 0;
-
-      for cap in reg.captures_iter(&haystack.s) {
-        let capture_range = cap.get(0).expect("captures always have at least one group");
-        items.push(writable(Value::string_bare(
-          &haystack.s[prev_end..capture_range.start()],
-        )));
-        prev_end = capture_range.end();
-        items.push(writable(Value::List(readable(
-          cap
-            .iter()
-            .skip(1)
-            .filter_map(|x| x.map(|y| writable(Value::string_bare(y.as_str()))))
-            .collect::<Vec<_>>(),
-        ))));
-      }
-
-      items.push(writable(Value::string_bare(&haystack.s[prev_end..])));
-
-      Ok(Value::List(readable(items)))
-    })?;
-
-    self.add_primop(
-      "__concatStringsSep",
-      2,
-      |eval: &Self, pos, args: Vec<ValueRef>| {
-        let mut out = String::new();
-        let mut ctx = PathSet::new();
-
-        let sep = eval.force_string(&args[0], pos)?;
-        let strings = eval.force_list(&args[1], pos)?;
-
-        for (i, item) in strings.iter().enumerate() {
-          if i > 0 {
-            out.push_str(&sep.s);
-          }
-          out.push_str(
-            &eval
-              .coerce_to_string(pos, &item, &mut ctx, CoerceOpts::default())?
-              .as_str(),
-          );
-        }
-
-        Ok(Value::String(Str {
-          s: out,
-          context: ctx,
-        }))
-      },
-    )?;
+    self.add_primop("__attrNames", 1, prim_attr_names)?;
+    self.add_primop("__mapAttrs", 2, prim_map_attrs)?;
+    self.add_primop("__genList", 2, prim_gen_list)?;
+    self.add_primop("__functionArgs", 1, prim_function_args)?;
+    self.add_primop("__addErrorContext", 2, prim_add_error_context)?;
+    self.add_primop("map", 2, prim_map)?;
+    self.add_primop("__filter", 2, prim_filter)?;
+    self.add_primop("__lessThan", 2, prim_less_than)?;
+    self.add_primop("__sub", 2, prim_sub)?;
+    self.add_primop("__mul", 2, prim_mul)?;
+    self.add_primop("__div", 2, prim_div)?;
+    self.add_primop("__split", 2, prim_split)?;
+    self.add_primop("__concatStringsSep", 2, prim_concat_strings_sep)?;
+    self.add_primop("__toJSON", 1, prim_to_json)?;
 
     Ok(())
   }
@@ -719,9 +166,7 @@ impl Eval {
     context: &mut PathSet,
     opts: CoerceOpts,
   ) -> Result<String> {
-    self.force_value(&mut value.write(), pos)?;
-
-    Ok(match &*value.read() {
+    Ok(match &*self.force_value(value, pos)? {
       Value::String(Str { context: c1, s }) => {
         context.extend(c1.clone());
         s.clone()
@@ -846,5 +291,617 @@ impl Ord for CompareValues<'_> {
     self
       .partial_cmp(other)
       .expect("incomparable values in CompareValues")
+  }
+}
+
+fn prim_concat_strings_sep(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut out = String::new();
+  let mut ctx = PathSet::new();
+
+  let sep = eval.force_string(&args[0], pos)?;
+  let strings = eval.force_list(&args[1], pos)?;
+
+  for (i, item) in strings.iter().enumerate() {
+    if i > 0 {
+      out.push_str(&sep.s);
+    }
+    out.push_str(
+      &eval
+        .coerce_to_string(pos, &item, &mut ctx, CoerceOpts::default())?
+        .as_str(),
+    );
+  }
+
+  Ok(Value::String(Str {
+    s: out,
+    context: ctx,
+  }))
+}
+
+fn prim_split(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let regex = eval.force_string_no_context(&args[0], pos)?;
+  let reg = REGEXES.get(&&*regex)?;
+
+  let mut items = vec![];
+  let haystack = eval.force_string(&args[1], pos)?;
+
+  let mut prev_end = 0;
+
+  for cap in reg.captures_iter(&haystack.s) {
+    let capture_range = cap.get(0).expect("captures always have at least one group");
+    items.push(writable(Value::string_bare(
+      &haystack.s[prev_end..capture_range.start()],
+    )));
+    prev_end = capture_range.end();
+    items.push(writable(Value::List(readable(
+      cap
+        .iter()
+        .skip(1)
+        .filter_map(|x| x.map(|y| writable(Value::string_bare(y.as_str()))))
+        .collect::<Vec<_>>(),
+    ))));
+  }
+
+  items.push(writable(Value::string_bare(&haystack.s[prev_end..])));
+
+  Ok(Value::List(readable(items)))
+}
+
+fn prim_div(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let v1 = eval.force_value(&args[0], pos)?;
+  let v2 = eval.force_value(&args[1], pos)?;
+
+  if let Some(pair) = super::numbers(&*v1, &*v2) {
+    Ok(match pair {
+      Either::Left((a, b)) => {
+        if b == 0 {
+          throw!(pos, "division by zero")
+        }
+        Value::Int(a / b)
+      }
+      Either::Right((a, b)) => {
+        if b == 0.0 {
+          throw!(pos, "division by zero")
+        }
+        Value::Float(a / b)
+      }
+    })
+  } else {
+    throw!(pos, "cannot divide {} and {}", v2.typename(), v1.typename())
+  }
+}
+
+fn prim_mul(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let v1 = eval.force_value(&args[0], pos)?;
+  let v2 = eval.force_value(&args[1], pos)?;
+
+  if let Some(pair) = super::numbers(&*v1, &*v2) {
+    Ok(match pair {
+      Either::Left((a, b)) => Value::Int(a * b),
+      Either::Right((a, b)) => Value::Float(a * b),
+    })
+  } else {
+    throw!(
+      pos,
+      "cannot multiply {} and {}",
+      v2.typename(),
+      v1.typename()
+    )
+  }
+}
+
+fn prim_sub(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let v1 = eval.force_value(&args[0], pos)?;
+  let v2 = eval.force_value(&args[1], pos)?;
+
+  if let Some(pair) = super::numbers(&*v1, &*v2) {
+    Ok(match pair {
+      Either::Left((a, b)) => Value::Int(a - b),
+      Either::Right((a, b)) => Value::Float(a - b),
+    })
+  } else {
+    throw!(
+      pos,
+      "cannot subtract {} from {}",
+      v2.typename(),
+      v1.typename()
+    )
+  }
+}
+
+fn prim_less_than(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let v1 = eval.force_value(&args[0], pos)?;
+  let v2 = eval.force_value(&args[1], pos)?;
+
+  let v1 = CompareValues(Cow::Borrowed(&*v1));
+  let v2 = CompareValues(Cow::Borrowed(&*v2));
+
+  if let Some(res) = v1.partial_cmp(&v2) {
+    Ok(Value::Bool(res == cmp::Ordering::Less))
+  } else {
+    bail!(
+      "cannot compare {} with {}",
+      v1.0.typename(),
+      v2.0.typename()
+    )
+  }
+}
+
+fn prim_filter(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let items = eval.force_list(&args[1], pos)?;
+
+  let mut new_list = vec![];
+
+  for item in items.iter() {
+    let result = match eval.call_function(&args[0], &item, pos)? {
+      Value::Bool(b) => b,
+      v => throw!(
+        pos,
+        "closure to `filter' should produce bool, not {}",
+        v.typename()
+      ),
+    };
+    if result {
+      new_list.push(item.clone());
+    }
+  }
+
+  Ok(Value::List(readable(new_list)))
+}
+
+fn prim_map(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let items = eval.force_list(&args[1], pos)?.to_vec();
+
+  let mut new_list = vec![];
+
+  for item in items {
+    new_list.push(writable(Value::Apply(args[0].clone(), item)));
+  }
+
+  Ok(Value::List(readable(new_list)))
+}
+
+fn prim_add_error_context(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  match eval.clone_value(&args[1], pos) {
+    Ok(v) => Ok(v),
+    Err(e) => {
+      let context = eval.coerce_new_string(pos, &args[0], CoerceOpts::default())?;
+      Err(e.context(context.s))
+    }
+  }
+}
+
+fn prim_function_args(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let arg0 = eval.force_value(&args[0], pos)?;
+  let (_, lambda) = arg0
+    .as_lambda()
+    .ok_or_else(|| err!(pos, "`functionArgs' requires a function"))?;
+  match &lambda.arg {
+    LambdaArg::Plain(_) => Ok(Value::Attrs(readable(Attrs::new()))),
+    LambdaArg::Formals { formals, .. } => {
+      let mut attrs = Attrs::new();
+      for f in &formals.formals {
+        attrs.insert(
+          f.name.clone(),
+          Located {
+            v: writable(Value::Bool(f.def.is_some())),
+            pos,
+          },
+        );
+      }
+      Ok(Value::Attrs(readable(attrs)))
+    }
+  }
+}
+
+fn prim_gen_list(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let len = eval.force_int(&args[1], pos)?;
+  if len < 0 {
+    throw!(pos, "cannot create a list of size {}", len);
+  }
+  let mut newlist = Vec::with_capacity(len as usize);
+  for i in 0..len {
+    newlist.push(writable(Value::Apply(
+      args[0].clone(),
+      writable(Value::Int(i)),
+    )));
+  }
+  Ok(Value::List(readable(newlist)))
+}
+
+fn prim_map_attrs(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let attrs = eval.force_attrs(&args[1], pos)?;
+
+  let mut new_attrs = Attrs::new();
+
+  for (k, v) in &*attrs {
+    new_attrs.insert(
+      k.clone(),
+      Located {
+        pos,
+        v: writable(Value::Apply(
+          writable(Value::Apply(
+            args[0].clone(),
+            writable(Value::String(Str {
+              s: k.to_string(),
+              context: Default::default(),
+            })),
+          )),
+          v.v.clone(),
+        )),
+      },
+    );
+  }
+
+  Ok(Value::Attrs(readable(new_attrs)))
+}
+
+fn prim_attr_names(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut names = vec![];
+
+  for k in eval.force_attrs(&args[0], pos)?.keys() {
+    names.push(writable(Value::String(Str {
+      s: k.to_string(),
+      context: Default::default(),
+    })));
+  }
+
+  Ok(Value::List(readable(names)))
+}
+
+fn prim_unsafe_discard_string_context(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  Ok(Value::String(Str {
+    s: eval
+      .coerce_new_string(pos, &args[0], CoerceOpts::default())?
+      .s,
+    context: Default::default(),
+  }))
+}
+
+fn prim_concat_lists(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let items = eval.force_list(&args[0], pos)?;
+
+  let mut new_list = vec![];
+
+  for item in &*items {
+    new_list.extend(eval.force_list(&item, pos)?.iter().cloned());
+  }
+
+  Ok(Value::List(readable(new_list)))
+}
+
+fn prim_generic_closure(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let attrs = eval.force_attrs(&args[0], pos)?;
+
+  let s = attrs
+    .get(&Ident::from("startSet"))
+    .ok_or_else(|| err!(pos, "attribute `startSet` required"))?;
+
+  let op = attrs
+    .get(&Ident::from("operator"))
+    .ok_or_else(|| err!(pos, "attribute `operator' required"))?;
+
+  let start_set = eval.force_list(&s.v, pos)?;
+
+  let mut work_set = vec![];
+
+  for item in &*start_set {
+    work_set.push(item.clone());
+  }
+
+  let mut res = vec![];
+  let mut done_keys = BTreeSet::new();
+
+  while let Some(ws) = work_set.pop() {
+    let e = eval.force_attrs(&ws, pos)?.clone();
+    if let Some(key) = e.get(&Ident::from("key")) {
+      let key = eval.clone_value(&key.v, key.pos)?;
+      if !done_keys.insert(CompareValues(Cow::Owned(key))) {
+        continue;
+      }
+      res.push(ws.clone());
+      let v = eval.call_function(&op.v, &ws, pos)?;
+      let new_values = v
+        .as_list()
+        .ok_or_else(|| err!(pos, "`operator' should return a list, not {}", v.typename()))?;
+
+      for item in new_values.iter() {
+        work_set.push(item.clone());
+      }
+    }
+  }
+
+  Ok(Value::List(readable(res)))
+}
+
+fn prim_elem(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut exists = false;
+
+  for item in eval.force_list(&args[1], pos)?.iter() {
+    if eval.values_equal(&args[0], &item, pos)? {
+      exists = true;
+      break;
+    }
+  }
+
+  Ok(Value::Bool(exists))
+}
+
+fn prim_seq(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let _ = eval.force_value(&args[0], pos)?;
+  eval.clone_value(&args[1], pos)
+}
+
+fn prim_tail(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut val = eval.force_list(&args[0], pos)?.to_vec();
+  if val.is_empty() {
+    throw!(pos, "`tail' called on an empty list");
+  }
+  let val = val.split_off(1);
+  Ok(Value::List(readable(val)))
+}
+
+fn prim_head(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let ix = 0;
+  let list = eval.force_list(&args[0], pos)?;
+  let val = list.get(ix as usize);
+  match val {
+    Some(x) => eval.clone_value(x, pos),
+    None => throw!(pos, "list index {} out of bounds", ix),
+  }
+}
+
+fn prim_elem_at(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let ix = eval.force_int(&args[1], pos)?;
+  let list = eval.force_list(&args[0], pos)?;
+  let val = list.get(ix as usize);
+  match val {
+    Some(x) => eval.clone_value(x, pos),
+    None => throw!(pos, "list index {} out of bounds", ix),
+  }
+}
+
+fn prim_substring(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let start = eval.force_int(&args[0], pos)?;
+  let len = eval.force_int(&args[1], pos)?;
+  let mut s = eval.coerce_new_string(pos, &args[2], CoerceOpts::default())?;
+  if let Ok(start) = start.try_into() {
+    if start < s.s.len() {
+      s.s = s.s.split_off(start);
+      if let Ok(len) = len.try_into() {
+        if len < s.s.len() {
+          s.s.truncate(len);
+        }
+      }
+    }
+    Ok(Value::String(s))
+  } else {
+    throw!(pos, "negative start position in `substring'")
+  }
+}
+
+fn prim_string_length(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  Ok(Value::Int(eval.force_string(&args[0], pos)?.s.len() as i64))
+}
+
+fn prim_length(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  Ok(Value::Int(eval.force_list(&args[0], pos)?.len() as i64))
+}
+
+fn prim_list_to_attrs(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let items = eval.force_list(&args[0], pos)?;
+
+  let mut seen = HashSet::new();
+  let mut new_attrs = Attrs::new();
+
+  for item in &*items {
+    let attrs = eval.force_attrs(&item, pos)?;
+    let name = if let Some(n) = attrs.get(&ident!("name")).cloned() {
+      Ident::from(&*eval.force_string_no_context(&n.v, pos)?)
+    } else {
+      throw!(pos, "`name' attribute missing in a call to `listToAttrs'")
+    };
+
+    if seen.insert(name.clone()) {
+      let value = if let Some(v) = attrs.get(&ident!("value")).cloned() {
+        v
+      } else {
+        throw!(pos, "`value' attribute missing in a call to `listToAttrs'")
+      };
+      new_attrs.insert(name, value);
+    }
+  }
+
+  Ok(Value::Attrs(readable(new_attrs)))
+}
+
+fn prim_remove_attrs(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let attrs = eval.force_attrs(&args[0], pos)?;
+  let to_remove = eval.force_list(&args[1], pos)?;
+
+  let mut names = vec![];
+  for item in &*to_remove {
+    let name = eval.force_string_no_context(&item, pos)?;
+    names.push(Ident::from(&*name));
+  }
+
+  let mut new_attrs = Attrs::new();
+
+  for (k, v) in attrs.iter() {
+    if !names.contains(k) {
+      new_attrs.insert(k.clone(), v.clone());
+    }
+  }
+
+  Ok(Value::Attrs(readable(new_attrs)))
+}
+
+fn prim_dir_of(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let str = eval.coerce_new_string(
+    pos,
+    &args[0],
+    CoerceOpts {
+      copy_to_store: false,
+      coerce_more: false,
+    },
+  )?;
+  let p = Path::new(&str.s);
+  let parent = p.parent().unwrap_or_else(|| {
+    if p.is_absolute() {
+      Path::new("/")
+    } else {
+      Path::new(".")
+    }
+  });
+  if args[0].read().as_path().is_some() {
+    Ok(Value::Path(parent.to_path_buf()))
+  } else {
+    Ok(Value::String(Str {
+      s: parent.display().to_string(),
+      context: str.context,
+    }))
+  }
+}
+
+fn prim_basename_of(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut str = eval.coerce_new_string(
+    pos,
+    &args[0],
+    CoerceOpts {
+      copy_to_store: false,
+      coerce_more: false,
+    },
+  )?;
+  str.s = Path::new(&str.s)
+    .file_name()
+    .map_or_else(String::new, |p| p.to_string_lossy().to_string());
+  Ok(Value::String(str))
+}
+
+fn prim_compare_versions(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let v1 = eval.force_string_no_context(&args[0], pos)?;
+  let v2 = eval.force_string_no_context(&args[1], pos)?;
+  Ok(Value::Int(match compare_versions(&*v1, &*v2) {
+    cmp::Ordering::Less => -1,
+    cmp::Ordering::Equal => 0,
+    cmp::Ordering::Greater => 1,
+  }))
+}
+
+fn prim_path_exists(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut ctx = PathSet::new();
+  let path = eval.coerce_to_path(pos, &args[0], &mut ctx)?;
+  Ok(Value::Bool(path.exists()))
+}
+
+fn prim_get_env(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  Ok(Value::String(Str {
+    s: std::env::var(&*eval.force_string_no_context(&args[0], pos)?).unwrap_or_default(),
+    context: Default::default(),
+  }))
+}
+
+fn prim_intersect_attrs(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let attrs1 = eval.force_attrs(&args[0], pos)?;
+  let mut attrs2 = eval.force_attrs(&args[1], pos)?.clone();
+
+  attrs2.drain_filter(|k, _| !attrs1.contains_key(k));
+
+  Ok(Value::Attrs(readable(attrs2)))
+}
+
+fn prim_to_string(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let s = eval.coerce_new_string(
+    pos,
+    &args[0],
+    CoerceOpts {
+      coerce_more: true,
+      copy_to_store: false,
+    },
+  )?;
+  Ok(Value::String(s))
+}
+
+fn prim_abort(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let msg = eval.coerce_new_string(pos, &args[0], CoerceOpts::default())?;
+  bail!(
+    "evaluation aborted with the following error message: '{}'",
+    msg.s
+  )
+}
+
+fn prim_throw(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let msg = eval.coerce_new_string(pos, &args[0], CoerceOpts::default())?;
+  bail!("thrown error: {}", msg.s);
+}
+
+fn prim_try_eval(_: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut attrs = Attrs::new();
+  attrs.insert(
+    Ident::from("success"),
+    Located {
+      pos,
+      v: writable(Value::Bool(true)),
+    },
+  );
+  attrs.insert(
+    ident!("value"),
+    Located {
+      pos,
+      v: args[0].clone(),
+    },
+  );
+  Ok(Value::Attrs(readable(attrs)))
+}
+
+fn prim_scoped_import(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let real_path = eval
+    .coerce_new_string(pos, &args[1], CoerceOpts::default())?
+    .s;
+  if !Path::new(&real_path).is_absolute() {
+    bail!("path {} does not represent an absolute path", real_path);
+  }
+  let new_env = eval.force_attrs(&args[0], pos)?;
+  if new_env.is_empty() {
+    drop(new_env);
+    eval.eval_file(real_path)
+  } else {
+    bail!(
+      "scopedImport {:?} {:?}",
+      new_env.keys(),
+      args[1].read().debug()
+    );
+  }
+}
+
+fn prim_to_json(eval: &Eval, pos: Pos, args: Vec<ValueRef>) -> Result<Value> {
+  let mut ctx = PathSet::new();
+  let mut s = vec![];
+  let mut ser = Serializer::new(&mut s);
+
+  serialize_json(eval, &mut ser, &mut ctx, &args[0], pos)?;
+
+  Ok(Value::String(Str {
+    s: String::from_utf8_lossy(&s).to_string(),
+    context: ctx,
+  }))
+}
+
+fn serialize_json(
+  eval: &Eval,
+  ser: &mut Serializer<&mut Vec<u8>>,
+  ctx: &mut PathSet,
+  v: &ValueRef,
+  pos: Pos,
+) -> Result<()> {
+  use serde::ser::Serializer as _;
+
+  match &*eval.force_value(v, pos)? {
+    Value::Null => Ok(ser.serialize_none()?),
+    Value::String(Str { s, context }) => {
+      ctx.extend(context.iter().cloned());
+      Ok(ser.serialize_str(s)?)
+    }
+    x => unimplemented!("{:?}", x.debug()),
   }
 }

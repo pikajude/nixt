@@ -16,12 +16,12 @@ mod atoms {
   include!(concat!(env!("OUT_DIR"), "/ident.rs"));
 }
 
-#[cfg(not(feature = "trace-evaluator"))]
+// #[cfg(not(feature = "lock-free"))]
 pub mod lock {
   pub use parking_lot::RwLock;
 }
 
-#[cfg(feature = "trace-evaluator")] pub mod lock;
+// #[cfg(feature = "lock-free")] pub mod lock;
 
 pub mod error;
 pub mod eval;

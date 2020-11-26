@@ -364,6 +364,10 @@ formals: Formals = {
       formals,
       ellipsis: ell.flatten().is_some()
     }
+  },
+  "{" <ell:"..."?> "}" => Formals {
+    formals: vec![],
+    ellipsis: ell.is_some()
   }
 }
 

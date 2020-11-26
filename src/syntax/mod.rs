@@ -17,7 +17,11 @@ pub mod parse;
 static INLINE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 lazy_static! {
-  pub(crate) static ref FILES: Mutex<Files<String>> = Mutex::new(Files::new());
+  pub(crate) static ref FILES: Mutex<Files<String>> = {
+    let mut files = Files::new();
+    files.add("<unknown>", "<unknown>".to_string());
+    Mutex::new(files)
+  };
 }
 
 fn parse_str(file_id: FileId, base_path: &Path, input: &str, env: &StaticEnvRef) -> Result<Expr> {

@@ -1,6 +1,11 @@
 use parking_lot::{RwLock as Lock, RwLockReadGuard, RwLockWriteGuard};
 use std::path::Path;
 
+#[cfg(not(feature = "trace-locks"))]
+macro_rules! trace {
+  ($($t:tt)*) => {};
+}
+
 #[derive(Debug, Default)]
 pub struct RwLock<T>(Lock<T>);
 

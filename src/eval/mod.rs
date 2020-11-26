@@ -4,7 +4,9 @@ use crate::{
   value::{Attrs, *},
 };
 use itertools::Either;
-use parking_lot::{MappedRwLockReadGuard, Mutex, RwLockReadGuard};
+use parking_lot::{
+  MappedRwLockReadGuard, Mutex, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard,
+};
 use std::{
   collections::HashMap,
   num::NonZeroU8,
@@ -62,9 +64,8 @@ impl Eval {
         let v2 = self
           .lookup_var(env.clone(), &*n.read(), false)?
           .expect("internal error");
-        let mut v2 = v2.write();
-        self.force_value(&mut v2, Pos::none())?;
-        Ok(v2.clone())
+        let x = Ok(self.force_value(&v2, Pos::none())?.clone());
+        x
       }
       Expr::Let { attrs, body } => {
         let mut new_env = Env::default();
@@ -84,9 +85,9 @@ impl Eval {
         self.eval(&new_env, &*body)
       }
       Expr::Apply { pos, lhs, rhs } => {
-        let mut vfun = self.eval(env, &*lhs)?;
+        let vfun = writable(self.eval(env, &*lhs)?);
         let arg = self.maybe_thunk(rhs.clone(), env.clone())?;
-        self.call_function(&mut vfun, &arg, *pos)
+        self.call_function(&vfun, &arg, *pos)
       }
       Expr::If {
         cond, rhs1, rhs2, ..
@@ -98,17 +99,16 @@ impl Eval {
         }
       }
       Expr::HasAttr { lhs, path } => {
-        let mut vtmp = self.eval(env, &*lhs)?;
+        let mut vtmp = writable(self.eval(env, &*lhs)?);
 
         for item in path {
-          self.force_value(&mut vtmp, item.pos)?;
+          let tmp2 = self.force_value(&vtmp, item.pos)?;
           let name = self.get_name(&item.v, env)?;
-          let vguard = vtmp;
-          if let Some(vguard2) = vguard.as_attrs() {
+          if let Some(vguard2) = tmp2.as_attrs() {
             if let Some(subattrs) = vguard2.get(&name) {
-              let tmp_value = self.clone_value(&subattrs.v, item.pos)?;
-              drop(vguard);
-              vtmp = tmp_value;
+              let n = subattrs.v.clone();
+              drop(tmp2);
+              vtmp = n;
               continue;
             }
           }
@@ -136,7 +136,12 @@ impl Eval {
         lhs,
         def,
         path,
-      } => self.select(env, *pos, lhs, def.as_deref(), path),
+      } => Ok(
+        self
+          .select(env, *pos, lhs, def.as_deref(), path)?
+          .read()
+          .clone(),
+      ),
       Expr::With {
         env: with_env,
         body,
@@ -172,8 +177,7 @@ impl Eval {
   }
 
   fn clone_value(&self, v: &ValueRef, pos: Pos) -> Result<Value> {
-    self.force_value(&mut v.write(), pos)?;
-    Ok(v.read().clone())
+    Ok(self.force_value(&v, pos)?.clone())
   }
 
   fn eval_concat(
@@ -204,9 +208,9 @@ impl Eval {
       Value::Int(i) => ConcatTy::Int(i),
       Value::Float(f) => ConcatTy::Float(f),
       Value::Path(p) => ConcatTy::Path(p),
-      x => ConcatTy::String(self.coerce_to_string(
+      v => ConcatTy::String(self.coerce_to_string(
         pos,
-        &writable(x),
+        &writable(v),
         &mut ctx,
         CoerceOpts {
           coerce_more: false,
@@ -329,21 +333,26 @@ impl Eval {
     }
   }
 
-  fn force_value<'v>(&self, m: &'v mut Value, pos: Pos) -> Result<&'v Value> {
-    match m {
-      Value::Thunk(Thunk { env, expr }) => {
-        let result = self.eval(&env, &*expr)?;
-        *m = result;
+  fn force_value<'v>(&self, m: &'v ValueRef, pos: Pos) -> Result<RwLockReadGuard<'v, Value>> {
+    let readable = m.upgradable_read();
+    if readable.needs_eval() {
+      let mut upgraded = RwLockUpgradableReadGuard::upgrade(readable);
+      let old_value = std::mem::replace(&mut *upgraded, Value::Blackhole);
+      match old_value {
+        Value::Thunk(Thunk { env, expr }) => {
+          let result = self.eval(&env, &*expr)?;
+          *upgraded = result;
+        }
+        Value::Apply(lhs, rhs) => {
+          let thing = self.call_function(&lhs, &rhs, pos)?;
+          *upgraded = thing;
+        }
+        _ => {}
       }
-      Value::Apply(lhs, rhs) => {
-        let mut lread = lhs.write();
-        let thing = self.call_function(&mut lread, &rhs, pos)?;
-        drop(lread);
-        *m = thing;
-      }
-      _ => {}
+      Ok(RwLockWriteGuard::downgrade(upgraded))
+    } else {
+      Ok(RwLockUpgradableReadGuard::downgrade(readable))
     }
-    Ok(&*m)
   }
 
   fn get_name(&self, attr: &AttrName, env: &EnvRef) -> Result<Ident> {
@@ -357,17 +366,12 @@ impl Eval {
     }
   }
 
-  fn call_function(&self, fun: &mut Value, arg: &ValueRef, pos: Pos) -> Result<Value> {
-    trace!("calling a function");
-    self.force_value(fun, pos)?;
-    trace!("done forcing the value");
-
-    match fun {
+  fn call_function(&self, fun: &ValueRef, arg: &ValueRef, pos: Pos) -> Result<Value> {
+    match &*self.force_value(fun, pos)? {
       Value::Attrs(ref aread) => {
         if let Some(functor) = aread.get(&ident!("__functor")) {
-          let mut functor = functor.v.write();
-          let mut v2 = self.call_function(&mut functor, &writable(fun.clone()), pos)?;
-          self.call_function(&mut v2, arg, pos)
+          let v2 = writable(self.call_function(&functor.v, fun, pos)?);
+          self.call_function(&v2, arg, pos)
         } else {
           throw!(pos, "cannot call a value of type attrset as a function")
         }
@@ -399,8 +403,6 @@ impl Eval {
 
     if let LambdaArg::Formals { name, formals } = &lam.arg {
       let fs = self.force_attrs(&arg, pos)?;
-
-      // trace!("lambda argument: {:?}", fs);
 
       if name.is_some() {
         env2.write().values.push(arg.clone());
@@ -496,14 +498,16 @@ impl Eval {
     Ok(v)
   }
 
-  fn add_primop<P: PrimopFn + 'static>(&self, name: &str, arity: u8, fun: P) -> Result<ValueRef> {
+  fn add_primop(&self, name: &str, arity: u8, fun: PrimopFn) -> Result<ValueRef> {
     let sym = Ident::from(name.strip_prefix("__").unwrap_or(name));
 
-    if arity == 0 {}
+    if arity == 0 {
+      bail!("arity = 0")
+    }
 
     let v = writable(Value::Primop(
       Primop {
-        fun: readable(fun),
+        fun,
         name: sym.clone(),
         arity,
       },
@@ -531,7 +535,6 @@ impl Eval {
   }
 
   fn build_attrs(&self, env: EnvRef, attrs: &expr::Attrs) -> Result<Value> {
-    // trace!("building {:?}", attrs);
     let mut dynamic_env = env.clone();
     let mut new_attrs = Attrs::new();
 
@@ -576,13 +579,11 @@ impl Eval {
     }
 
     for val in &attrs.dyn_attrs {
-      let mut name = self.eval(&dynamic_env, &val.name)?;
-      self.force_value(&mut name, val.pos)?;
-      if name.as_null().is_some() {
+      let name = writable(self.eval(&dynamic_env, &val.name)?);
+      if self.force_value(&name, val.pos)?.as_null().is_some() {
         continue;
       }
 
-      let name = writable(name);
       let namestr = self.force_string_no_context(&name, val.pos)?;
       if new_attrs
         .insert(
@@ -608,26 +609,27 @@ impl Eval {
     lhs: &Expr,
     def: Option<&Expr>,
     path: &[Located<AttrName>],
-  ) -> Result<Value> {
-    let mut vtmp = self.eval(env, lhs)?;
+  ) -> Result<ValueRef> {
+    let mut vtmp = writable(self.eval(env, lhs)?);
     let mut pos2 = pos;
 
     for name in path {
       let name = self.get_name(&name.v, env)?;
       if let Some(x) = def {
-        self.force_value(&mut vtmp, pos2)?;
-        if let Some(x) = vtmp.as_attrs().and_then(|x| x.get(&name)) {
-          let n2 = self.clone_value(&x.v, pos)?;
-          vtmp = n2;
+        let tmp2 = self.force_value(&vtmp, pos2)?;
+        if let Some(x) = tmp2.as_attrs().and_then(|x| x.get(&name)) {
+          let n = x.v.clone();
+          drop(tmp2);
+          vtmp = n;
           continue;
         }
-        return self.eval(env, x);
+        return Ok(writable(self.eval(env, x)?));
       } else {
-        let vtmp_ = writable(vtmp);
-        let tmp2 = self.force_attrs(&vtmp_, pos2)?;
+        let tmp2 = self.force_attrs(&vtmp, pos2)?;
         if let Some(x) = tmp2.get(&name) {
-          let n = self.clone_value(&x.v, pos)?;
           pos2 = x.pos;
+          let n = x.v.clone();
+          drop(tmp2);
           vtmp = n;
         } else {
           throw!(pos2, "attribute `{}' missing", name)
@@ -635,17 +637,17 @@ impl Eval {
       }
     }
 
-    self.force_value(&mut vtmp, pos2)?;
+    let _ = self.force_value(&vtmp, pos2)?;
     Ok(vtmp)
   }
 
   fn eval_bool(&self, env: &EnvRef, e: &Expr) -> Result<bool> {
-    let mut v = self.eval(env, e)?;
-    self.force_value(&mut v, Pos::none())?;
-    match v {
-      Value::Bool(b) => Ok(b),
+    let v = writable(self.eval(env, e)?);
+    let x = match &*self.force_value(&v, Pos::none())? {
+      Value::Bool(b) => Ok(*b),
       q => bail!("expected bool, got {}", q.typename()),
-    }
+    };
+    x
   }
 
   fn eval_attrs(&self, env: &EnvRef, e: &Expr) -> Result<Readable<Attrs>> {
@@ -675,14 +677,14 @@ impl Eval {
       Bin::Or => Value::Bool(self.eval_bool(env, lhs)? || self.eval_bool(env, rhs)?),
       Bin::Impl => Value::Bool(!self.eval_bool(env, lhs)? || self.eval_bool(env, rhs)?),
       Bin::Eq => {
-        let mut v1 = self.eval(env, lhs)?;
-        let mut v2 = self.eval(env, rhs)?;
-        Value::Bool(self.values_equal(&mut v1, &mut v2, pos)?)
+        let v1 = self.eval(env, lhs)?;
+        let v2 = self.eval(env, rhs)?;
+        Value::Bool(self.values_equal(&writable(v1), &writable(v2), pos)?)
       }
       Bin::Neq => {
-        let mut v1 = self.eval(env, lhs)?;
-        let mut v2 = self.eval(env, rhs)?;
-        Value::Bool(!self.values_equal(&mut v1, &mut v2, pos)?)
+        let v1 = self.eval(env, lhs)?;
+        let v2 = self.eval(env, rhs)?;
+        Value::Bool(!self.values_equal(&writable(v1), &writable(v2), pos)?)
       }
       Bin::Update => {
         let mut attrs1 = self.eval_attrs(env, lhs)?;
@@ -716,9 +718,9 @@ impl Eval {
     })
   }
 
-  fn values_equal(&self, lhs: &mut Value, rhs: &mut Value, pos: Pos) -> Result<bool> {
-    self.force_value(lhs, pos)?;
-    self.force_value(rhs, pos)?;
+  fn values_equal(&self, lhs: &ValueRef, rhs: &ValueRef, pos: Pos) -> Result<bool> {
+    let lhs = &*self.force_value(lhs, pos)?;
+    let rhs = &*self.force_value(rhs, pos)?;
 
     if let Some(pair) = numbers(lhs, rhs) {
       return Ok(match pair {
@@ -744,7 +746,7 @@ impl Eval {
 
         for (k, v) in a1.iter() {
           if let Some(v2) = a2.get(k) {
-            if !self.values_equal(&mut v.v.write(), &mut v2.v.write(), pos)? {
+            if !self.values_equal(&v.v, &v2.v, pos)? {
               return Ok(false);
             }
           } else {
@@ -759,7 +761,7 @@ impl Eval {
           false
         } else {
           for (i, v) in l1.iter().enumerate() {
-            if !self.values_equal(&mut v.write(), &mut l2[i].write(), pos)? {
+            if !self.values_equal(&v, &l2[i], pos)? {
               return Ok(false);
             }
           }
@@ -775,8 +777,7 @@ impl Eval {
   }
 
   fn force_string<'v>(&self, v: &'v ValueRef, pos: Pos) -> Result<MappedRwLockReadGuard<'v, Str>> {
-    self.force_value(&mut v.write(), pos)?;
-    RwLockReadGuard::try_map(v.read(), Value::as_string)
+    RwLockReadGuard::try_map(self.force_value(&v, pos)?, Value::as_string)
       .map_err(|e| err!(pos, "expected a string, got {}", e.typename()))
   }
 
@@ -797,8 +798,7 @@ impl Eval {
   }
 
   fn force_attrs<'v>(&self, v: &'v ValueRef, pos: Pos) -> Result<MappedRwLockReadGuard<'v, Attrs>> {
-    self.force_value(&mut v.write(), pos)?;
-    RwLockReadGuard::try_map(v.read(), |v| v.as_attrs().map(|x| &**x))
+    RwLockReadGuard::try_map(self.force_value(&v, pos)?, |v| v.as_attrs().map(|x| &**x))
       .map_err(|e| err!(pos, "expected attrset, got {}", e.typename()))
   }
 
@@ -807,17 +807,18 @@ impl Eval {
     v: &'v ValueRef,
     pos: Pos,
   ) -> Result<MappedRwLockReadGuard<'v, [ValueRef]>> {
-    self.force_value(&mut v.write(), pos)?;
-    RwLockReadGuard::try_map(v.read(), |v| v.as_list().map(|x| x.as_slice()))
-      .map_err(|e| err!(pos, "expected list, got {}", e.typename()))
+    RwLockReadGuard::try_map(self.force_value(v, pos)?, |v| {
+      v.as_list().map(|x| x.as_slice())
+    })
+    .map_err(|e| err!(pos, "expected list, got {}", e.typename()))
   }
 
   fn force_int(&self, v: &ValueRef, pos: Pos) -> Result<i64> {
-    self.force_value(&mut v.write(), pos)?;
-    let v = v.read();
-    v.as_int()
+    let lock = self.force_value(v, pos)?;
+    lock
+      .as_int()
       .copied()
-      .ok_or_else(|| anyhow!("expected int, got {}", v.typename()))
+      .ok_or_else(|| anyhow!("expected int, got {}", lock.typename()))
   }
 }
 

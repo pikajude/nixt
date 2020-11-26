@@ -16,7 +16,7 @@ fn link_static_bash() {
   println!("cargo:warning=rix currently requires a static version of bash to run builders.");
   println!("cargo:warning=attempting to build one with nix-build...");
   let cmd_output = Command::new("nix-build")
-    .args(&["<nixpkgs>", "-A", "pkgsStatic.bash"])
+    .args(&["<nixpkgs>", "-A", "pkgsStatic.bash", "--no-out-link"])
     .stderr(Stdio::inherit())
     .output()
     .expect("unable to execute nix-build");

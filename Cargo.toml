@@ -20,6 +20,8 @@ lazy_static = "1.4.0"
 parking_lot = "0.11.0"
 path_abs = "0.5.0"
 regex = "1.4.2"
+serde = "1.0.117"
+serde_json = "1.0.59"
 slog = { version = "2.5.2", features = ["max_level_trace"] }
 slog-atomic = "3.0.0"
 slog-envlogger = "2.2.0"
@@ -98,4 +100,5 @@ string_cache_codegen = "0.5.1"
 
 [features]
 default = []
-trace-evaluator = []
+lock-free = []
+trace-locks = ["lock-free"]

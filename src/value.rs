@@ -37,6 +37,7 @@ pub enum Value {
   Thunk(Thunk),
   Lambda(EnvRef, Lambda),
   Primop(Primop, Vec<ValueRef>),
+  Blackhole,
 }
 
 #[derive(Derivative)]
@@ -82,6 +83,7 @@ impl Value {
       Value::Apply(lhs, rhs) => {
         format!("App({:?}\n  {:?})", lhs.read().debug(), rhs.read().debug())
       }
+      Value::Blackhole => "blackhole".to_string(),
     }
   }
 
@@ -94,6 +96,10 @@ impl Value {
       s: s.into(),
       context: Default::default(),
     })
+  }
+
+  pub fn needs_eval(&self) -> bool {
+    matches!(self, Self::Thunk{..} | Self::Apply{..})
   }
 
   #[allow(clippy::needless_lifetimes)] // false positive
@@ -160,11 +166,11 @@ impl Default for Env {
   }
 }
 
-pub trait PrimopFn = Fn(&Eval, Pos, Vec<ValueRef>) -> Result<Value>;
+pub type PrimopFn = fn(&Eval, Pos, Vec<ValueRef>) -> Result<Value>;
 
 #[derive(Clone)]
 pub struct Primop {
-  pub fun: Readable<dyn PrimopFn>,
+  pub fun: PrimopFn,
   pub name: Ident,
   pub arity: u8,
 }
@@ -199,6 +205,7 @@ impl<'v> Debug for DebugValue<'v> {
 
     match self.value {
       Value::Null => f.debug_tuple("Null").finish(),
+      Value::Blackhole => f.debug_tuple("Blackhole").finish(),
       Value::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
       Value::Int(i) => f.debug_tuple("Int").field(i).finish(),
       Value::Float(i) => f.debug_tuple("Float").field(i).finish(),
